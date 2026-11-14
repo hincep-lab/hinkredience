@@ -10,6 +10,13 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Projekt Supabase „hinkredience“. Veřejný (publishable) klíč není tajný –
+# data chrání Row Level Security. Tajné klíče sem nikdy nepatří.
+# Secrets SUPABASE_URL a SUPABASE_ANON_KEY mají přednost, pokud jsou nastavené.
+env:
+  DEFAULT_SUPABASE_URL: https://wjqpzoeheonjwdyyezhb.supabase.co
+  DEFAULT_SUPABASE_KEY: sb_publishable_7kKqba-VFfNiKka5RYjGpQ_LpdS-LMl
+
 jobs:
   database:
     name: Databáze – migrace a oprávnění (RLS)
@@ -54,8 +61,8 @@ jobs:
         run: >
           flutter build apk --release
           --build-number=${{ github.run_number }}
-          --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
-          --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
+          --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
       - name: Přejmenování APK
         run: cp build/app/outputs/flutter-apk/app-release.apk hinkredience.apk
       - uses: actions/upload-artifact@v4

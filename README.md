@@ -51,9 +51,10 @@ Ověřeno automatickými testy při každém sestavení (GitHub Actions):
 
 **Neověřeno – potřebuje vaše ruce:**
 
-- Synchronizace a přihlášení proti skutečnému projektu Supabase. Kód je
-  napsaný a otestovaný proti maketě serveru, ale skutečný projekt zatím
-  neexistuje. Postup je níže.
+- Synchronizace a přihlášení proti skutečnému projektu Supabase z telefonu.
+  Projekt běží, migrace jsou spuštěné a API odpovídá (nepřihlášený přístup
+  k datům je odmítnut), ale registrace a synchronizace ze skutečného
+  zařízení ještě nebyla vyzkoušena.
 - Chování na skutečném telefonu (fotoaparát, galerie, sdílení).
 - Sestavení pro iOS s podpisem – vyžaduje Mac a účet Apple Developer.
 
@@ -67,24 +68,27 @@ Ověřeno automatickými testy při každém sestavení (GitHub Actions):
 Každé sestavení má vyšší číslo verze a stejný podpis, takže novou verzi
 nainstalujete přes starou a recepty v telefonu zůstanou.
 
-## Zprovoznění Supabase (účet, záloha, synchronizace)
+## Supabase (účet, záloha, synchronizace)
 
-1. Na [supabase.com](https://supabase.com) založte projekt (stačí plán Free,
-   region nejlépe Frankfurt).
-2. V **SQL Editoru** spusťte postupně soubory ze složky
-   [`supabase/migrations`](supabase/migrations) v pořadí podle názvu:
-   `…01_schema.sql`, `…02_security.sql`, `…03_storage.sql`, `…04_defaults.sql`.
-   (Nebo s nainstalovaným Supabase CLI: `supabase link` a `supabase db push`.)
-3. V **Project Settings → API** zkopírujte *Project URL* a veřejný klíč
-   (*anon* / *publishable*). Klíč `service_role` do aplikace nikdy nepatří.
-4. Údaje zadejte jedním ze dvou způsobů:
-   - v aplikaci: **Více → Připojení k Supabase**, uložit a aplikaci restartovat,
-   - nebo natrvalo do sestavení: v GitHubu **Settings → Secrets and variables →
-     Actions** přidejte `SUPABASE_URL` a `SUPABASE_ANON_KEY`.
-5. V aplikaci se zaregistrujte. Recepty vytvořené bez účtu se po prvním
-   přihlášení převezmou a odešlou.
-6. Výchozí vybavení a chuťové preference Pavla Hinka vloží po přihlášení
+Projekt Supabase **hinkredience** (`https://wjqpzoeheonjwdyyezhb.supabase.co`,
+region West EU, plán Free) je založený a všechny čtyři migrace ze složky
+[`supabase/migrations`](supabase/migrations) v něm jsou spuštěné
+(16 tabulek se zapnutým RLS, soukromý bucket `recipe-photos`).
+
+Adresa projektu a veřejný (*publishable*) klíč jsou výchozí hodnotou sestavení
+v [.github/workflows/build.yml](.github/workflows/build.yml), takže APK
+z Releases je k projektu připojené rovnou. Klíč `service_role` / *secret*
+do aplikace ani do repozitáře nikdy nepatří.
+
+1. V aplikaci se zaregistrujte e-mailem a heslem.
+2. Potvrďte účet odkazem, který přijde e-mailem (stránka po kliknutí se
+   nemusí načíst – účet je i tak potvrzený), a přihlaste se.
+3. Recepty vytvořené bez účtu se po prvním přihlášení převezmou a odešlou.
+4. Výchozí vybavení a chuťové preference Pavla Hinka vloží po přihlášení
    funkce `select public.seed_hink_defaults();` (obrazovka pro ně přijde v další etapě).
+
+Pro jiný projekt Supabase spusťte migrace v jeho SQL Editoru v pořadí podle
+názvu a nastavte v GitHubu secrets `SUPABASE_URL` a `SUPABASE_ANON_KEY`.
 
 ## Vývoj
 
