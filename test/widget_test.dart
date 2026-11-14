@@ -64,6 +64,11 @@ void main() {
     expect(find.text('Co dnes společně uvaříme?'), findsOneWidget);
     expect(find.text('Co dnes uvaříme?'), findsOneWidget);
     expect(find.text('AI kuchař'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('Přidej první recept'),
+      find.byType(CustomScrollView),
+      const Offset(0, -200),
+    );
     expect(find.text('Přidej první recept'), findsOneWidget);
     expect(find.text('Domů'), findsOneWidget);
   });
@@ -86,9 +91,15 @@ void main() {
         sampleRecipe(id: 'r2', title: 'Svíčková'),
       ],
     );
+    expect(find.text('Moje sbírka · 2'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('Doporučené recepty'),
+      find.byType(CustomScrollView),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Doporučené recepty'), findsOneWidget);
     expect(find.text('Žebra BBQ'), findsOneWidget);
-    expect(find.text('Moje sbírka · 2'), findsOneWidget);
     expect(find.text('Přidej první recept'), findsNothing);
   });
 

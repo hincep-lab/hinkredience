@@ -60,6 +60,22 @@ Future<void> pumpAiApp(
   await tester.pumpAndSettle();
 }
 
+/// Texty na obrazovce – do zprávy o selhání, aby bylo vidět, co tam je.
+String shownTexts(WidgetTester tester) => tester
+    .widgetList<Text>(find.byType(Text))
+    .map((text) => text.data ?? text.textSpan?.toPlainText() ?? '')
+    .join(' | ');
+
+/// Posune seznam na obrazovce tak, aby byl vidět [finder].
+Future<void> scrollTo(WidgetTester tester, Finder finder) async {
+  await tester.dragUntilVisible(
+    finder,
+    find.byType(ListView),
+    const Offset(0, -250),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('bez účtu AI kuchař vysvětlí, co je potřeba', (tester) async {
     await pumpAiApp(tester, location: Routes.home);
@@ -110,8 +126,9 @@ void main() {
     await tester.tap(find.text('Kuře na paprice'));
     await tester.pumpAndSettle();
     expect(find.text('Návrh receptu'), findsOneWidget);
-    expect(find.text('Uložit do kuchařky'), findsOneWidget);
     expect(find.text('Hovězí zadní'), findsOneWidget);
+    await scrollTo(tester, find.text('Uložit do kuchařky'));
+    expect(find.text('Uložit do kuchařky'), findsOneWidget);
   });
 
   testWidgets('chat: chyba serveru se ukáže a zpráva se neztratí', (
@@ -194,7 +211,11 @@ void main() {
     await tester.tap(find.text('Hledat recepty'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Nalezené recepty (2)'), findsOneWidget);
+    expect(
+      find.text('Nalezené recepty (2)'),
+      findsOneWidget,
+      reason: shownTexts(tester),
+    );
     expect(find.text('Svíčková podle babičky'), findsOneWidget);
     expect(find.text('Otevřít na recepty.cz'), findsOneWidget);
     expect(
@@ -214,6 +235,7 @@ void main() {
     expect(backend.requests.last['action'], 'our_version');
     expect(find.text('Naše verze'), findsOneWidget);
     expect(find.text('Naše svíčková'), findsOneWidget);
+    await scrollTo(tester, find.text('Uložit do kuchařky'));
     expect(find.text('Uložit do kuchařky'), findsOneWidget);
   });
 
