@@ -87,6 +87,7 @@ Future<void> shoot(
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
 
+  // ignore: invalid_use_of_visible_for_testing_member
   SharedPreferences.setMockInitialValues({});
   final prefs = await SharedPreferences.getInstance();
   final router = createRouter(initialLocation: location);
