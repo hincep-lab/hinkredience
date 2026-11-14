@@ -5,6 +5,13 @@
 Osobní inteligentní kuchařka Pavla Hinka pro Android a iOS. Flutter aplikace
 s místní databází v telefonu a synchronizací přes Supabase.
 
+| Úvod | Domů | Kategorie | Detail receptu |
+| --- | --- | --- | --- |
+| ![Úvodní obrazovka](docs/screenshots/01-uvod.png) | ![Hlavní obrazovka](docs/screenshots/03-domu.png) | ![Kategorie receptů](docs/screenshots/05-kategorie.png) | ![Detail receptu](docs/screenshots/07-detail.png) |
+
+Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-goldens`
+(v testovacím prostředí bez fotografií jídel a emoji).
+
 ## Stav projektu
 
 | Etapa | Obsah | Stav |

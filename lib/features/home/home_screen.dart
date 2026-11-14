@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
-import '../../core/formatters.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
@@ -469,25 +468,7 @@ class _Recommended extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 3),
-                            Text(
-                              [
-                                if (recipe.rating != null)
-                                  '★ ${formatQuantity(recipe.rating!)}',
-                                if (recipe.effectiveTotalMinutes > 0)
-                                  formatMinutes(recipe.effectiveTotalMinutes),
-                                if (recipe.rating == null &&
-                                    recipe.effectiveTotalMinutes == 0)
-                                  recipe.category.isEmpty
-                                      ? 'Recept'
-                                      : recipe.category,
-                              ].join(' · '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 12.5,
-                              ),
-                            ),
+                            RecipeMetaLine(recipe: recipe),
                           ],
                         ),
                       ),

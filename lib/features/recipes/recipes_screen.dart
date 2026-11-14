@@ -331,13 +331,6 @@ class RecipeListTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final meta = [
-      if (recipe.category.isNotEmpty) recipe.category,
-      if (recipe.effectiveTotalMinutes > 0)
-        formatMinutes(recipe.effectiveTotalMinutes),
-      if (recipe.rating != null) '★ ${formatQuantity(recipe.rating!)}',
-    ].join(' · ');
-
     return HkCard(
       padding: EdgeInsets.zero,
       onTap: () => context.push(Routes.recipe(recipe.id)),
@@ -375,18 +368,8 @@ class RecipeListTile extends ConsumerWidget {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: AppColors.textSecondary),
                       ),
-                    if (meta.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        meta,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.copperGold,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ],
+                    const SizedBox(height: 4),
+                    RecipeMetaLine(recipe: recipe),
                   ],
                 ),
               ),

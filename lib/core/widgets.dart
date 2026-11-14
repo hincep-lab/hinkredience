@@ -4,6 +4,7 @@ import '../app/providers.dart';
 import '../data/recipe.dart';
 import 'app_colors.dart';
 import 'app_theme.dart';
+import 'formatters.dart';
 import 'material.dart';
 
 /// Nápis HINKredience° – „HINK“ stříbrně, „redience°“ měděně.
@@ -253,6 +254,52 @@ class RecipeCover extends StatelessWidget {
   Widget build(BuildContext context) {
     if (recipe.photos.isEmpty) return const PhotoPlaceholder();
     return RecipePhotoView(photo: recipe.photos.first);
+  }
+}
+
+/// Řádek s údaji o receptu: hodnocení, kategorie, celkový čas.
+class RecipeMetaLine extends StatelessWidget {
+  const RecipeMetaLine({super.key, required this.recipe, this.fontSize = 12.5});
+
+  final Recipe recipe;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final rating = recipe.rating;
+    final rest = [
+      if (recipe.category.isNotEmpty) recipe.category,
+      if (recipe.effectiveTotalMinutes > 0)
+        formatMinutes(recipe.effectiveTotalMinutes),
+    ].join(' · ');
+    if (rating == null && rest.isEmpty) return const SizedBox.shrink();
+    final style = TextStyle(color: AppColors.copperGold, fontSize: fontSize);
+    return Row(
+      children: [
+        if (rating != null) ...[
+          Icon(
+            Icons.star_rounded,
+            size: fontSize + 3,
+            color: AppColors.copperGold,
+          ),
+          const SizedBox(width: 2),
+          Text(
+            rest.isEmpty
+                ? formatQuantity(rating)
+                : '${formatQuantity(rating)} · ',
+            style: style,
+          ),
+        ],
+        Flexible(
+          child: Text(
+            rest,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      ],
+    );
   }
 }
 

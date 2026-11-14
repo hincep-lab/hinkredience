@@ -158,8 +158,10 @@ abstract final class AppTheme {
         backgroundColor: AppColors.backgroundSecondary,
         selectedColor: AppColors.copper,
         side: const BorderSide(color: AppColors.outline),
-        labelStyle: const TextStyle(color: AppColors.text),
-        secondaryLabelStyle: const TextStyle(color: Color(0xFF1B1108)),
+        labelStyle: textTheme.labelLarge?.copyWith(color: AppColors.text),
+        secondaryLabelStyle: textTheme.labelLarge?.copyWith(
+          color: const Color(0xFF1B1108),
+        ),
         checkmarkColor: const Color(0xFF1B1108),
         shape: const StadiumBorder(),
       ),

@@ -2,6 +2,7 @@
 //
 // Spuštění:  flutter test tool/screenshots --update-goldens
 // Nejde o běžný test – záměrně leží mimo složku test/.
+// Snímky se v GitHubu přegenerují při každé změně v této složce.
 
 import 'dart:async';
 import 'dart:convert';
