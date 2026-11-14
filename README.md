@@ -16,8 +16,8 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 
 | Etapa | Obsah | Stav |
 | --- | --- | --- |
-| 1 – Funkční základ | Flutter projekt, design, přihlášení, databáze, recepty, fotografie, synchronizace | **hotovo** (viz níže, co je a není ověřeno) |
-| 2 – AI a vyhledávání | AI kuchař, chat, vyhledávání receptů na internetu, import | nezačato |
+| 1 – Funkční základ | Flutter projekt, design, přihlášení, databáze, recepty, fotografie, synchronizace | **hotovo** |
+| 2 – AI a vyhledávání | AI kuchař, chat, vyhledávání receptů na internetu, import | **hotovo v kódu a nasazeno**, čeká na klíč OpenAI (viz níže) |
 | 3 – Propojení s ChatGPT | zabezpečené API, MCP server | nezačato |
 | 4 – Pokročilé funkce | deník, režim Vaříme spolu, rodinné účty, plán, nákupní seznam | nezačato (databáze je připravená) |
 
@@ -37,6 +37,49 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 - Funkce dalších etap jsou na hlavní obrazovce označené „Brzy“ a po klepnutí
   vysvětlí, kdy přijdou. Žádné tlačítko nepředstírá, že něco dělá.
 
+### Co umí Etapa 2
+
+Všechno AI běží v serverové funkci Supabase [`ai`](supabase/functions/ai/index.ts);
+klíč k OpenAI je jen na serveru, v aplikaci žádný tajný klíč není.
+
+- **AI kuchař** – chat s uloženou historií, lze přiložit recept nebo fotografii.
+  Návrh receptu se nikdy neuloží sám: otevře se ke kontrole a uloží až po potvrzení.
+- **Hledání receptů na internetu** – skutečné webové vyhledávání (OpenAI
+  Responses API, nástroj `web_search`). Každý výsledek má odkaz na zdroj; server
+  propustí jen výsledky, jejichž adresu vyhledávání opravdu vrátilo, takže
+  vymyšlený zdroj se do aplikace nedostane. Hodnocení se zobrazí jen tehdy,
+  když ho stránka uvádí. Hledat lze podle názvu, surovin, typu kuchyně, času,
+  vybavení, fotografie a podobnosti s uloženým receptem.
+- **Porovnání a „Vytvořit naši verzi“** – z vybraných nalezených receptů složí
+  vlastní recept podle vašeho vybavení a chutí, se seznamem zdrojů.
+- **Vylepšit s AI / Najdi lepší postup** (v detailu receptu) – návrh změn
+  s důvody; uložením vznikne nová verze, původní zůstane v historii.
+- **Import receptu** z textu, webového odkazu a fotografie.
+- **Dlouhodobá paměť** – AI dostává jen to, co je skutečně v databázi:
+  vybavení a chuťové preference (Více → Kuchyně a chutě), oblíbené a dobře
+  hodnocené recepty. Historie vaření přibude s deníkem v Etapě 4.
+- **Kontrola nákladů** – denní limit požadavků a vyhledávání na uživatele,
+  omezení délky vstupů a odpovědí.
+
+**V Etapě 2 zatím chybí:** hlasový vstup v chatu, import z PDF a streamování
+odpovědi po slovech.
+
+#### Zapnutí AI (jednorázově)
+
+1. Na [platform.openai.com](https://platform.openai.com) si vytvořte API klíč
+   a nabijte kredit (API se platí zvlášť, není součástí ChatGPT Plus).
+2. V Supabase: **Edge Functions → Secrets** přidejte `OPENAI_API_KEY`.
+3. Volitelně tamtéž: `OPENAI_MODEL` (výchozí `gpt-6.1-terra`),
+   `OPENAI_SEARCH_MODEL`, `AI_DAILY_LIMIT` (výchozí 80),
+   `AI_SEARCH_DAILY_LIMIT` (výchozí 25). Změna modelu nevyžaduje nové sestavení.
+4. Kdyby aplikace hlásila „Invalid JWT“, vypněte u funkce `ai` v
+   **Edge Functions → ai → Settings** volbu *Verify JWT with legacy secret*
+   (funkce si přihlášení ověřuje sama).
+
+Po úpravě souboru `supabase/functions/ai/index.ts` je potřeba funkci znovu
+nasadit: v administraci (Edge Functions → ai → Code) nebo
+`supabase functions deploy ai`.
+
 ### Co je ověřeno a co ne
 
 Ověřeno automatickými testy při každém sestavení (GitHub Actions):
@@ -49,12 +92,21 @@ Ověřeno automatickými testy při každém sestavení (GitHub Actions):
 - databázová oprávnění: skutečné migrace běží v PostgreSQL (PGlite) a testy
   ověřují, že si uživatelé navzájem nevidí data.
 
+- serverová funkce `ai` (Deno testy s maketou OpenAI a Supabase): přihlášení,
+  denní limity, paměť, ověřování zdrojů vyhledávání, import, chybové stavy,
+- AI obrazovky (widget testy s maketou serveru): chat, návrh ke kontrole,
+  hledání, naše verze, import.
+
+Ověřeno ručně na skutečném projektu: registrace, přihlášení a odeslání
+receptu z telefonu; funkce `ai` je nasazená a bez přihlášení odpovídá 401.
+
 **Neověřeno – potřebuje vaše ruce:**
 
-- Synchronizace a přihlášení proti skutečnému projektu Supabase z telefonu.
-  Projekt běží, migrace jsou spuštěné a API odpovídá (nepřihlášený přístup
-  k datům je odmítnut), ale registrace a synchronizace ze skutečného
-  zařízení ještě nebyla vyzkoušena.
+- Skutečné odpovědi OpenAI (chat, vyhledávání, import). Bez klíče
+  `OPENAI_API_KEY` je vyzkoušet nelze; do té doby aplikace ukáže hlášku
+  „AI ještě není nastavená“.
+
+- Synchronizace fotografií a stažení receptů na druhé zařízení.
 - Chování na skutečném telefonu (fotoaparát, galerie, sdílení).
 - Sestavení pro iOS s podpisem – vyžaduje Mac a účet Apple Developer.
 
@@ -71,9 +123,10 @@ nainstalujete přes starou a recepty v telefonu zůstanou.
 ## Supabase (účet, záloha, synchronizace)
 
 Projekt Supabase **hinkredience** (`https://wjqpzoeheonjwdyyezhb.supabase.co`,
-region West EU, plán Free) je založený a všechny čtyři migrace ze složky
+region West EU, plán Free) je založený a migrace ze složky
 [`supabase/migrations`](supabase/migrations) v něm jsou spuštěné
-(16 tabulek se zapnutým RLS, soukromý bucket `recipe-photos`).
+(17 tabulek se zapnutým RLS, soukromý bucket `recipe-photos`).
+Všech pět migrací je spuštěných a funkce `ai` je nasazená.
 
 Adresa projektu a veřejný (*publishable*) klíč jsou výchozí hodnotou sestavení
 v [.github/workflows/build.yml](.github/workflows/build.yml), takže APK
@@ -102,6 +155,9 @@ flutter test           # na Linuxu vyžaduje balíček libsqlite3-dev
 
 # testy databázových oprávnění
 cd supabase/tests && npm ci && npm test
+
+# testy serverové funkce AI
+deno test supabase/functions/ai
 ```
 
 ### Sestavení Android APK
@@ -140,9 +196,10 @@ lib/
   app/                   konfigurace, stav aplikace (Riverpod), navigace (GoRouter)
   core/                  design systém: barvy, motiv, společné komponenty, formátování
   data/                  model receptu, místní databáze, synchronizace, fotografie
-  features/              obrazovky: splash, auth, home, recipes, more, shell
+  features/              obrazovky: splash, auth, home, recipes, ai, more, shell
 supabase/
-  migrations/            SQL migrace: schéma, RLS, úložiště, výchozí data
+  migrations/            SQL migrace: schéma, RLS, úložiště, výchozí data, počítadlo AI
+  functions/ai/          serverová funkce AI kuchaře a její testy (Deno)
   tests/                 testy oprávnění nad skutečnými migracemi
 test/                    unit a widget testy aplikace
 tool/make_icons.py       generování ikony a obrázků z loga
@@ -166,8 +223,7 @@ Ceny se mění – před rozhodnutím ověřte aktuální ceníky.
 | [Supabase](https://supabase.com/pricing) | databáze, účty, fotografie | Free 0 USD (500 MB databáze, projekt se po 7 dnech nečinnosti uspí); Pro od 25 USD měsíčně |
 | Apple Developer Program | instalace na iPhone, TestFlight | 99 USD ročně |
 | Google Play (volitelné) | vydání v obchodě | jednorázový registrační poplatek |
-| OpenAI API (Etapa 2) | AI kuchař | platba podle spotřeby |
-| Vyhledávací API (Etapa 2) | hledání receptů na internetu | podle zvolené služby |
+| [OpenAI API](https://developers.openai.com/api/docs/pricing) | AI kuchař, hledání na internetu | podle spotřeby: `gpt-6.1-terra` 1 USD / 5 USD za milion vstupních / výstupních tokenů; webové vyhledávání 10 USD za 1000 volání + tokeny |
 
 Pro rodinnou kuchařku plán Supabase Free kapacitně stačí. Počítejte ale
 s uspáváním nečinného projektu: po týdnu bez použití je potřeba ho

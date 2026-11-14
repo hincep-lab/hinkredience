@@ -166,13 +166,20 @@ class _WebSearchScreenState extends ConsumerState<WebSearchScreen> {
           : SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: CopperButton(
-                  label: _selected.isEmpty
-                      ? 'Vyberte recepty pro naši verzi'
-                      : 'Vytvořit naši verzi (${_selected.length})',
-                  icon: Icons.auto_awesome_rounded,
-                  busy: _composing,
-                  onPressed: _selected.isEmpty ? null : _ourVersion,
+                // Sloupec dává tlačítku jeho přirozenou výšku; bez něj by spodní
+                // lišta zabrala celou obrazovku.
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CopperButton(
+                      label: _selected.isEmpty
+                          ? 'Vyberte recepty pro naši verzi'
+                          : 'Vytvořit naši verzi (${_selected.length})',
+                      icon: Icons.auto_awesome_rounded,
+                      busy: _composing,
+                      onPressed: _selected.isEmpty ? null : _ourVersion,
+                    ),
+                  ],
                 ),
               ),
             ),
