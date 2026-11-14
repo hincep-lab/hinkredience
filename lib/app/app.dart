@@ -1,7 +1,3 @@
-import 'package:cupertino_ui/cupertino_ui.dart'
-    show GlobalCupertinoLocalizations;
-import 'package:flutter_localizations/flutter_localizations.dart'
-    show GlobalWidgetsLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_theme.dart';
@@ -39,11 +35,7 @@ class _HinkredienceAppState extends ConsumerState<HinkredienceApp> {
       routerConfig: _router,
       locale: const Locale('cs'),
       supportedLocales: const [Locale('cs')],
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
     );
   }
 }

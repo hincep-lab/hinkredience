@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -31,7 +30,7 @@ Future<void> main() async {
     try {
       await Supabase.initialize(
         url: config.supabaseUrl,
-        anonKey: config.supabaseAnonKey,
+        publishableKey: config.supabaseAnonKey,
       );
       client = Supabase.instance.client;
     } catch (error) {

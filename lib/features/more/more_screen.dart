@@ -69,8 +69,9 @@ class MoreScreen extends ConsumerWidget {
       await ref.read(settingsProvider.notifier).setSkipAuth(false);
       if (context.mounted) context.go(Routes.auth);
     } catch (error) {
-      if (context.mounted)
+      if (context.mounted) {
         showMessage(context, 'Odhlášení se nepodařilo: $error');
+      }
     }
   }
 

@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter_localizations/flutter_localizations.dart'
-    show GlobalWidgetsLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hinkredience/app/app_config.dart';
@@ -51,10 +49,7 @@ Future<void> pumpApp(
         theme: AppTheme.dark(),
         locale: const Locale('cs'),
         supportedLocales: const [Locale('cs')],
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-        ],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
       ),
     ),
   );
@@ -182,6 +177,7 @@ void main() {
     expect(find.text('200 ml'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Více porcí'));
+    await tester.pump();
     await tester.tap(find.byTooltip('Více porcí'));
     await tester.pumpAndSettle();
     expect(find.text('Suroviny (6 porcí)'), findsOneWidget);

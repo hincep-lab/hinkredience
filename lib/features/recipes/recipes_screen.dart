@@ -163,8 +163,9 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
                         showCheckmark: false,
                         onSelected: (_) => setState(() {
                           _filter = filter;
-                          if (filter == RecipeFilter.categories)
+                          if (filter == RecipeFilter.categories) {
                             _category = null;
+                          }
                         }),
                       ),
                     ),
