@@ -218,6 +218,12 @@ void main() {
       find.text('Vypnuto – připojení k Supabase není nastavené.'),
       findsOneWidget,
     );
+    expect(find.text('Propojení s ChatGPT'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('Koš'),
+      find.byType(ListView),
+      const Offset(0, -250),
+    );
     expect(find.text('Koš'), findsOneWidget);
   });
 }
