@@ -9,7 +9,7 @@ aplikace za to žádné požadavky na AI neplatí.
 
 - ChatGPT se přihlašuje přes **OAuth 2.1** proti Supabase Auth vašeho projektu.
   Přihlásíte se stejným e-mailem a heslem jako v aplikaci a přístup výslovně
-  potvrdíte na stránce [`web/oauth/consent`](../web/oauth/consent/index.html).
+  potvrdíte na stránce <https://hincep-lab.github.io/hinkredience-login/oauth/consent/>.
 - MCP server každý požadavek ověří a s databází mluví **tokenem přihlášeného
   uživatele**. Platí proto stejná Row Level Security jako v aplikaci – ChatGPT
   vidí a mění jen recepty vašeho účtu. Žádný servisní klíč se nepoužívá.
@@ -43,10 +43,10 @@ aplikace za to žádné požadavky na AI neplatí.
 Vlastní MCP servery se v ChatGPT přidávají na webu (chatgpt.com), ne v mobilní
 aplikaci. Dostupnost se liší podle tarifu a OpenAI ji průběžně mění:
 
-- Podle nápovědy OpenAI je plná podpora MCP včetně zápisů určená pro tarify
-  Business, Enterprise a Edu.
-- U osobních tarifů Plus a Pro se zdroje rozcházejí: některé uvádějí vývojářský
-  režim s plnou podporou, jiné jen čtení. **Jistotu dá až pokus na vašem účtu.**
+- OpenAI při uvedení vývojářského režimu (září 2025) oznámilo zápisové akce
+  pro tarify **Plus a Pro**; od října 2025 i pro Business, Enterprise a Edu.
+- Jednotlivé novější zdroje uvádějí u Plus jen čtení. **Jistotu dá až pokus
+  na vašem účtu** – nabídka se průběžně mění.
 - Tarif Free vlastní MCP servery nepodporuje.
 
 Když by váš účet dovolil jen čtení, půjdou recepty z ChatGPT číst a hledat,
@@ -66,12 +66,13 @@ migrace spuštěné a funkce `mcp` nasazená.
    vypnout *Verify JWT with legacy secret*. Funkce si token ověřuje sama a jen
    tak může vrátit hlavičku, podle které ChatGPT najde přihlášení. Bez tohoto
    kroku se propojení nespustí.
-4. **Přihlašovací stránka** – soubor `web/oauth/consent/index.html` musí být
-   dostupný na veřejné adrese HTTPS (neobsahuje nic tajného). Například
-   GitHub Pages, Cloudflare Pages nebo Netlify. Výsledná adresa bude
-   `https://<váš-web>/oauth/consent/`.
+4. **Přihlašovací stránka** – je nasazená z veřejného repozitáře
+   [hincep-lab/hinkredience-login](https://github.com/hincep-lab/hinkredience-login)
+   přes GitHub Pages (kopie souborů je ve složce [`web/`](../web)):
+   <https://hincep-lab.github.io/hinkredience-login/oauth/consent/>.
+   Neobsahuje nic tajného a knihovnu supabase-js má uloženou u sebe.
 5. **Supabase Auth → URL Configuration** – jako *Site URL* nastavte
-   `https://<váš-web>` (bez cesty).
+   `https://hincep-lab.github.io/hinkredience-login`.
 6. **Supabase Auth → OAuth Server** – zapněte OAuth 2.1 server, jako
    *Authorization Path* zadejte `/oauth/consent/` a povolte dynamickou
    registraci klientů (*Allow Dynamic OAuth Apps*), aby se ChatGPT mohl

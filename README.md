@@ -215,7 +215,7 @@ supabase/
   migrations/            SQL migrace: schéma, RLS, úložiště, výchozí data, počítadlo AI
   functions/ai/          serverová funkce AI kuchaře a její testy (Deno)
   functions/mcp/         MCP server pro ChatGPT a jeho testy (Deno)
-web/oauth/consent/       přihlašovací stránka pro propojení s ChatGPT
+web/                     kopie přihlašovací stránky (nasazená z repozitáře hinkredience-login)
 docs/chatgpt.md          návod na propojení s ChatGPT
   tests/                 testy oprávnění nad skutečnými migracemi
 test/                    unit a widget testy aplikace
