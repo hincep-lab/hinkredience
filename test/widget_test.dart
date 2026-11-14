@@ -1,30 +1,214 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter_localizations/flutter_localizations.dart'
+    show GlobalWidgetsLocalizations;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:hinkredience/app/app_config.dart';
+import 'package:hinkredience/app/providers.dart';
+import 'package:hinkredience/app/router.dart';
+import 'package:hinkredience/core/app_theme.dart';
+import 'package:hinkredience/core/material.dart';
+import 'package:hinkredience/data/photo_store.dart';
+import 'package:hinkredience/data/recipe.dart';
+import 'package:hinkredience/data/recipe_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:hinkredience/main.dart';
+import 'support.dart';
+
+/// Sestaví aplikaci nad pevným seznamem receptů (bez databáze a sítě).
+Future<void> pumpApp(
+  WidgetTester tester, {
+  required String location,
+  List<Recipe> recipes = const [],
+  Map<String, Object> preferences = const {},
+}) async {
+  tester.view.physicalSize = const Size(1080, 2340);
+  tester.view.devicePixelRatio = 3;
+  addTearDown(tester.view.reset);
+
+  SharedPreferences.setMockInitialValues(preferences);
+  final prefs = await SharedPreferences.getInstance();
+  final router = createRouter(initialLocation: location);
+  addTearDown(router.dispose);
+
+  await tester.pumpWidget(
+    ProviderScope(
+      retry: (retryCount, error) => null,
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        appConfigProvider.overrideWithValue(AppConfig.load(prefs)),
+        photoStoreProvider.overrideWithValue(PhotoStore(Directory.systemTemp)),
+        // Databáze se v těchto testech nepoužívá – čeká se na ni „věčně“.
+        recipeRepositoryProvider.overrideWith(
+          (ref) => Completer<RecipeRepository>().future,
+        ),
+        allRecipesProvider.overrideWith((ref) => Stream.value(recipes)),
+      ],
+      child: MaterialApp.router(
+        routerConfig: router,
+        theme: AppTheme.dark(),
+        locale: const Locale('cs'),
+        supportedLocales: const [Locale('cs')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+        ],
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('hlavní obrazovka zdraví a nabízí první recept', (tester) async {
+    await pumpApp(tester, location: Routes.home);
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('Ahoj Pájo 👋'), findsOneWidget);
+    expect(find.text('Co dnes společně uvaříme?'), findsOneWidget);
+    expect(find.text('Co dnes uvaříme?'), findsOneWidget);
+    expect(find.text('AI kuchař'), findsOneWidget);
+    expect(find.text('Přidej první recept'), findsOneWidget);
+    expect(find.text('Domů'), findsOneWidget);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  testWidgets('oslovení se bere z nastavení', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.home,
+      preferences: {'greeting_name': 'Martinko'},
+    );
+    expect(find.text('Ahoj Martinko 👋'), findsOneWidget);
+  });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  testWidgets('hlavní obrazovka doporučuje uložené recepty', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.home,
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(id: 'r2', title: 'Svíčková'),
+      ],
+    );
+    expect(find.text('Doporučené recepty'), findsOneWidget);
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(find.text('Moje sbírka · 2'), findsOneWidget);
+    expect(find.text('Přidej první recept'), findsNothing);
+  });
+
+  testWidgets('funkce dalších etap jsou poctivě označené', (tester) async {
+    await pumpApp(tester, location: Routes.home);
+    expect(find.text('Brzy'), findsNWidgets(4));
+
+    await tester.tap(find.text('AI kuchař'));
+    await tester.pumpAndSettle();
+    expect(find.text('Připravujeme – Etapa 2'), findsOneWidget);
+  });
+
+  testWidgets('seznam receptů: kategorie, hledání bez diakritiky', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipes,
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(
+          id: 'r2',
+          title: 'Svíčková na smetaně',
+          category: 'Omáčky',
+        ),
+      ],
+    );
+
+    // Výchozí pohled: dlaždice kategorií.
+    expect(find.text('Maso'), findsOneWidget);
+    expect(find.text('Zavařování'), findsOneWidget);
+    expect(find.text('Žebra BBQ'), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'svickova');
+    await tester.pumpAndSettle();
+    expect(find.text('Svíčková na smetaně'), findsOneWidget);
+    expect(find.text('Žebra BBQ'), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'losos');
+    await tester.pumpAndSettle();
+    expect(find.text('Nic jsme nenašli'), findsOneWidget);
+  });
+
+  testWidgets('klepnutí na kategorii vyfiltruje recepty', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipes,
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(
+          id: 'r2',
+          title: 'Svíčková na smetaně',
+          category: 'Omáčky',
+        ),
+      ],
+    );
+    await tester.tap(find.text('Maso'));
+    await tester.pumpAndSettle();
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(find.text('Svíčková na smetaně'), findsNothing);
+  });
+
+  testWidgets('záložka Oblíbené ukazuje jen oblíbené', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.favorites,
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(id: 'r2', title: 'Svíčková').copyWith(isFavorite: true),
+      ],
+    );
+    expect(find.text('Svíčková'), findsOneWidget);
+    expect(find.text('Žebra BBQ'), findsNothing);
+  });
+
+  testWidgets('detail receptu přepočítává porce', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipe('recipe-1'),
+      recipes: [sampleRecipe()],
+    );
+
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(find.text('Suroviny (4 porce)'), findsOneWidget);
+    expect(find.text('2 kg'), findsOneWidget);
+    expect(find.text('200 ml'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Více porcí'));
+    await tester.tap(find.byTooltip('Více porcí'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (6 porcí)'), findsOneWidget);
+    expect(find.text('3 kg'), findsOneWidget);
+    expect(find.text('300 ml'), findsOneWidget);
+
+    await tester.tap(find.text('Postup'));
+    await tester.pumpAndSettle();
+    expect(find.text('Přikryjte alobalem a pečte.'), findsOneWidget);
+    expect(find.text('150 °C'), findsOneWidget);
+    expect(find.text('3 h'), findsOneWidget);
+  });
+
+  testWidgets('neexistující recept ukáže srozumitelnou zprávu', (tester) async {
+    await pumpApp(tester, location: Routes.recipe('nic'));
+    expect(find.text('Recept nenalezen'), findsOneWidget);
+  });
+
+  testWidgets('obrazovka Více bez připojení ukazuje místní režim', (
+    tester,
+  ) async {
+    await pumpApp(tester, location: Routes.more);
+    expect(find.text('Bez účtu'), findsOneWidget);
+    expect(
+      find.text('Vypnuto – připojení k Supabase není nastavené.'),
+      findsOneWidget,
+    );
+    expect(find.text('Koš'), findsOneWidget);
   });
 }

@@ -9,6 +9,7 @@ GeneratedPluginRegistrant.java
 
 # Remember to never publicly share your keystore.
 # See https://flutter.dev/to/reference-keystore
-key.properties
 **/*.keystore
 **/*.jks
+# Výjimka: klíč pro sideload je záměrně v (soukromém) repozitáři, viz android/key.properties.
+!app/hinkredience-sideload.jks

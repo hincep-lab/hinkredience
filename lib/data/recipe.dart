@@ -1,0 +1,429 @@
+import 'package:flutter/foundation.dart';
+
+import '../core/formatters.dart';
+
+/// Viditelnost receptu.
+abstract final class RecipeVisibility {
+  static const private = 'private';
+  static const household = 'household';
+}
+
+@immutable
+class Ingredient {
+  const Ingredient({
+    required this.id,
+    required this.name,
+    this.quantity,
+    this.unit = '',
+    this.note = '',
+  });
+
+  final String id;
+  final String name;
+  final double? quantity;
+  final String unit;
+  final String note;
+
+  Ingredient copyWith({String? id, String? name, String? unit, String? note}) =>
+      Ingredient(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        quantity: quantity,
+        unit: unit ?? this.unit,
+        note: note ?? this.note,
+      );
+
+  /// Množství s jednotkou přepočtené na jiný počet porcí, např. „1,5 kg“.
+  String amountLabel({double fromServings = 1, double toServings = 1}) {
+    final scaled = scaleQuantity(
+      quantity,
+      fromServings: fromServings,
+      toServings: toServings,
+    );
+    if (scaled == null) return unit;
+    return unit.isEmpty
+        ? formatQuantity(scaled)
+        : '${formatQuantity(scaled)} $unit';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'quantity': quantity,
+    'unit': unit,
+    'note': note,
+  };
+
+  factory Ingredient.fromJson(Map<String, dynamic> json) => Ingredient(
+    id: json['id'] as String,
+    name: (json['name'] as String?) ?? '',
+    quantity: (json['quantity'] as num?)?.toDouble(),
+    unit: (json['unit'] as String?) ?? '',
+    note: (json['note'] as String?) ?? '',
+  );
+}
+
+@immutable
+class RecipeStep {
+  const RecipeStep({
+    required this.id,
+    required this.instruction,
+    this.durationMinutes,
+    this.temperatureC,
+  });
+
+  final String id;
+  final String instruction;
+  final int? durationMinutes;
+  final double? temperatureC;
+
+  RecipeStep copyWith({String? id}) => RecipeStep(
+    id: id ?? this.id,
+    instruction: instruction,
+    durationMinutes: durationMinutes,
+    temperatureC: temperatureC,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'instruction': instruction,
+    'duration_minutes': durationMinutes,
+    'temperature_c': temperatureC,
+  };
+
+  factory RecipeStep.fromJson(Map<String, dynamic> json) => RecipeStep(
+    id: json['id'] as String,
+    instruction: (json['instruction'] as String?) ?? '',
+    durationMinutes: (json['duration_minutes'] as num?)?.toInt(),
+    temperatureC: (json['temperature_c'] as num?)?.toDouble(),
+  );
+}
+
+/// Fotografie receptu. [localPath] je soubor v telefonu, [remotePath] cesta
+/// v úložišti Supabase (vyplní se po nahrání).
+@immutable
+class RecipePhoto {
+  const RecipePhoto({required this.id, this.localPath, this.remotePath});
+
+  final String id;
+  final String? localPath;
+  final String? remotePath;
+
+  RecipePhoto copyWith({String? id, String? localPath, String? remotePath}) =>
+      RecipePhoto(
+        id: id ?? this.id,
+        localPath: localPath ?? this.localPath,
+        remotePath: remotePath ?? this.remotePath,
+      );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'local_path': localPath,
+    'remote_path': remotePath,
+  };
+
+  /// Podoba ukládaná na server – cesta v telefonu tam nepatří.
+  Map<String, dynamic> toRemoteJson() => {'id': id, 'remote_path': remotePath};
+
+  factory RecipePhoto.fromJson(Map<String, dynamic> json) => RecipePhoto(
+    id: json['id'] as String,
+    localPath: json['local_path'] as String?,
+    remotePath: json['remote_path'] as String?,
+  );
+}
+
+@immutable
+class Recipe {
+  const Recipe({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+    this.ownerId,
+    this.householdId,
+    this.visibility = RecipeVisibility.private,
+    this.description = '',
+    this.category = '',
+    this.servings = 4,
+    this.prepMinutes = 0,
+    this.cookMinutes = 0,
+    this.totalMinutes = 0,
+    this.temperatures = const [],
+    this.equipment = const [],
+    this.notes = '',
+    this.rating,
+    this.isFavorite = false,
+    this.photos = const [],
+    this.sourceUrl,
+    this.currentVersion = 1,
+    this.lastCookedAt,
+    this.deletedAt,
+    this.ingredients = const [],
+    this.steps = const [],
+  });
+
+  final String id;
+  final String? ownerId;
+  final String? householdId;
+  final String visibility;
+  final String title;
+  final String description;
+  final String category;
+  final double servings;
+  final int prepMinutes;
+  final int cookMinutes;
+  final int totalMinutes;
+  final List<String> temperatures;
+  final List<String> equipment;
+  final String notes;
+  final double? rating;
+  final bool isFavorite;
+  final List<RecipePhoto> photos;
+  final String? sourceUrl;
+  final int currentVersion;
+  final DateTime? lastCookedAt;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime? deletedAt;
+  final List<Ingredient> ingredients;
+  final List<RecipeStep> steps;
+
+  bool get isDeleted => deletedAt != null;
+
+  /// Celkový čas; když není zadaný, sečte přípravu a vaření.
+  int get effectiveTotalMinutes =>
+      totalMinutes > 0 ? totalMinutes : prepMinutes + cookMinutes;
+
+  Recipe copyWith({
+    String? id,
+    Object? ownerId = _keep,
+    Object? householdId = _keep,
+    String? visibility,
+    String? title,
+    String? description,
+    String? category,
+    double? servings,
+    int? prepMinutes,
+    int? cookMinutes,
+    int? totalMinutes,
+    List<String>? temperatures,
+    List<String>? equipment,
+    String? notes,
+    Object? rating = _keep,
+    bool? isFavorite,
+    List<RecipePhoto>? photos,
+    Object? sourceUrl = _keep,
+    int? currentVersion,
+    Object? lastCookedAt = _keep,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    Object? deletedAt = _keep,
+    List<Ingredient>? ingredients,
+    List<RecipeStep>? steps,
+  }) => Recipe(
+    id: id ?? this.id,
+    ownerId: identical(ownerId, _keep) ? this.ownerId : ownerId as String?,
+    householdId: identical(householdId, _keep)
+        ? this.householdId
+        : householdId as String?,
+    visibility: visibility ?? this.visibility,
+    title: title ?? this.title,
+    description: description ?? this.description,
+    category: category ?? this.category,
+    servings: servings ?? this.servings,
+    prepMinutes: prepMinutes ?? this.prepMinutes,
+    cookMinutes: cookMinutes ?? this.cookMinutes,
+    totalMinutes: totalMinutes ?? this.totalMinutes,
+    temperatures: temperatures ?? this.temperatures,
+    equipment: equipment ?? this.equipment,
+    notes: notes ?? this.notes,
+    rating: identical(rating, _keep) ? this.rating : rating as double?,
+    isFavorite: isFavorite ?? this.isFavorite,
+    photos: photos ?? this.photos,
+    sourceUrl: identical(sourceUrl, _keep)
+        ? this.sourceUrl
+        : sourceUrl as String?,
+    currentVersion: currentVersion ?? this.currentVersion,
+    lastCookedAt: identical(lastCookedAt, _keep)
+        ? this.lastCookedAt
+        : lastCookedAt as DateTime?,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: identical(deletedAt, _keep)
+        ? this.deletedAt
+        : deletedAt as DateTime?,
+    ingredients: ingredients ?? this.ingredients,
+    steps: steps ?? this.steps,
+  );
+
+  /// Úplná podoba receptu – pro místní databázi, historii verzí a export.
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'owner_id': ownerId,
+    'household_id': householdId,
+    'visibility': visibility,
+    'title': title,
+    'description': description,
+    'category': category,
+    'servings': servings,
+    'prep_minutes': prepMinutes,
+    'cook_minutes': cookMinutes,
+    'total_minutes': totalMinutes,
+    'temperatures': temperatures,
+    'equipment': equipment,
+    'notes': notes,
+    'rating': rating,
+    'is_favorite': isFavorite,
+    'photos': [for (final photo in photos) photo.toJson()],
+    'source_url': sourceUrl,
+    'current_version': currentVersion,
+    'last_cooked_at': lastCookedAt?.toUtc().toIso8601String(),
+    'created_at': createdAt.toUtc().toIso8601String(),
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+    'deleted_at': deletedAt?.toUtc().toIso8601String(),
+    'ingredients': [for (final item in ingredients) item.toJson()],
+    'steps': [for (final step in steps) step.toJson()],
+  };
+
+  factory Recipe.fromJson(Map<String, dynamic> json) => Recipe(
+    id: json['id'] as String,
+    ownerId: json['owner_id'] as String?,
+    householdId: json['household_id'] as String?,
+    visibility: (json['visibility'] as String?) ?? RecipeVisibility.private,
+    title: (json['title'] as String?) ?? '',
+    description: (json['description'] as String?) ?? '',
+    category: (json['category'] as String?) ?? '',
+    servings: (json['servings'] as num?)?.toDouble() ?? 4,
+    prepMinutes: (json['prep_minutes'] as num?)?.toInt() ?? 0,
+    cookMinutes: (json['cook_minutes'] as num?)?.toInt() ?? 0,
+    totalMinutes: (json['total_minutes'] as num?)?.toInt() ?? 0,
+    temperatures: _stringList(json['temperatures']),
+    equipment: _stringList(json['equipment']),
+    notes: (json['notes'] as String?) ?? '',
+    rating: (json['rating'] as num?)?.toDouble(),
+    isFavorite: json['is_favorite'] == true,
+    photos: [
+      for (final photo in (json['photos'] as List?) ?? const [])
+        RecipePhoto.fromJson(Map<String, dynamic>.from(photo as Map)),
+    ],
+    sourceUrl: json['source_url'] as String?,
+    currentVersion: (json['current_version'] as num?)?.toInt() ?? 1,
+    lastCookedAt: _date(json['last_cooked_at']),
+    createdAt: _date(json['created_at']) ?? DateTime.now().toUtc(),
+    updatedAt: _date(json['updated_at']) ?? DateTime.now().toUtc(),
+    deletedAt: _date(json['deleted_at']),
+    ingredients: [
+      for (final item in (json['ingredients'] as List?) ?? const [])
+        Ingredient.fromJson(Map<String, dynamic>.from(item as Map)),
+    ],
+    steps: [
+      for (final step in (json['steps'] as List?) ?? const [])
+        RecipeStep.fromJson(Map<String, dynamic>.from(step as Map)),
+    ],
+  );
+
+  /// Čitelný text receptu pro sdílení.
+  String toShareText() {
+    final buffer = StringBuffer()..writeln(title);
+    if (description.isNotEmpty) buffer.writeln(description);
+    buffer.writeln();
+    buffer.writeln('Porce: ${formatQuantity(servings)}');
+    if (effectiveTotalMinutes > 0) {
+      buffer.writeln('Celkový čas: ${formatMinutes(effectiveTotalMinutes)}');
+    }
+    if (temperatures.isNotEmpty) {
+      buffer.writeln('Teploty: ${temperatures.join(', ')}');
+    }
+    if (ingredients.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('SUROVINY');
+      for (final item in ingredients) {
+        final amount = item.amountLabel();
+        buffer.writeln(
+          amount.isEmpty ? '• ${item.name}' : '• $amount ${item.name}',
+        );
+      }
+    }
+    if (steps.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('POSTUP');
+      for (var i = 0; i < steps.length; i++) {
+        buffer.writeln('${i + 1}. ${steps[i].instruction}');
+      }
+    }
+    if (notes.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('POZNÁMKY')
+        ..writeln(notes);
+    }
+    buffer
+      ..writeln()
+      ..write('— HINKredience°');
+    return buffer.toString();
+  }
+
+  /// Vyhledávání bez ohledu na diakritiku a velikost písmen – v názvu,
+  /// popisu, kategorii i surovinách.
+  bool matches(String query) {
+    final needle = foldForSearch(query.trim());
+    if (needle.isEmpty) return true;
+    final haystack = foldForSearch(
+      [
+        title,
+        description,
+        category,
+        for (final i in ingredients) i.name,
+      ].join('\n'),
+    );
+    return needle.split(RegExp(r'\s+')).every(haystack.contains);
+  }
+}
+
+const Object _keep = Object();
+
+List<String> _stringList(Object? value) => [
+  for (final item in (value as List?) ?? const []) item.toString(),
+];
+
+DateTime? _date(Object? value) => value is String && value.isNotEmpty
+    ? DateTime.tryParse(value)?.toUtc()
+    : null;
+
+/// Uložený stav receptu v historii úprav.
+@immutable
+class RecipeVersion {
+  const RecipeVersion({
+    required this.id,
+    required this.recipeId,
+    required this.versionNumber,
+    required this.snapshot,
+    required this.createdAt,
+    this.changeSummary = '',
+  });
+
+  final String id;
+  final String recipeId;
+  final int versionNumber;
+  final Map<String, dynamic> snapshot;
+  final String changeSummary;
+  final DateTime createdAt;
+}
+
+/// Výchozí kategorie podle grafického návrhu. Uživatel si může přidat vlastní.
+const defaultCategories = <String>[
+  'Maso',
+  'Drůbež',
+  'Ryby',
+  'Polévky',
+  'Omáčky',
+  'Přílohy',
+  'Pečení',
+  'Dezerty',
+  'Těsta',
+  'Pizza',
+  'Gril',
+  'Zavařování',
+];

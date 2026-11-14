@@ -1,0 +1,90 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database:
+    name: Databáze – migrace a oprávnění (RLS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Testy migrací a Row Level Security
+        working-directory: supabase/tests
+        run: |
+          npm ci
+          npm test
+
+  android:
+    name: Aplikace – analýza, testy, APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - name: SQLite pro testy místní databáze
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libsqlite3-dev
+      - run: flutter pub get
+      - name: Formátování
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Statická analýza
+        run: flutter analyze --no-fatal-infos
+      - name: Testy
+        run: flutter test
+      - name: Sestavení APK
+        run: >
+          flutter build apk --release
+          --build-number=${{ github.run_number }}
+          --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      - name: Přejmenování APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk hinkredience.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hinkredience-apk
+          path: hinkredience.apk
+      - name: Vydání ke stažení do telefonu
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: HINKredience° – sestavení ${{ github.run_number }}
+          body: |
+            Automatické sestavení z commitu ${{ github.sha }}.
+            Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
+          files: hinkredience.apk
+
+  ios:
+    name: iOS – kontrolní sestavení bez podpisu
+    # Běží jen na vyžádání (Run workflow) nebo když zpráva commitu obsahuje [ios];
+    # minuty macOS jsou u soukromých repozitářů desetkrát dražší.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ios]')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign

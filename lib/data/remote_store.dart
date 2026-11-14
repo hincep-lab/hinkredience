@@ -1,0 +1,246 @@
+import 'dart:io';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'recipe.dart';
+
+/// Výsledek stažení změn ze serveru.
+class RemoteChange {
+  const RemoteChange({
+    required this.recipe,
+    required this.syncedAt,
+    this.versions = const [],
+  });
+
+  final Recipe recipe;
+
+  /// Serverový čas změny – slouží jako kurzor pro příští stažení.
+  final DateTime syncedAt;
+  final List<RecipeVersion> versions;
+}
+
+/// Vzdálené úložiště receptů. Rozhraní existuje proto, aby šla synchronizace
+/// testovat bez skutečného serveru.
+abstract interface class RemoteStore {
+  /// Id přihlášeného uživatele, nebo `null`.
+  String? get userId;
+
+  Future<void> pushRecipe(Recipe recipe);
+
+  Future<void> pushVersion(RecipeVersion version);
+
+  /// Recepty změněné po [since] (včetně smazaných), od nejstarší změny.
+  Future<List<RemoteChange>> pullRecipes({DateTime? since});
+
+  /// Nahraje fotografii a vrátí její cestu v úložišti.
+  Future<String> uploadPhoto({
+    required String recipeId,
+    required String photoId,
+    required File file,
+  });
+
+  /// Dočasná adresa pro zobrazení fotografie.
+  Future<String?> signedPhotoUrl(String remotePath);
+}
+
+/// Implementace nad Supabase (PostgreSQL + Storage).
+class SupabaseRemoteStore implements RemoteStore {
+  SupabaseRemoteStore(this._client);
+
+  final SupabaseClient _client;
+
+  static const photoBucket = 'recipe-photos';
+
+  @override
+  String? get userId => _client.auth.currentUser?.id;
+
+  @override
+  Future<void> pushRecipe(Recipe recipe) async {
+    final uid = userId;
+    if (uid == null) throw StateError('Nepřihlášený uživatel.');
+    final owner = recipe.ownerId ?? uid;
+    final row = <String, dynamic>{
+      'id': recipe.id,
+      'owner_id': owner,
+      'household_id': recipe.householdId,
+      'visibility': recipe.visibility,
+      'title': recipe.title,
+      'description': recipe.description,
+      'category': recipe.category,
+      'servings': recipe.servings,
+      'prep_minutes': recipe.prepMinutes,
+      'cook_minutes': recipe.cookMinutes,
+      'total_minutes': recipe.totalMinutes,
+      'temperatures': recipe.temperatures,
+      'equipment': recipe.equipment,
+      'notes': recipe.notes,
+      'rating': recipe.rating,
+      'is_favorite': recipe.isFavorite,
+      'photos': [
+        for (final photo in recipe.photos)
+          if (photo.remotePath != null) photo.toRemoteJson(),
+      ],
+      'source_url': recipe.sourceUrl,
+      'current_version': recipe.currentVersion,
+      'last_cooked_at': recipe.lastCookedAt?.toUtc().toIso8601String(),
+      'created_at': recipe.createdAt.toUtc().toIso8601String(),
+      'updated_at': recipe.updatedAt.toUtc().toIso8601String(),
+      'deleted_at': recipe.deletedAt?.toUtc().toIso8601String(),
+    };
+
+    if (owner == uid) {
+      await _client.from('recipes').upsert(row);
+    } else {
+      // Sdílený recept jiného člena domácnosti: smíme ho upravit, ne založit.
+      row.remove('owner_id');
+      await _client.from('recipes').update(row).eq('id', recipe.id);
+    }
+
+    await _client
+        .from('recipe_ingredients')
+        .delete()
+        .eq('recipe_id', recipe.id);
+    if (recipe.ingredients.isNotEmpty) {
+      await _client.from('recipe_ingredients').insert([
+        for (var i = 0; i < recipe.ingredients.length; i++)
+          {
+            'id': recipe.ingredients[i].id,
+            'recipe_id': recipe.id,
+            'position': i,
+            'name': recipe.ingredients[i].name,
+            'quantity': recipe.ingredients[i].quantity,
+            'unit': recipe.ingredients[i].unit,
+            'note': recipe.ingredients[i].note,
+          },
+      ]);
+    }
+
+    await _client.from('recipe_steps').delete().eq('recipe_id', recipe.id);
+    if (recipe.steps.isNotEmpty) {
+      await _client.from('recipe_steps').insert([
+        for (var i = 0; i < recipe.steps.length; i++)
+          {
+            'id': recipe.steps[i].id,
+            'recipe_id': recipe.id,
+            'position': i,
+            'instruction': recipe.steps[i].instruction,
+            'duration_minutes': recipe.steps[i].durationMinutes,
+            'temperature_c': recipe.steps[i].temperatureC,
+          },
+      ]);
+    }
+  }
+
+  @override
+  Future<void> pushVersion(RecipeVersion version) async {
+    await _client
+        .from('recipe_versions')
+        .upsert(
+          {
+            'id': version.id,
+            'recipe_id': version.recipeId,
+            'version_number': version.versionNumber,
+            'snapshot': version.snapshot,
+            'change_summary': version.changeSummary,
+            'created_at': version.createdAt.toUtc().toIso8601String(),
+          },
+          onConflict: 'recipe_id,version_number',
+          ignoreDuplicates: true,
+        );
+  }
+
+  @override
+  Future<List<RemoteChange>> pullRecipes({DateTime? since}) async {
+    final base = _client
+        .from('recipes')
+        .select(
+          '*, recipe_ingredients(*), recipe_steps(*), recipe_versions(*)',
+        );
+    final filtered = since == null
+        ? base
+        : base.gt('synced_at', since.toUtc().toIso8601String());
+    final List<Map<String, dynamic>> rows = await filtered.order(
+      'synced_at',
+      ascending: true,
+    );
+    return [for (final row in rows) remoteChangeFromRow(row)];
+  }
+
+  @override
+  Future<String> uploadPhoto({
+    required String recipeId,
+    required String photoId,
+    required File file,
+  }) async {
+    final uid = userId;
+    if (uid == null) throw StateError('Nepřihlášený uživatel.');
+    final path = '$uid/$recipeId/$photoId.jpg';
+    await _client.storage
+        .from(photoBucket)
+        .upload(
+          path,
+          file,
+          fileOptions: const FileOptions(
+            upsert: true,
+            contentType: 'image/jpeg',
+          ),
+        );
+    return path;
+  }
+
+  @override
+  Future<String?> signedPhotoUrl(String remotePath) async {
+    try {
+      return await _client.storage
+          .from(photoBucket)
+          .createSignedUrl(remotePath, 3600);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// Převede řádek tabulky `recipes` (s vnořenými surovinami, kroky a verzemi)
+/// na doménový objekt. Samostatná funkce kvůli testům.
+RemoteChange remoteChangeFromRow(Map<String, dynamic> row) {
+  List<Map<String, dynamic>> nested(String key) {
+    final list = [
+      for (final item in (row[key] as List?) ?? const [])
+        Map<String, dynamic>.from(item as Map),
+    ];
+    list.sort(
+      (a, b) => ((a['position'] as num?) ?? 0).compareTo(
+        (b['position'] as num?) ?? 0,
+      ),
+    );
+    return list;
+  }
+
+  final recipe = Recipe.fromJson({
+    ...row,
+    'photos': [
+      for (final photo in (row['photos'] as List?) ?? const [])
+        {'id': (photo as Map)['id'], 'remote_path': photo['remote_path']},
+    ],
+    'ingredients': nested('recipe_ingredients'),
+    'steps': nested('recipe_steps'),
+  });
+
+  final versions = [
+    for (final item in (row['recipe_versions'] as List?) ?? const [])
+      RecipeVersion(
+        id: (item as Map)['id'] as String,
+        recipeId: recipe.id,
+        versionNumber: (item['version_number'] as num).toInt(),
+        snapshot: Map<String, dynamic>.from(item['snapshot'] as Map),
+        changeSummary: (item['change_summary'] as String?) ?? '',
+        createdAt: DateTime.parse(item['created_at'] as String).toUtc(),
+      ),
+  ];
+
+  return RemoteChange(
+    recipe: recipe,
+    syncedAt: DateTime.parse(row['synced_at'] as String).toUtc(),
+    versions: versions,
+  );
+}

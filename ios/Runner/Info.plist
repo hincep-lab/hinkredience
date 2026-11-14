@@ -5,9 +5,9 @@
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>cs</string>
 	<key>CFBundleDisplayName</key>
-	<string>Hinkredience</string>
+	<string>HINKredience°</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -66,5 +66,15 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>cs</string>
+	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>HINKredience potřebuje přístup k fotkám, abyste mohli k receptům přidávat obrázky jídel.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>HINKredience potřebuje fotoaparát, abyste mohli vyfotit uvařené jídlo k receptu.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Synchronizace se Supabase a načítání fotografií ze serveru. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="hinkredience"
+        android:label="HINKredience°"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
