@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../data/ai_models.dart';
+import '../data/ai_service.dart';
 import '../data/app_database.dart';
 import '../data/photo_store.dart';
 import '../data/recipe.dart';
@@ -418,3 +420,53 @@ class SyncController extends Notifier<SyncState> {
 final syncProvider = NotifierProvider<SyncController, SyncState>(
   SyncController.new,
 );
+
+// -------------------------------------------------------------------- AI
+
+bool _aiReady(Ref ref) =>
+    ref.watch(supabaseClientProvider) != null &&
+    ref.watch(sessionProvider).isSignedIn;
+
+/// AI kuchař, nebo `null`, když chybí připojení či přihlášení.
+final aiServiceProvider = Provider<AiService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null || !_aiReady(ref)) return null;
+  return AiService(SupabaseAiBackend(client));
+});
+
+final aiHistoryStoreProvider = Provider<AiHistoryStore?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null || !_aiReady(ref)) return null;
+  return AiHistoryStore(client);
+});
+
+final kitchenStoreProvider = Provider<KitchenStore?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null || !_aiReady(ref)) return null;
+  return KitchenStore(client);
+});
+
+/// Uložené konverzace s AI, od nejnovější.
+final aiConversationsProvider =
+    FutureProvider.autoDispose<List<AiConversation>>((ref) async {
+      final store = ref.watch(aiHistoryStoreProvider);
+      if (store == null) return const [];
+      return store.conversations();
+    });
+
+/// Kuchyňské vybavení a chuťové preference uložené na serveru.
+final kitchenProvider =
+    FutureProvider.autoDispose<
+      ({List<MemoryItem> equipment, List<MemoryItem> preferences})
+    >((ref) async {
+      final store = ref.watch(kitchenStoreProvider);
+      if (store == null) {
+        return (
+          equipment: const <MemoryItem>[],
+          preferences: const <MemoryItem>[],
+        );
+      }
+      final equipment = await store.equipment();
+      final preferences = await store.preferences();
+      return (equipment: equipment, preferences: preferences);
+    });

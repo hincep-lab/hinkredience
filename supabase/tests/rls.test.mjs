@@ -88,7 +88,7 @@ before(async () => {
 
 test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => {
   const expected = [
-    'ai_conversations', 'ai_messages', 'cooking_notes', 'cooking_sessions',
+    'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
     'household_members', 'households', 'kitchen_equipment', 'meal_plans',
     'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
@@ -277,4 +277,28 @@ test('česká diakritika se ukládá beze změny', async () => {
     `select title, notes from recipes where id = 'aaaaaaaa-0000-0000-0000-000000000003'`);
   assert.equal(rows[0].title, text);
   assert.equal(rows[0].notes, text);
+});
+
+test('počítadlo AI: roste jen přes funkci, každý vidí jen své', async () => {
+  const first = await as(PAVEL, `select public.ai_register_usage('request') as n`);
+  const second = await as(PAVEL, `select public.ai_register_usage('request') as n`);
+  assert.equal(first.rows[0].n, 1);
+  assert.equal(second.rows[0].n, 2);
+  const search = await as(PAVEL, `select public.ai_register_usage('search') as n`);
+  assert.equal(search.rows[0].n, 1, 'vyhledávání se počítá zvlášť');
+  const other = await as(MARTINKA, `select public.ai_register_usage('request') as n`);
+  assert.equal(other.rows[0].n, 1, 'každý uživatel má vlastní počítadlo');
+
+  const visible = await as(MARTINKA, `select count(*)::int as n from public.ai_usage`);
+  assert.equal(visible.rows[0].n, 1, 'cizí počty nejsou vidět');
+
+  await denied(
+    as(PAVEL, `update public.ai_usage set count = 0`),
+    'počítadlo nejde vynulovat ručně',
+  );
+  await denied(
+    as(PAVEL, `insert into public.ai_usage (kind, count) values ('search', 0)`),
+    'do počítadla nejde zapisovat přímo',
+  );
+  await assert.rejects(as(PAVEL, `select public.ai_register_usage('jine')`), /Neznámý druh/);
 });

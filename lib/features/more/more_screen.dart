@@ -7,6 +7,13 @@ import '../../core/app_colors.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
 
+const _buildNumber = String.fromEnvironment('BUILD_NUMBER');
+
+/// Verze aplikace včetně čísla sestavení z GitHub Actions, je-li známé.
+const appVersionLabel = _buildNumber == ''
+    ? 'Verze 1.1.0 · Etapa 2 – AI kuchař'
+    : 'Verze 1.1.0 · sestavení $_buildNumber · Etapa 2 – AI kuchař';
+
 /// Záložka „Více“: účet, synchronizace, koš, nastavení.
 class MoreScreen extends ConsumerWidget {
   const MoreScreen({super.key});
@@ -214,6 +221,14 @@ class MoreScreen extends ConsumerWidget {
                 ),
                 const Divider(indent: 16, endIndent: 16),
                 ListTile(
+                  leading: const Icon(Icons.kitchen_outlined),
+                  title: const Text('Kuchyně a chutě'),
+                  subtitle: const Text('Vybavení a preference pro AI kuchaře'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Routes.kitchen),
+                ),
+                const Divider(indent: 16, endIndent: 16),
+                ListTile(
                   leading: const Icon(Icons.delete_outline_rounded),
                   title: const Text('Koš'),
                   subtitle: Text(
@@ -232,7 +247,7 @@ class MoreScreen extends ConsumerWidget {
           const Center(child: Wordmark(fontSize: 20)),
           const SizedBox(height: 4),
           Text(
-            'Dvě hlavy. Jedna dokonalá chuť.\nVerze 1.0.0 · Etapa 1 – funkční základ\n© Pavel Hink',
+            'Dvě hlavy. Jedna dokonalá chuť.\n$appVersionLabel\n© Pavel Hink',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
           ),

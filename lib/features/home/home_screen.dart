@@ -166,14 +166,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     icon: Icons.auto_awesome_rounded,
                     title: 'AI kuchař',
                     subtitle: 'Poradí, upraví, vymyslí',
-                    soon: true,
-                    onTap: () => _comingSoon(
-                      'AI kuchař',
-                      'Etapa 2',
-                      'Chat s kuchařským parťákem, který vymýšlí a vylepšuje '
-                          'recepty, hledá je na internetu a pamatuje si vaši '
-                          'kuchyni. Vyžaduje serverovou část s klíčem OpenAI.',
-                    ),
+                    onTap: () => context.push(Routes.ai),
+                  ),
+                  _FeatureTile(
+                    icon: Icons.travel_explore_rounded,
+                    title: 'Hledat recepty',
+                    subtitle: 'Na internetu, se zdroji',
+                    onTap: () => context.push(Routes.webSearch),
+                  ),
+                  _FeatureTile(
+                    icon: Icons.download_rounded,
+                    title: 'Import receptu',
+                    subtitle: 'Text, odkaz, fotka',
+                    onTap: () => context.push(Routes.importRecipe),
                   ),
                   _FeatureTile(
                     icon: Icons.calendar_month_rounded,

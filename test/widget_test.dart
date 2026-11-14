@@ -94,11 +94,11 @@ void main() {
 
   testWidgets('funkce dalších etap jsou poctivě označené', (tester) async {
     await pumpApp(tester, location: Routes.home);
-    expect(find.text('Brzy'), findsNWidgets(4));
+    expect(find.text('Brzy'), findsNWidgets(3));
 
-    await tester.tap(find.text('AI kuchař'));
+    await tester.tap(find.text('Plán vaření'));
     await tester.pumpAndSettle();
-    expect(find.text('Připravujeme – Etapa 2'), findsOneWidget);
+    expect(find.text('Připravujeme – Etapa 4'), findsOneWidget);
   });
 
   testWidgets('seznam receptů: kategorie, hledání bez diakritiky', (

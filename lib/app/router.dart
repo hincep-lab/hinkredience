@@ -1,9 +1,15 @@
 import 'package:go_router/go_router.dart';
 
 import '../core/material.dart';
+import '../features/ai/ai_chat_screen.dart';
+import '../features/ai/ai_history_screen.dart';
+import '../features/ai/draft_review_screen.dart';
+import '../features/ai/import_screen.dart';
+import '../features/ai/web_search_screen.dart';
 import '../features/auth/auth_screen.dart';
 import '../features/home/home_screen.dart';
 import '../features/more/connection_screen.dart';
+import '../features/more/kitchen_screen.dart';
 import '../features/more/more_screen.dart';
 import '../features/more/trash_screen.dart';
 import '../features/recipes/recipe_detail_screen.dart';
@@ -22,7 +28,34 @@ abstract final class Routes {
   static const more = '/more';
   static const trash = '/more/trash';
   static const connection = '/more/connection';
+  static const kitchen = '/more/kitchen';
   static const newRecipe = '/recipe/new';
+  static const ai = '/ai';
+  static const aiHistory = '/ai/history';
+  static const webSearch = '/ai/search';
+  static const importRecipe = '/ai/import';
+  static const draft = '/ai/draft';
+
+  /// Chat s AI: pokračování konverzace nebo rozhovor nad receptem.
+  static String aiChat({String? conversationId, String? recipeId}) {
+    final parameters = {'c': ?conversationId, 'recipe': ?recipeId};
+    return Uri(
+      path: ai,
+      queryParameters: parameters.isEmpty ? null : parameters,
+    ).toString();
+  }
+
+  /// Hledání na internetu s předvyplněným dotazem nebo podle receptu.
+  static String webSearchWith({String? query, String? similarRecipeId}) {
+    final parameters = {
+      if (query != null && query.isNotEmpty) 'q': query,
+      'similar': ?similarRecipeId,
+    };
+    return Uri(
+      path: webSearch,
+      queryParameters: parameters.isEmpty ? null : parameters,
+    ).toString();
+  }
 
   static String recipe(String id) => '/recipe/$id';
   static String editRecipe(String id) => '/recipe/$id/edit';
@@ -119,9 +152,63 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                     pageBuilder: (context, state) =>
                         page(state, const ConnectionScreen()),
                   ),
+                  GoRoute(
+                    path: 'kitchen',
+                    parentNavigatorKey: rootKey,
+                    pageBuilder: (context, state) =>
+                        page(state, const KitchenScreen()),
+                  ),
                 ],
               ),
             ],
+          ),
+        ],
+      ),
+      GoRoute(
+        path: Routes.ai,
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(
+          state,
+          AiChatScreen(
+            conversationId: state.uri.queryParameters['c'],
+            recipeId: state.uri.queryParameters['recipe'],
+          ),
+        ),
+        routes: [
+          GoRoute(
+            path: 'history',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) =>
+                page(state, const AiHistoryScreen()),
+          ),
+          GoRoute(
+            path: 'search',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(
+              state,
+              WebSearchScreen(
+                initialQuery: state.uri.queryParameters['q'] ?? '',
+                similarRecipeId: state.uri.queryParameters['similar'],
+              ),
+            ),
+          ),
+          GoRoute(
+            path: 'import',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const ImportScreen()),
+          ),
+          GoRoute(
+            path: 'draft',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) {
+              final extra = state.extra;
+              return page(
+                state,
+                DraftReviewScreen(
+                  args: extra is DraftReviewArgs ? extra : null,
+                ),
+              );
+            },
           ),
         ],
       ),

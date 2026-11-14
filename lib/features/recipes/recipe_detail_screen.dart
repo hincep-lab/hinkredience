@@ -14,6 +14,8 @@ import '../../core/formatters.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
+import '../ai/ai_common.dart';
+import '../ai/draft_review_screen.dart';
 
 /// Podoba receptu pro export do souboru (bez cest k souborům v telefonu).
 Map<String, dynamic> recipeExportJson(Recipe recipe) {
@@ -52,6 +54,65 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   Future<void> _toggleFavorite(Recipe recipe) async {
     final repository = await ref.read(recipeRepositoryProvider.future);
     await repository.setFavorite(recipe.id, !recipe.isFavorite);
+  }
+
+  /// Nechá AI navrhnout úpravu receptu. Návrh se jen zobrazí ke kontrole;
+  /// uložením vznikne nová verze a původní recept zůstane v historii.
+  Future<void> _improve(Recipe recipe, {required bool withWeb}) async {
+    final service = ref.read(aiServiceProvider);
+    if (service == null) {
+      showMessage(context, 'AI kuchař potřebuje přihlášení k účtu.');
+      return;
+    }
+    final instruction = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _ImproveDialog(withWeb: withWeb),
+    );
+    if (instruction == null || !mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Text(
+                  withWeb
+                      ? 'Porovnávám recept s internetem…'
+                      : 'Přemýšlím nad vylepšením…',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    try {
+      final proposal = await service.improve(
+        recipe,
+        instruction: instruction,
+        withWeb: withWeb,
+      );
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      context.push(
+        Routes.draft,
+        extra: DraftReviewArgs(
+          proposal: proposal,
+          targetRecipeId: recipe.id,
+          heading: withWeb ? 'Lepší postup' : 'Návrh vylepšení',
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      showMessage(context, aiErrorText(error));
+    }
   }
 
   Future<void> _share(Recipe recipe) async {
@@ -179,6 +240,12 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 icon: const _CircleIcon(Icons.more_horiz_rounded),
                 onSelected: (value) => switch (value) {
                   'edit' => context.push(Routes.editRecipe(recipe.id)),
+                  'ai_improve' => _improve(recipe, withWeb: false),
+                  'ai_web' => _improve(recipe, withWeb: true),
+                  'ai_chat' => context.push(Routes.aiChat(recipeId: recipe.id)),
+                  'ai_similar' => context.push(
+                    Routes.webSearchWith(similarRecipeId: recipe.id),
+                  ),
                   'duplicate' => _duplicate(recipe),
                   'export' => _export(recipe),
                   'delete' => _delete(recipe),
@@ -187,6 +254,25 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 itemBuilder: (context) => [
                   if (!recipe.isDeleted)
                     const PopupMenuItem(value: 'edit', child: Text('Upravit')),
+                  if (!recipe.isDeleted) ...const [
+                    PopupMenuItem(
+                      value: 'ai_improve',
+                      child: Text('Vylepšit s AI'),
+                    ),
+                    PopupMenuItem(
+                      value: 'ai_web',
+                      child: Text('Najdi lepší postup'),
+                    ),
+                    PopupMenuItem(
+                      value: 'ai_chat',
+                      child: Text('Zeptat se AI kuchaře'),
+                    ),
+                    PopupMenuItem(
+                      value: 'ai_similar',
+                      child: Text('Najít podobné na internetu'),
+                    ),
+                    PopupMenuDivider(),
+                  ],
                   const PopupMenuItem(
                     value: 'duplicate',
                     child: Text('Duplikovat'),
@@ -899,6 +985,69 @@ class _NotesTab extends ConsumerWidget {
                 ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Dotaz na upřesnění před návrhem vylepšení. Vrací text (i prázdný),
+/// nebo `null` při zrušení.
+class _ImproveDialog extends StatefulWidget {
+  const _ImproveDialog({required this.withWeb});
+
+  final bool withWeb;
+
+  @override
+  State<_ImproveDialog> createState() => _ImproveDialogState();
+}
+
+class _ImproveDialogState extends State<_ImproveDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.withWeb ? 'Najdi lepší postup' : 'Vylepšit s AI'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.withWeb
+                ? 'AI porovná recept s recepty na internetu a navrhne '
+                      'konkrétní změny. Původní recept zůstane zachován.'
+                : 'AI navrhne úpravy podle vašeho vybavení a chutí. '
+                      'Původní recept zůstane zachován.',
+            style: const TextStyle(color: AppColors.textSecondary, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            minLines: 1,
+            maxLines: 4,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Na co se zaměřit? (nepovinné)',
+              hintText: 'např. šťavnatější maso, kratší příprava',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Zrušit'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+          child: const Text('Navrhnout'),
         ),
       ],
     );
