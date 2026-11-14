@@ -18,7 +18,7 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 | --- | --- | --- |
 | 1 – Funkční základ | Flutter projekt, design, přihlášení, databáze, recepty, fotografie, synchronizace | **hotovo** |
 | 2 – AI a vyhledávání | AI kuchař, chat, vyhledávání receptů na internetu, import | **hotovo v kódu a nasazeno**, čeká na klíč OpenAI (viz níže) |
-| 3 – Propojení s ChatGPT | zabezpečené API, MCP server | nezačato |
+| 3 – Propojení s ChatGPT | zabezpečené API, MCP server | **server hotový a otestovaný**, čeká na zapnutí přihlášení (viz [docs/chatgpt.md](docs/chatgpt.md)) |
 | 4 – Pokročilé funkce | deník, režim Vaříme spolu, rodinné účty, plán, nákupní seznam | nezačato (databáze je připravená) |
 
 ### Co umí Etapa 1
@@ -37,7 +37,21 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 - Funkce dalších etap jsou na hlavní obrazovce označené „Brzy“ a po klepnutí
   vysvětlí, kdy přijdou. Žádné tlačítko nepředstírá, že něco dělá.
 
-### Co umí Etapa 2
+### Bez placeného API
+
+Kuchařka (recepty, verze, fotografie, synchronizace, koš, export) funguje bez
+jakékoli AI. **AI funkce v aplikaci jsou ve výchozím stavu vypnuté** – dokud je
+v nabídce Více → „AI funkce v aplikaci“ sami nezapnete, aplikace neodešle
+žádný placený požadavek. Recepty lze místo toho tvořit v ChatGPT a ukládat
+přes MCP server (Etapa 3), což využívá vaše předplatné ChatGPT.
+
+### Co umí Etapa 3
+
+MCP server pro ChatGPT se 12 nástroji nad stejnou databází, přihlášení přes
+OAuth 2.1 (Supabase Auth), data chrání Row Level Security. Postup zapnutí,
+seznam nástrojů a co je ověřeno: [docs/chatgpt.md](docs/chatgpt.md).
+
+### Co umí Etapa 2 (volitelné, placené přes OpenAI API)
 
 Všechno AI běží v serverové funkci Supabase [`ai`](supabase/functions/ai/index.ts);
 klíč k OpenAI je jen na serveru, v aplikaci žádný tajný klíč není.
@@ -156,8 +170,8 @@ flutter test           # na Linuxu vyžaduje balíček libsqlite3-dev
 # testy databázových oprávnění
 cd supabase/tests && npm ci && npm test
 
-# testy serverové funkce AI
-deno test supabase/functions/ai
+# testy serverových funkcí (AI a MCP)
+deno test supabase/functions
 ```
 
 ### Sestavení Android APK
@@ -200,6 +214,9 @@ lib/
 supabase/
   migrations/            SQL migrace: schéma, RLS, úložiště, výchozí data, počítadlo AI
   functions/ai/          serverová funkce AI kuchaře a její testy (Deno)
+  functions/mcp/         MCP server pro ChatGPT a jeho testy (Deno)
+web/oauth/consent/       přihlašovací stránka pro propojení s ChatGPT
+docs/chatgpt.md          návod na propojení s ChatGPT
   tests/                 testy oprávnění nad skutečnými migracemi
 test/                    unit a widget testy aplikace
 tool/make_icons.py       generování ikony a obrázků z loga

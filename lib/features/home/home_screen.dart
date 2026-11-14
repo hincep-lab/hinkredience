@@ -85,6 +85,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final recipes = ref.watch(recipesProvider);
     final list = recipes.value ?? const <Recipe>[];
     final favorites = list.where((r) => r.isFavorite).length;
+    final aiBadge = ref.watch(aiEnabledProvider) ? null : 'Vypnuto';
 
     return Scaffold(
       body: SafeArea(
@@ -165,18 +166,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   _FeatureTile(
                     icon: Icons.auto_awesome_rounded,
                     title: 'AI kuchař',
+                    badge: aiBadge,
                     subtitle: 'Poradí, upraví, vymyslí',
                     onTap: () => context.push(Routes.ai),
                   ),
                   _FeatureTile(
                     icon: Icons.travel_explore_rounded,
                     title: 'Hledat recepty',
+                    badge: aiBadge,
                     subtitle: 'Na internetu, se zdroji',
                     onTap: () => context.push(Routes.webSearch),
                   ),
                   _FeatureTile(
                     icon: Icons.download_rounded,
                     title: 'Import receptu',
+                    badge: aiBadge,
                     subtitle: 'Text, odkaz, fotka',
                     onTap: () => context.push(Routes.importRecipe),
                   ),
@@ -184,7 +188,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     icon: Icons.calendar_month_rounded,
                     title: 'Plán vaření',
                     subtitle: 'Jídelníček na míru',
-                    soon: true,
+                    badge: 'Brzy',
                     onTap: () => _comingSoon(
                       'Plán vaření',
                       'Etapa 4',
@@ -196,7 +200,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     icon: Icons.shopping_cart_outlined,
                     title: 'Nákupní seznam',
                     subtitle: 'Podle receptů',
-                    soon: true,
+                    badge: 'Brzy',
                     onTap: () => _comingSoon(
                       'Nákupní seznam',
                       'Etapa 4',
@@ -216,7 +220,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     icon: Icons.edit_note_rounded,
                     title: 'Kuchařský deník',
                     subtitle: 'Tipy a úpravy',
-                    soon: true,
+                    badge: 'Brzy',
                     onTap: () => _comingSoon(
                       'Kuchařský deník',
                       'Etapa 4',
@@ -301,14 +305,16 @@ class _FeatureTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
-    this.soon = false,
+    this.badge,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
-  final bool soon;
+
+  /// Štítek v rohu („Brzy“, „Vypnuto“); dlaždice se štítkem je ztlumená.
+  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -318,7 +324,7 @@ class _FeatureTile extends StatelessWidget {
       child: Stack(
         children: [
           Opacity(
-            opacity: soon ? 0.55 : 1,
+            opacity: badge != null ? 0.55 : 1,
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -348,7 +354,7 @@ class _FeatureTile extends StatelessWidget {
               ),
             ),
           ),
-          if (soon)
+          if (badge != null)
             Positioned(
               top: 0,
               right: 0,
@@ -359,9 +365,9 @@ class _FeatureTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: AppColors.outline),
                 ),
-                child: const Text(
-                  'Brzy',
-                  style: TextStyle(
+                child: Text(
+                  badge!,
+                  style: const TextStyle(
                     color: AppColors.copperGold,
                     fontSize: 10.5,
                     fontWeight: FontWeight.w600,

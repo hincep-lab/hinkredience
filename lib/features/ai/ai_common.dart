@@ -85,13 +85,27 @@ Future<String?> choosePhotoForAi(BuildContext context) async {
   return pickPhotoForAi(context, source);
 }
 
-/// Obsah obrazovky, když AI nejde použít (bez účtu nebo bez připojení).
+/// Obsah obrazovky, když AI nejde použít: je vypnutá v nastavení, nebo
+/// chybí účet či připojení.
 class AiUnavailable extends ConsumerWidget {
   const AiUnavailable({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasBackend = ref.watch(appConfigProvider).hasSupabase;
+    final signedIn = ref.watch(sessionProvider).isSignedIn;
+    if (hasBackend && signedIn && !ref.watch(aiEnabledProvider)) {
+      return EmptyState(
+        icon: Icons.power_settings_new_rounded,
+        title: 'AI funkce jsou vypnuté',
+        message:
+            'AI kuchař, hledání na internetu a import jsou volitelné a placené '
+            'přes OpenAI API. Kuchařka funguje i bez nich. Zapnout je můžete '
+            'v nabídce Více.',
+        actionLabel: 'Otevřít nastavení',
+        onAction: () => context.go(Routes.more),
+      );
+    }
     return EmptyState(
       icon: Icons.auto_awesome_rounded,
       title: 'AI kuchař potřebuje účet',

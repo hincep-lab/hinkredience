@@ -12,6 +12,7 @@ import 'package:hinkredience/data/ai_service.dart';
 import 'package:hinkredience/data/photo_store.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
+import 'package:hinkredience/features/more/chatgpt_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ai_models_test.dart' show draftJson;
@@ -24,12 +25,13 @@ Future<void> pumpAiApp(
   required String location,
   FakeAiBackend? backend,
   List<Recipe> recipes = const [],
+  bool aiEnabled = true,
 }) async {
   tester.view.physicalSize = const Size(1080, 2340);
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
 
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues({'ai_enabled': aiEnabled});
   final prefs = await SharedPreferences.getInstance();
   final router = createRouter(initialLocation: location);
   addTearDown(router.dispose);
@@ -269,6 +271,62 @@ void main() {
     expect(find.text('Importovaný recept'), findsOneWidget);
     expect(find.text('Hovězí guláš'), findsOneWidget);
     expect(find.text('Zkontroluj množství papriky.'), findsOneWidget);
+  });
+
+  testWidgets('vypnutá AI: detail receptu AI akce nenabízí', (tester) async {
+    await pumpAiApp(
+      tester,
+      location: Routes.recipe('recipe-1'),
+      recipes: [sampleRecipe()],
+      aiEnabled: false,
+    );
+    await tester.tap(find.byTooltip('Další možnosti'));
+    await tester.pumpAndSettle();
+    expect(find.text('Duplikovat'), findsOneWidget);
+    expect(find.text('Vylepšit s AI'), findsNothing);
+    expect(find.text('Najdi lepší postup'), findsNothing);
+  });
+
+  testWidgets('vypnutá AI: dlaždice jsou označené a kuchařka funguje dál', (
+    tester,
+  ) async {
+    await pumpAiApp(tester, location: Routes.home, aiEnabled: false);
+    expect(find.text('Vypnuto'), findsNWidgets(3));
+    expect(find.text('Recepty'), findsWidgets);
+  });
+
+  testWidgets('zapnutá AI: dlaždice nejsou označené jako vypnuté', (
+    tester,
+  ) async {
+    await pumpAiApp(tester, location: Routes.home);
+    expect(find.text('Vypnuto'), findsNothing);
+  });
+
+  testWidgets('nastavení: AI je ve výchozím stavu vypnutá a jde zapnout', (
+    tester,
+  ) async {
+    await pumpAiApp(tester, location: Routes.more, aiEnabled: false);
+    await scrollTo(tester, find.text('AI funkce v aplikaci'));
+    expect(find.textContaining('Vypnuto – aplikace neodesílá'), findsOneWidget);
+
+    await tester.tap(find.text('AI funkce v aplikaci'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Zapnuto – AI kuchař'), findsOneWidget);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('ai_enabled'), isTrue);
+  });
+
+  testWidgets('propojení s ChatGPT ukáže adresu MCP serveru', (tester) async {
+    expect(
+      mcpServerUrl('https://projekt.supabase.co/'),
+      'https://projekt.supabase.co/functions/v1/mcp',
+    );
+    expect(mcpServerUrl('  '), '');
+
+    await pumpAiApp(tester, location: Routes.chatGpt);
+    expect(find.text('Propojení s ChatGPT'), findsOneWidget);
+    expect(find.text('Jak propojit'), findsOneWidget);
+    expect(find.textContaining('Nejdřív nastavte připojení'), findsOneWidget);
   });
 
   testWidgets('detail receptu nabízí AI akce', (tester) async {

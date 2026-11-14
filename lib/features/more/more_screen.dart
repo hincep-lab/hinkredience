@@ -11,8 +11,8 @@ const _buildNumber = String.fromEnvironment('BUILD_NUMBER');
 
 /// Verze aplikace včetně čísla sestavení z GitHub Actions, je-li známé.
 const appVersionLabel = _buildNumber == ''
-    ? 'Verze 1.1.0 · Etapa 2 – AI kuchař'
-    : 'Verze 1.1.0 · sestavení $_buildNumber · Etapa 2 – AI kuchař';
+    ? 'Verze 1.2.0 · Etapa 3 – ChatGPT'
+    : 'Verze 1.2.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
 
 /// Záložka „Více“: účet, synchronizace, koš, nastavení.
 class MoreScreen extends ConsumerWidget {
@@ -207,6 +207,39 @@ class MoreScreen extends ConsumerWidget {
             ),
           ),
 
+          const SectionTitle('ChatGPT a AI'),
+          HkCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.hub_outlined),
+                  title: const Text('Propojení s ChatGPT'),
+                  subtitle: const Text(
+                    'Recepty z ChatGPT rovnou do kuchařky, bez placeného API',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Routes.chatGpt),
+                ),
+                const Divider(indent: 16, endIndent: 16),
+                SwitchListTile(
+                  secondary: const Icon(Icons.auto_awesome_rounded),
+                  title: const Text('AI funkce v aplikaci'),
+                  subtitle: Text(
+                    settings.aiEnabled
+                        ? 'Zapnuto – AI kuchař, hledání a import. '
+                              'Každý požadavek se platí přes OpenAI API.'
+                        : 'Vypnuto – aplikace neodesílá žádné placené '
+                              'požadavky na AI.',
+                  ),
+                  value: settings.aiEnabled,
+                  onChanged: (value) =>
+                      ref.read(settingsProvider.notifier).setAiEnabled(value),
+                ),
+              ],
+            ),
+          ),
+
           const SectionTitle('Kuchařka'),
           HkCard(
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -223,7 +256,9 @@ class MoreScreen extends ConsumerWidget {
                 ListTile(
                   leading: const Icon(Icons.kitchen_outlined),
                   title: const Text('Kuchyně a chutě'),
-                  subtitle: const Text('Vybavení a preference pro AI kuchaře'),
+                  subtitle: const Text(
+                    'Vybavení a preference pro ChatGPT a AI kuchaře',
+                  ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => context.push(Routes.kitchen),
                 ),

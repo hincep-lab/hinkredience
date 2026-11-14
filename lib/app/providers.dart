@@ -45,7 +45,11 @@ final databaseFactoryProvider = Provider<DatabaseFactory>(
 
 @immutable
 class AppSettings {
-  const AppSettings({required this.greetingName, required this.skipAuth});
+  const AppSettings({
+    required this.greetingName,
+    required this.skipAuth,
+    this.aiEnabled = false,
+  });
 
   /// Oslovení na hlavní obrazovce („Ahoj Pájo“).
   final String greetingName;
@@ -53,19 +57,36 @@ class AppSettings {
   /// Uživatel zvolil používání bez účtu.
   final bool skipAuth;
 
+  /// AI funkce v aplikaci (AI kuchař, hledání na internetu, import). Jsou
+  /// placené přes OpenAI API, proto jsou ve výchozím stavu vypnuté a aplikace
+  /// bez výslovného zapnutí žádný požadavek na AI neodešle.
+  final bool aiEnabled;
+
+  AppSettings copyWith({
+    String? greetingName,
+    bool? skipAuth,
+    bool? aiEnabled,
+  }) => AppSettings(
+    greetingName: greetingName ?? this.greetingName,
+    skipAuth: skipAuth ?? this.skipAuth,
+    aiEnabled: aiEnabled ?? this.aiEnabled,
+  );
+
   @override
   bool operator ==(Object other) =>
       other is AppSettings &&
       other.greetingName == greetingName &&
-      other.skipAuth == skipAuth;
+      other.skipAuth == skipAuth &&
+      other.aiEnabled == aiEnabled;
 
   @override
-  int get hashCode => Object.hash(greetingName, skipAuth);
+  int get hashCode => Object.hash(greetingName, skipAuth, aiEnabled);
 }
 
 class SettingsController extends Notifier<AppSettings> {
   static const _greetingKey = 'greeting_name';
   static const _skipAuthKey = 'skip_auth';
+  static const _aiEnabledKey = 'ai_enabled';
 
   @override
   AppSettings build() {
@@ -73,6 +94,7 @@ class SettingsController extends Notifier<AppSettings> {
     return AppSettings(
       greetingName: prefs.getString(_greetingKey) ?? 'Pájo',
       skipAuth: prefs.getBool(_skipAuthKey) ?? false,
+      aiEnabled: prefs.getBool(_aiEnabledKey) ?? false,
     );
   }
 
@@ -80,12 +102,17 @@ class SettingsController extends Notifier<AppSettings> {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
     await ref.read(sharedPreferencesProvider).setString(_greetingKey, trimmed);
-    state = AppSettings(greetingName: trimmed, skipAuth: state.skipAuth);
+    state = state.copyWith(greetingName: trimmed);
   }
 
   Future<void> setSkipAuth(bool value) async {
     await ref.read(sharedPreferencesProvider).setBool(_skipAuthKey, value);
-    state = AppSettings(greetingName: state.greetingName, skipAuth: value);
+    state = state.copyWith(skipAuth: value);
+  }
+
+  Future<void> setAiEnabled(bool value) async {
+    await ref.read(sharedPreferencesProvider).setBool(_aiEnabledKey, value);
+    state = state.copyWith(aiEnabled: value);
   }
 }
 
@@ -427,15 +454,23 @@ bool _aiReady(Ref ref) =>
     ref.watch(supabaseClientProvider) != null &&
     ref.watch(sessionProvider).isSignedIn;
 
-/// AI kuchař, nebo `null`, když chybí připojení či přihlášení.
+/// Jsou AI funkce v nastavení zapnuté?
+final aiEnabledProvider = Provider<bool>(
+  (ref) => ref.watch(settingsProvider.select((s) => s.aiEnabled)),
+);
+
+/// AI kuchař, nebo `null`, když je AI vypnutá nebo chybí připojení či
+/// přihlášení. Vypnutá AI tak nemůže odeslat žádný placený požadavek.
 final aiServiceProvider = Provider<AiService?>((ref) {
   final client = ref.watch(supabaseClientProvider);
+  if (!ref.watch(aiEnabledProvider)) return null;
   if (client == null || !_aiReady(ref)) return null;
   return AiService(SupabaseAiBackend(client));
 });
 
 final aiHistoryStoreProvider = Provider<AiHistoryStore?>((ref) {
   final client = ref.watch(supabaseClientProvider);
+  if (!ref.watch(aiEnabledProvider)) return null;
   if (client == null || !_aiReady(ref)) return null;
   return AiHistoryStore(client);
 });

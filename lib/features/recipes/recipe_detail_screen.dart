@@ -208,6 +208,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   Widget _content(BuildContext context, Recipe recipe) {
     final theme = Theme.of(context);
     final servings = _servings ?? recipe.servings;
+    final aiEnabled = ref.watch(aiEnabledProvider);
 
     return Scaffold(
       body: CustomScrollView(
@@ -254,7 +255,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 itemBuilder: (context) => [
                   if (!recipe.isDeleted)
                     const PopupMenuItem(value: 'edit', child: Text('Upravit')),
-                  if (!recipe.isDeleted) ...const [
+                  if (!recipe.isDeleted && aiEnabled) ...const [
                     PopupMenuItem(
                       value: 'ai_improve',
                       child: Text('Vylepšit s AI'),

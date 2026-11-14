@@ -40,8 +40,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check supabase/functions/ai/index.ts
-      - run: deno test supabase/functions/ai
+      - run: deno check supabase/functions/ai/index.ts supabase/functions/mcp/index.ts
+      - run: deno test supabase/functions
 
   android:
     name: Aplikace – analýza, testy, APK

@@ -302,3 +302,79 @@ test('počítadlo AI: roste jen přes funkci, každý vidí jen své', async () 
   );
   await assert.rejects(as(PAVEL, `select public.ai_register_usage('jine')`), /Neznámý druh/);
 });
+
+test('API: recept se uloží celý v jedné transakci a úprava vytvoří verzi', async () => {
+  const draft = {
+    title: 'Svíčková z ChatGPT',
+    description: 'Žluťoučký kůň',
+    category: 'Omáčky',
+    servings: 6,
+    prep_minutes: 30,
+    cook_minutes: 180,
+    temperatures: ['Trouba 160 °C'],
+    equipment: ['Litinový hrnec'],
+    notes: '',
+    ingredients: [
+      { name: 'Hovězí zadní', quantity: 800, unit: 'g', note: '' },
+      { name: 'Sůl', quantity: null, unit: '', note: '' },
+      { name: '   ', quantity: 1, unit: 'ks' },
+    ],
+    steps: [
+      { instruction: 'Maso opeč.', duration_minutes: 10, temperature_c: null },
+      { instruction: 'Peč.', duration_minutes: 150, temperature_c: 160 },
+    ],
+  };
+  const created = await as(PAVEL, `select public.api_save_recipe($1::jsonb) as r`, [JSON.stringify(draft)]);
+  const { id, version } = created.rows[0].r;
+  assert.equal(version, 1);
+
+  const stored = await as(PAVEL,
+    `select title, owner_id, current_version, synced_at,
+            (select count(*)::int from public.recipe_ingredients where recipe_id = r.id) as ingredients,
+            (select count(*)::int from public.recipe_steps where recipe_id = r.id) as steps
+     from public.recipes r where id = $1`, [id]);
+  assert.equal(stored.rows[0].owner_id, PAVEL);
+  assert.equal(stored.rows[0].ingredients, 2, 'prázdná surovina se vynechá');
+  assert.equal(stored.rows[0].steps, 2);
+
+  const v1 = await as(PAVEL, `select snapshot, change_summary from public.recipe_versions where recipe_id = $1`, [id]);
+  assert.equal(v1.rows[0].change_summary, 'Původní postup');
+  assert.equal(v1.rows[0].snapshot.description, 'Žluťoučký kůň');
+  assert.equal(v1.rows[0].snapshot.ingredients[0].name, 'Hovězí zadní');
+  assert.equal(v1.rows[0].snapshot.steps[1].temperature_c, 160);
+  assert.equal(v1.rows[0].snapshot.id, id);
+
+  await as(PAVEL, `update public.recipes set rating = 4.5, is_favorite = true where id = $1`, [id]);
+  const updated = await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid, $3::jsonb) as r`, [
+    JSON.stringify({ ...draft, title: 'Svíčková 2', ingredients: draft.ingredients.slice(0, 1) }),
+    id,
+    JSON.stringify({ change_summary: 'Méně soli', change_reason: 'Byla přesolená', rating: 5 }),
+  ]);
+  assert.equal(updated.rows[0].r.version, 2);
+
+  const after = await as(PAVEL,
+    `select title, rating, is_favorite, current_version,
+            (select count(*)::int from public.recipe_ingredients where recipe_id = r.id) as ingredients
+     from public.recipes r where id = $1`, [id]);
+  assert.equal(after.rows[0].title, 'Svíčková 2');
+  assert.equal(Number(after.rows[0].rating), 4.5, 'hodnocení receptu zůstává');
+  assert.equal(after.rows[0].is_favorite, true);
+  assert.equal(after.rows[0].ingredients, 1);
+
+  const versions = await as(PAVEL,
+    `select version_number, snapshot->>'title' as title, change_summary, change_reason, rating
+     from public.recipe_versions where recipe_id = $1 order by version_number`, [id]);
+  assert.equal(versions.rows.length, 2);
+  assert.equal(versions.rows[0].title, 'Svíčková z ChatGPT', 'původní podoba zůstává v historii');
+  assert.equal(versions.rows[1].change_reason, 'Byla přesolená');
+  assert.equal(Number(versions.rows[1].rating), 5);
+
+  await assert.rejects(
+    as(MARTINKA, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [JSON.stringify(draft), id]),
+    /Recept nenalezen/,
+    'cizí recept přes API upravit nejde',
+  );
+  await assert.rejects(as(PAVEL, `select public.api_save_recipe('{"title":" "}'::jsonb)`), /musí mít název/);
+  const cizi = await as(MARTINKA, `select public.recipe_snapshot($1) as s`, [id]);
+  assert.equal(cizi.rows[0].s, null, 'cizí recept přes snapshot vidět není');
+});
