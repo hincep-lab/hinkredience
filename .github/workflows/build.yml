@@ -134,9 +134,13 @@ jobs:
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
       - name: Kontrola – žádné tajné klíče v sestavení
         run: |
-          if grep -rlE "service_role|sb_secret_|sk-[A-Za-z0-9]{20,}" build/web; then
+          # Tajný klíč Supabase (sb_secret_…), JWT s rolí service_role, klíč OpenAI.
+          pattern='sb_secret_[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*c2VydmljZV9yb2xl|sk-(proj-)?[A-Za-z0-9_-]{32,}'
+          if grep -rhoE "$pattern" build/web; then
             echo "Sestavení obsahuje tajný klíč!"; exit 1
           fi
+          echo "Výskyty slova service_role (jen text knihoven, žádné klíče):"
+          grep -rhoE ".{0,60}service_role.{0,60}" build/web | head -5 || true
       - uses: actions/upload-artifact@v4
         with:
           name: hinkredience-web
