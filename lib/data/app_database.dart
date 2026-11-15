@@ -7,7 +7,7 @@ class AppDatabase {
 
   final Database db;
 
-  static const _version = 1;
+  static const _version = 2;
 
   static Future<AppDatabase> open({
     required DatabaseFactory factory,
@@ -15,7 +15,11 @@ class AppDatabase {
   }) async {
     final db = await factory.openDatabase(
       path,
-      options: OpenDatabaseOptions(version: _version, onCreate: _create),
+      options: OpenDatabaseOptions(
+        version: _version,
+        onCreate: _create,
+        onUpgrade: _upgrade,
+      ),
     );
     return AppDatabase._(db);
   }
@@ -56,6 +60,31 @@ class AppDatabase {
         value TEXT NOT NULL
       )
     ''');
+    await _createDocs(db);
+  }
+
+  /// Přechod ze starší verze: stávající tabulky a recepty zůstávají beze
+  /// změny, jen se přidá to, co chybí.
+  static Future<void> _upgrade(Database db, int from, int to) async {
+    if (from < 2) await _createDocs(db);
+  }
+
+  /// Deník vaření, plán jídel a nákupní seznam (verze 2). Každý záznam je
+  /// JSON dokument; `dirty` a `deleted_at` slouží budoucí synchronizaci.
+  static Future<void> _createDocs(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS docs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        dirty INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS docs_kind_idx ON docs (kind, deleted_at)',
+    );
   }
 
   Future<void> close() => db.close();
