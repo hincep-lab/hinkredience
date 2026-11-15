@@ -19,7 +19,8 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 | 1 – Funkční základ | Flutter projekt, design, přihlášení, databáze, recepty, fotografie, synchronizace | **hotovo** |
 | 2 – AI a vyhledávání | AI kuchař, chat, vyhledávání receptů na internetu, import | **hotovo v kódu a nasazeno**, čeká na klíč OpenAI (viz níže) |
 | 3 – Propojení s ChatGPT | zabezpečené API, MCP server | **server hotový a otestovaný**, čeká na zapnutí přihlášení (viz [docs/chatgpt.md](docs/chatgpt.md)) |
-| 4 – Pokročilé funkce | deník, režim Vaříme spolu, rodinné účty, plán, nákupní seznam | nezačato (databáze je připravená) |
+| Modernizace | fotky, fotky v ChatGPT, automatická synchronizace, offline, nevypínání obrazovky | **hotovo v kódu a otestováno v CI** (PR #2), na serveru čeká migrace 08 a nasazení `mcp` |
+| 4 – Pokročilé funkce | deník, režim Vaříme spolu, rodinné účty, plán, nákupní seznam | rozpracováno ve větvi `etapa-4-rozpracovano` (modely), příprava režimu vaření je hotová |
 
 ### Co umí Etapa 1
 
@@ -140,7 +141,11 @@ Projekt Supabase **hinkredience** (`https://wjqpzoeheonjwdyyezhb.supabase.co`,
 region West EU, plán Free) je založený a migrace ze složky
 [`supabase/migrations`](supabase/migrations) v něm jsou spuštěné
 (17 tabulek se zapnutým RLS, soukromý bucket `recipe-photos`).
-Všech pět migrací je spuštěných a funkce `ai` je nasazená.
+Migrace 01–06 jsou spuštěné a funkce `ai` je nasazená. Migrace
+`20261114000007_yield_and_time.sql` a `20261115000008_sync_tombstones.sql`
+je potřeba spustit v SQL Editoru (jen přidávají, lze je spustit opakovaně)
+a znovu nasadit funkci `mcp`. Aplikace do té doby funguje dál – výtěžnost
+v kusech a čekání drží v telefonu a náhrobky jen nepoužívá.
 
 Adresa projektu a veřejný (*publishable*) klíč jsou výchozí hodnotou sestavení
 v [.github/workflows/build.yml](.github/workflows/build.yml), takže APK
@@ -210,7 +215,7 @@ lib/
   app/                   konfigurace, stav aplikace (Riverpod), navigace (GoRouter)
   core/                  design systém: barvy, motiv, společné komponenty, formátování
   data/                  model receptu, místní databáze, synchronizace, fotografie
-  features/              obrazovky: splash, auth, home, recipes, ai, more, shell
+  features/              obrazovky: splash, auth, home, recipes, photos, sync, ai, more, shell
 supabase/
   migrations/            SQL migrace: schéma, RLS, úložiště, výchozí data, počítadlo AI
   functions/ai/          serverová funkce AI kuchaře a její testy (Deno)
@@ -223,8 +228,21 @@ tool/make_icons.py       generování ikony a obrázků z loga
 ```
 
 - **Offline-first.** Aplikace čte a zapisuje jen do SQLite v telefonu.
-  Synchronizace běží na pozadí: nejdřív stáhne změny, potom odešle místní.
-  Při konfliktu vyhrává poslední úprava; historie verzí se nikdy nepřepisuje.
+  Fotky ze serveru se stahují do telefonu (i s náhledy), takže fungují i bez
+  internetu.
+- **Automatická synchronizace** po otevření aplikace, po každé změně (za 2 s),
+  po návratu z pozadí, po obnovení připojení a na upozornění Supabase
+  Realtime (změna z ChatGPT nebo druhého telefonu). Po chybě se sama
+  zopakuje s rostoucí prodlevou (5 s až 5 min). Stahují se jen změny
+  (kurzor `synced_at`), nikdy celá databáze.
+- **Nic se nepřepíše potichu.** Neodeslaná úprava v telefonu se nikdy
+  nepřepíše. Když se recept mezitím změnil i jinde, vznikne konflikt:
+  v detailu receptu vyberete, kterou podobu ponechat, a ta druhá se uloží
+  do historie verzí. Recept s konfliktem se do rozhodnutí neodesílá.
+- **Trvale smazané recepty se nevracejí.** Server si vede náhrobky
+  (`recipe_tombstones`, migrace 08); ostatní zařízení recept smažou také
+  a server odmítne jeho znovuzaložení. Neodeslané úpravy takového receptu
+  se zachrání jako kopie.
 - **Každý účet má vlastní databázi v telefonu**, data dvou uživatelů jednoho
   zařízení se nesmíchají.
 - **Zabezpečení** je na straně databáze (Row Level Security). V aplikaci není
