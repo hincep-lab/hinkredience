@@ -408,10 +408,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Přikryjte alobalem a pečte.'));
     await tester.pumpAndSettle();
-    expect(find.bySemanticsLabel('Krok 2 hotový'), findsOneWidget);
+    expect(find.byIcon(Icons.check_rounded), findsOneWidget);
     await tester.tap(find.text('Přikryjte alobalem a pečte.'));
     await tester.pumpAndSettle();
-    expect(find.bySemanticsLabel('Krok 2 hotový'), findsNothing);
+    expect(find.byIcon(Icons.check_rounded), findsNothing);
   });
 
   testWidgets('správa fotek: druhou fotku jde nastavit jako hlavní', (
