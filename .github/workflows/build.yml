@@ -132,6 +132,16 @@ jobs:
           --dart-define=BUILD_NUMBER=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
+      - name: APK pro aktualizaci jedním klepnutím
+        uses: actions/download-artifact@v4
+        with:
+          name: hinkredience-apk
+          path: build/web
+      - name: Informace o nejnovější verzi pro aplikaci
+        run: |
+          printf '{"build": %s, "apk": "hinkredience.apk", "branch": "%s", "commit": "%s"}\n' \
+            "${{ github.run_number }}" "${{ github.ref_name }}" "${{ github.sha }}" > build/web/apk.json
+          cat build/web/apk.json
       - name: Kontrola – žádné tajné klíče v sestavení
         run: |
           # Tajný klíč Supabase (sb_secret_…), JWT s rolí service_role, klíč OpenAI.

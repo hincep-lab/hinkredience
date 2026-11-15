@@ -8,6 +8,7 @@ import '../features/ai/import_screen.dart';
 import '../features/ai/web_search_screen.dart';
 import '../features/auth/auth_screen.dart';
 import '../features/home/home_screen.dart';
+import '../features/more/temperatures_screen.dart';
 import '../features/more/chatgpt_screen.dart';
 import '../features/more/connection_screen.dart';
 import '../features/more/kitchen_screen.dart';
@@ -39,6 +40,7 @@ abstract final class Routes {
   static const trash = '/more/trash';
   static const connection = '/more/connection';
   static const kitchen = '/more/kitchen';
+  static const temperatures = '/more/temperatures';
   static const chatGpt = '/more/chatgpt';
   static const newRecipe = '/recipe/new';
   static const ai = '/ai';
@@ -224,6 +226,12 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                     parentNavigatorKey: rootKey,
                     pageBuilder: (context, state) =>
                         page(state, const KitchenScreen()),
+                  ),
+                  GoRoute(
+                    path: 'temperatures',
+                    parentNavigatorKey: rootKey,
+                    pageBuilder: (context, state) =>
+                        page(state, const TemperaturesScreen()),
                   ),
                 ],
               ),

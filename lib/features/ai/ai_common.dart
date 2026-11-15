@@ -57,6 +57,10 @@ Future<String?> pickPhotoForAi(BuildContext context, ImageSource source) async {
   }
 }
 
+/// Vybraná fotka jako base64 (pro AI).
+Future<String> pickedToBase64(XFile picked) async =>
+    base64Encode(await picked.readAsBytes());
+
 /// Nabídne fotoaparát nebo galerii a vrátí fotografii pro AI.
 Future<String?> choosePhotoForAi(BuildContext context) async {
   final source = await showModalBottomSheet<ImageSource>(

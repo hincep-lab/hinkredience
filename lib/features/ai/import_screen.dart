@@ -1,19 +1,35 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/material.dart';
+import '../../core/ocr.dart';
+import '../../core/recipe_text.dart';
 import '../../core/widgets.dart';
-import '../../data/ai_service.dart';
+import '../../data/ai_models.dart';
+import '../../data/ai_service.dart' show normalizeWebUrl;
+import '../../data/link_import.dart';
 import 'ai_common.dart';
 import 'draft_review_screen.dart';
 
 enum _Source { text, link, photo }
 
-/// Import receptu z textu, webového odkazu nebo fotografie. AI podklad
-/// převede na strukturovaný recept, který uživatel před uložením zkontroluje.
+/// Načte recept z odkazu na server HINKredience (bez AI). `null` = bez účtu.
+final linkImporterProvider = Provider<LinkImporter?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null || !ref.watch(sessionProvider).isSignedIn) return null;
+  return LinkImporter(client);
+});
+
+/// Import receptu z textu, webového odkazu (i popisu videa) nebo fotky.
+/// Ve výchozím stavu úplně bez AI: text se rozdělí podle pravidel, stránka
+/// se přečte ze strukturovaných dat a fotka přes čtení textu v telefonu.
+/// Placenou AI lze použít jen výslovně, když je v nastavení zapnutá.
 class ImportScreen extends ConsumerStatefulWidget {
   const ImportScreen({super.key});
 
@@ -25,7 +41,8 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
   final _text = TextEditingController();
   final _link = TextEditingController();
   _Source _source = _Source.text;
-  String? _photoBase64;
+  XFile? _photo;
+  bool _useAi = false;
   bool _busy = false;
   Object? _error;
 
@@ -36,41 +53,156 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
     super.dispose();
   }
 
-  Future<void> _addPhoto() async {
-    final photo = await choosePhotoForAi(context);
-    if (photo == null || !mounted) return;
-    setState(() => _photoBase64 = photo);
+  Future<void> _pickPhoto() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Vyfotit'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Vybrat z galerie'),
+              onTap: () => Navigator.of(sheetContext).pop(ImageSource.gallery),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 2400,
+        maxHeight: 2400,
+        imageQuality: 90,
+      );
+      if (picked != null && mounted) setState(() => _photo = picked);
+    } on PlatformException catch (error) {
+      if (mounted) {
+        showMessage(
+          context,
+          'Fotografii se nepodařilo načíst: ${error.message ?? error.code}',
+        );
+      }
+    }
+  }
+
+  void _review(DraftProposal proposal) {
+    context.push(
+      Routes.draft,
+      extra: DraftReviewArgs(proposal: proposal, heading: 'Importovaný recept'),
+    );
+  }
+
+  /// Text (vložený nebo přečtený z fotky) → návrh receptu podle pravidel.
+  DraftProposal? _fromText(String text, {String summary = ''}) {
+    final recipe = parseRecipeText(text);
+    if (recipe == null) return null;
+    return DraftProposal(recipe: recipe, summary: summary);
   }
 
   Future<void> _import() async {
-    final service = ref.read(aiServiceProvider);
-    if (service == null || _busy) return;
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+    if (_useAi) return _importWithAi();
 
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      DraftProposal? proposal;
+      switch (_source) {
+        case _Source.text:
+          final text = _text.text.trim();
+          if (text.length < 15) throw Exception('Vložte celý text receptu.');
+          proposal = _fromText(
+            text,
+            summary: 'Rozděleno na suroviny a postup bez AI – zkontrolujte.',
+          );
+          if (proposal == null) {
+            throw Exception(
+              'V textu jsem nenašel suroviny ani postup. Zkuste nad suroviny '
+              'napsat „Suroviny:“ a nad postup „Postup:“.',
+            );
+          }
+        case _Source.link:
+          final url = normalizeWebUrl(_link.text);
+          if (url == null) {
+            throw Exception('Zadejte platný odkaz na stránku nebo video.');
+          }
+          final importer = ref.read(linkImporterProvider);
+          if (importer == null) {
+            throw Exception(
+              'Načtení z odkazu potřebuje přihlášení (stránku čte server).',
+            );
+          }
+          proposal = await importer.fromUrl(url);
+        case _Source.photo:
+          final photo = _photo;
+          if (photo == null) throw Exception('Nejdřív přidejte fotografii.');
+          if (!ocrAvailable) {
+            throw Exception(
+              'Čtení textu z fotky funguje v aplikaci v telefonu, ve webové '
+              'verzi ne.',
+            );
+          }
+          final text = await readTextFromImage(photo.path);
+          if (text.trim().isEmpty) {
+            throw Exception(
+              'Na fotce jsem nenašel žádný text. Zkuste ostřejší fotku.',
+            );
+          }
+          proposal = _fromText(
+            text,
+            summary: 'Přečteno z fotky bez AI – zkontrolujte, prosím.',
+          );
+          if (proposal == null) {
+            // Text se přečetl, ale nejde rozdělit – nabídneme ho k úpravě.
+            _text.text = text;
+            setState(() => _source = _Source.text);
+            throw Exception(
+              'Text z fotky jsem přečetl, ale nepoznal suroviny a postup. '
+              'Upravte ho níže a dejte „Převést na recept“.',
+            );
+          }
+      }
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _review(proposal);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = error;
+      });
+    }
+  }
+
+  Future<void> _importWithAi() async {
+    final service = ref.read(aiServiceProvider);
+    if (service == null) return;
     String? text;
     String? url;
     String? photo;
     switch (_source) {
       case _Source.text:
         text = _text.text.trim();
-        if (text.length < 20) {
-          showMessage(context, 'Vložte celý text receptu.');
-          return;
-        }
       case _Source.link:
         url = normalizeWebUrl(_link.text);
-        if (url == null) {
-          showMessage(context, 'Zadejte platný odkaz na stránku s receptem.');
-          return;
-        }
       case _Source.photo:
-        photo = _photoBase64;
-        if (photo == null) {
-          showMessage(context, 'Nejdřív přidejte fotografii receptu.');
-          return;
+        final picked = _photo;
+        if (picked != null) {
+          photo = await pickedToBase64(picked);
         }
     }
-
-    FocusScope.of(context).unfocus();
     setState(() {
       _busy = true;
       _error = null;
@@ -83,13 +215,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
       );
       if (!mounted) return;
       setState(() => _busy = false);
-      context.push(
-        Routes.draft,
-        extra: DraftReviewArgs(
-          proposal: proposal,
-          heading: 'Importovaný recept',
-        ),
-      );
+      _review(proposal);
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -101,111 +227,144 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final service = ref.watch(aiServiceProvider);
+    final aiAvailable = ref.watch(aiServiceProvider) != null;
     final error = _error;
+    final photoHint = kIsWeb
+        ? 'Čtení textu z fotky funguje v aplikaci v telefonu.'
+        : 'Vyfoťte stránku z kuchařky nebo lísteček. Text se přečte přímo '
+              'v telefonu, bez internetu a bez AI.';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Import receptu')),
-      body: service == null
-          ? const AiUnavailable()
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-              children: [
-                SegmentedButton<_Source>(
-                  segments: const [
-                    ButtonSegment(
-                      value: _Source.text,
-                      label: Text('Text'),
-                      icon: Icon(Icons.notes_rounded),
-                    ),
-                    ButtonSegment(
-                      value: _Source.link,
-                      label: Text('Odkaz'),
-                      icon: Icon(Icons.link_rounded),
-                    ),
-                    ButtonSegment(
-                      value: _Source.photo,
-                      label: Text('Fotka'),
-                      icon: Icon(Icons.photo_camera_outlined),
-                    ),
-                  ],
-                  selected: {_source},
-                  onSelectionChanged: (selection) =>
-                      setState(() => _source = selection.first),
-                ),
-                const SizedBox(height: 16),
-                switch (_source) {
-                  _Source.text => TextField(
-                    controller: _text,
-                    minLines: 8,
-                    maxLines: 16,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: const InputDecoration(
-                      labelText: 'Text receptu nebo ručně psané poznámky',
-                      hintText: 'Vložte sem recept tak, jak ho máte – suroviny i postup.',
-                      alignLabelWithHint: true,
-                    ),
-                  ),
-                  _Source.link => TextField(
-                    controller: _link,
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: 'Odkaz na stránku s receptem',
-                      hintText: 'https://…',
-                      prefixIcon: Icon(Icons.link_rounded),
-                    ),
-                  ),
-                  _Source.photo => HkCard(
-                    onTap: _busy ? null : _addPhoto,
-                    padding: const EdgeInsets.all(20),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _photoBase64 == null
-                              ? Icons.add_a_photo_outlined
-                              : Icons.check_circle_outline_rounded,
-                          color: AppColors.copperGold,
-                          size: 32,
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Text(
-                            _photoBase64 == null
-                                ? 'Vyfoťte nebo vyberte fotografii receptu '
-                                      '(stránka z kuchařky, ručně psaný lístek).'
-                                : 'Fotografie je připravená. Klepnutím vyberete jinou.',
-                            style: const TextStyle(height: 1.4),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                },
-                const SizedBox(height: 10),
-                const Text(
-                  'Recept se převezme vlastními slovy a u odkazu se uloží adresa '
-                  'zdroje. Import z PDF zatím není hotový.',
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 12.5,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                CopperButton(
-                  label: 'Převést na recept',
-                  icon: Icons.auto_awesome_rounded,
-                  busy: _busy,
-                  onPressed: _import,
-                ),
-                if (_busy)
-                  const AiProgress(label: 'Čtu podklad a skládám recept…'),
-                if (error != null) ...[
-                  const SizedBox(height: 16),
-                  AiErrorCard(error: error),
-                ],
-              ],
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          SegmentedButton<_Source>(
+            segments: const [
+              ButtonSegment(
+                value: _Source.text,
+                label: Text('Text'),
+                icon: Icon(Icons.notes_rounded),
+              ),
+              ButtonSegment(
+                value: _Source.link,
+                label: Text('Odkaz'),
+                icon: Icon(Icons.link_rounded),
+              ),
+              ButtonSegment(
+                value: _Source.photo,
+                label: Text('Fotka'),
+                icon: Icon(Icons.photo_camera_outlined),
+              ),
+            ],
+            selected: {_source},
+            onSelectionChanged: (selection) => setState(() {
+              _source = selection.first;
+              _error = null;
+            }),
+          ),
+          const SizedBox(height: 16),
+          switch (_source) {
+            _Source.text => TextField(
+              controller: _text,
+              minLines: 8,
+              maxLines: 16,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Text receptu',
+                hintText:
+                    'Název\nSuroviny:\n500 g mouky\n2 vejce\nPostup:\n'
+                    '1. Smíchejte…',
+                alignLabelWithHint: true,
+              ),
             ),
+            _Source.link => TextField(
+              controller: _link,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Odkaz na recept nebo video',
+                hintText: 'https://…',
+                prefixIcon: Icon(Icons.link_rounded),
+              ),
+            ),
+            _Source.photo => HkCard(
+              onTap: _busy || (kIsWeb && !_useAi) ? null : _pickPhoto,
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Icon(
+                    _photo == null
+                        ? Icons.add_a_photo_outlined
+                        : Icons.check_circle_outline_rounded,
+                    color: AppColors.copperGold,
+                    size: 32,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      _photo == null
+                          ? photoHint
+                          : 'Fotografie je připravená. Klepnutím vyberete '
+                                'jinou.',
+                      style: const TextStyle(height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          },
+          const SizedBox(height: 10),
+          Text(
+            switch (_source) {
+              _Source.text =>
+                'Rozpozná nadpisy „Suroviny“ a „Postup“, množství, porce, '
+                    'časy a teploty. Před uložením vše zkontrolujete.',
+              _Source.link =>
+                'Funguje s většinou receptových webů (strukturovaná data) '
+                    'a s popisem videa na YouTube. Recept z obrazu a zvuku '
+                    'videa umí sepsat váš ChatGPT – pošlete mu video a napište '
+                    '„ulož to do HINKredience“.',
+              _Source.photo =>
+                'Nejlépe funguje tištěný text na rovné, dobře osvětlené '
+                    'fotce.',
+            },
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
+          ),
+          if (aiAvailable) ...[
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Použít placenou AI'),
+              subtitle: const Text('Jen když import bez AI nestačí.'),
+              value: _useAi,
+              onChanged: (value) => setState(() => _useAi = value),
+            ),
+          ],
+          const SizedBox(height: 16),
+          CopperButton(
+            label: 'Převést na recept',
+            icon: Icons.receipt_long_rounded,
+            busy: _busy,
+            onPressed: _import,
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 16),
+            _useAi
+                ? AiErrorCard(error: error)
+                : HkCard(
+                    child: Text(
+                      error.toString().replaceFirst('Exception: ', ''),
+                      style: const TextStyle(color: AppColors.danger),
+                    ),
+                  ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -228,7 +228,7 @@ Deno.test("initialize dohodne verzi protokolu a oznámení vrací 202", async ()
   assertEquals((await missing.json()).error.code, -32601);
 });
 
-Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupních, čtecí jsou označené", async () => {
+Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtecí jsou označené", async () => {
   const response = await handle(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }), env, world().fetchImpl);
   const list = (await response.json()).result.tools as any[];
   assertEquals(list.map((t) => t.name).sort(), [
@@ -242,7 +242,9 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     "delete_recipe",
     "delete_recipe_photo",
     "get_cooking_history",
+    "get_family",
     "get_kitchen_equipment",
+    "get_meal_plan",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
@@ -250,20 +252,36 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     "get_recipes",
     "get_shopping_list",
     "get_shopping_lists",
+    "get_trash",
+    "import_recipe_from_url",
     "list_recipes_with_photos",
+    "log_cooking",
+    "plan_meal",
+    "rate_recipe",
+    "remove_meal_plan_entry",
     "remove_shopping_item",
     "reorder_recipe_photos",
+    "restore_recipe",
     "search_recipes",
+    "set_greeting_name",
     "set_recipe_cover_photo",
+    "set_recipe_favorite",
+    "set_recipe_sharing",
+    "share_all_recipes",
+    "shop_for_meal_plan",
     "update_kitchen_equipment",
+    "update_meal_plan_entry",
     "update_recipe",
     "update_shopping_item",
+    "update_taste_preferences",
     "upload_recipe_photo",
   ]);
   const readOnly = list.filter((t) => t.annotations.readOnlyHint).map((t) => t.name).sort();
   assertEquals(readOnly, [
     "get_cooking_history",
+    "get_family",
     "get_kitchen_equipment",
+    "get_meal_plan",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
@@ -271,6 +289,7 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     "get_recipes",
     "get_shopping_list",
     "get_shopping_lists",
+    "get_trash",
     "list_recipes_with_photos",
     "search_recipes",
   ]);
@@ -279,7 +298,7 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 27);
+  assertEquals(tools.length, 43);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");

@@ -271,6 +271,13 @@ class MoreScreen extends ConsumerWidget {
                 ),
                 const Divider(indent: 16, endIndent: 16),
                 ListTile(
+                  leading: const Icon(Icons.thermostat_rounded),
+                  title: const Text('Teploty a sous-vide'),
+                  subtitle: const Text('Teploty jádra, časy a časovač'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Routes.temperatures),
+                ),
+                ListTile(
                   leading: const Icon(Icons.kitchen_outlined),
                   title: const Text('Kuchyně a chutě'),
                   subtitle: const Text(

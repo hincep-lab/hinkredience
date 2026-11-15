@@ -1,10 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
+import '../../core/app_update.dart';
 import '../../core/material.dart';
 import '../../core/personalization.dart';
 import '../../core/widgets.dart';
@@ -111,6 +113,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
+                  if (ref.watch(appUpdateProvider).value
+                      case final update?) ...[
+                    HkCard(
+                      onTap: () => launchUrl(
+                        Uri.parse(update.apkUrl),
+                        mode: LaunchMode.externalApplication,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.system_update_rounded,
+                            color: AppColors.copperGold,
+                            size: 30,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Je k dispozici nová verze',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                                Text(
+                                  'Sestavení ${update.build} · klepněte, '
+                                  'stáhne se a pak ho otevřete',
+                                  style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.download_rounded),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
                   if (open != null && open.recipeId != null) ...[
                     HkCard(
                       onTap: () => context.push(Routes.cook(open.recipeId!)),
@@ -187,8 +229,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   _FeatureTile(
                     icon: Icons.download_rounded,
                     title: 'Import receptu',
-                    badge: aiBadge,
-                    subtitle: 'Text, odkaz, fotka',
+                    subtitle: 'Text, odkaz, video, fotka',
                     onTap: () => context.push(Routes.importRecipe),
                   ),
                   _FeatureTile(
@@ -212,6 +253,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ? 'Moje top recepty'
                         : 'Moje top recepty · $favorites',
                     onTap: () => context.go(Routes.favorites),
+                  ),
+                  _FeatureTile(
+                    icon: Icons.thermostat_rounded,
+                    title: 'Teploty',
+                    subtitle: 'Jádro, sous-vide, časovač',
+                    onTap: () => context.push(Routes.temperatures),
                   ),
                   _FeatureTile(
                     icon: Icons.edit_note_rounded,
