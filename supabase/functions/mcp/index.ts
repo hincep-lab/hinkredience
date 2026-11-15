@@ -21,7 +21,7 @@ export interface Env {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export const SERVER_NAME = "hinkredience";
-export const SERVER_VERSION = "1.3.0";
+export const SERVER_VERSION = "1.4.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 // Fotka poslaná přímo v požadavku (base64) může mít až ~10 MB.
 const MAX_BODY_BYTES = 15_000_000;
@@ -351,6 +351,26 @@ class Supabase {
       body: JSON.stringify({ prefixes: paths }),
     });
     if (!response.ok) console.error("Smazání souboru fotky selhalo", response.status);
+  }
+
+  /** Zavolá jinou serverovou funkci projektu s tokenem uživatele. */
+  async callFunction(name: string, body: Record<string, unknown>): Promise<any> {
+    const response = await this.fetchImpl(`${this.env.supabaseUrl}/functions/v1/${name}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) throw new AuthError("Přístupový token vypršel.");
+    let data: any = null;
+    try {
+      data = await response.json();
+    } catch {
+      // odpověď není JSON
+    }
+    if (!response.ok) {
+      throw new ToolError(typeof data?.error === "string" ? data.error : "Služba cen teď neodpovídá.");
+    }
+    return data;
   }
 
   async rpc(name: string, args: Record<string, unknown>): Promise<any> {
@@ -2436,6 +2456,157 @@ export const tools: Tool[] = [
         version: saved.version,
         message: `Recept „${recipe.title}“ je uložený v HINKredience.`,
       };
+    },
+  },
+  {
+    name: "save_price_offer",
+    title: "Uložit akci z letáku (Sušice)",
+    description:
+      "Uloží akční nabídku obchodu v Sušici do HINKredience pro porovnání cen v nákupním košíku. " +
+      "Použij JEN cenu, kterou vidíš na oficiálním webu nebo v letáku řetězce (penny.cz, lidl.cz, " +
+      "albert.cz, itesco.cz, jip.cz, coop.cz) – nikdy ji neodhaduj. Server cenu ověří na zdrojové " +
+      "stránce; neověřené nabídky se uloží s označením a do přesného porovnání se nepočítají.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["chain", "product", "price", "valid_to", "source_url"],
+      properties: {
+        chain: { type: "string", enum: ["tesco", "penny", "lidl", "albert", "jip", "coop"] },
+        store_id: {
+          type: "string",
+          description: "Jen když akce platí v jediné prodejně.",
+          enum: [
+            "tesco-hradecka", "penny-nadrazni", "lidl-hradecka", "albert-hradecka", "albert-tgm",
+            "jip-hradecka", "coop-namesti", "coop-nadrazni", "coop-lerchova", "coop-smetanova",
+          ],
+        },
+        product: { type: "string", description: "Název produktu jako ve zdroji." },
+        label: { type: "string", description: "Značka, gramáž." },
+        price: { type: "number", description: "Akční cena v Kč za balení." },
+        pack_qty: { type: "number" },
+        pack_unit: { type: "string", description: "g, kg, ml, l, ks" },
+        regular_price: { type: "number" },
+        conditions: { type: "string", description: "Např. jen s aplikací, od 2 ks." },
+        valid_from: { type: "string", description: "RRRR-MM-DD" },
+        valid_to: { type: "string", description: "RRRR-MM-DD (poslední den platnosti)" },
+        source_url: { type: "string", description: "https adresa oficiální stránky s akcí." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const offer: Record<string, unknown> = {};
+      for (const k of ["product", "label", "pack_unit", "conditions", "valid_from", "valid_to", "source_url", "store_id"]) {
+        if (typeof args?.[k] === "string") offer[k] = text(args[k], 300);
+      }
+      for (const k of ["price", "pack_qty", "regular_price"]) {
+        if (typeof args?.[k] === "number") offer[k] = args[k];
+      }
+      const r = await db.callFunction("prices", {
+        action: "submit",
+        provider: "chatgpt",
+        chain: String(args?.chain ?? ""),
+        offer,
+      });
+      return {
+        saved: r?.saved === true,
+        duplicate: r?.duplicate === true,
+        verified: r?.verified === true,
+        reason: r?.reason ?? "",
+        message: r?.verified
+          ? `Uloženo a ověřeno: ${offer.product} za ${offer.price} Kč.`
+          : `Uloženo jako NEOVĚŘENÉ (${r?.reason ?? "zdroj nejde ověřit"}) – do porovnání se nepočítá.`,
+      };
+    },
+  },
+  {
+    name: "get_price_offers",
+    title: "Akce v obchodech v Sušici",
+    description:
+      "Vrátí platné akční nabídky uložené v HINKredience (Tesco, Penny, Lidl, Albert, JIP, COOP v Sušici), " +
+      "volitelně jen pro řetězec nebo produkt. U každé je zdroj, platnost a zda je ověřená.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        chain: { type: "string", enum: ["tesco", "penny", "lidl", "albert", "jip", "coop"] },
+        product: { type: "string", description: "Část názvu produktu." },
+      },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const today = new Date().toISOString().slice(0, 10);
+      let path =
+        "price_offers?select=chain,store_id,product,label,price,pack_qty,pack_unit,regular_price,conditions," +
+        `valid_from,valid_to,source_url,provider,verified&valid_to=gte.${today}&order=price.asc&limit=200`;
+      if (typeof args?.chain === "string") path += `&chain=eq.${encodeURIComponent(args.chain)}`;
+      if (typeof args?.product === "string" && args.product.trim()) {
+        path += `&product=ilike.${encodeURIComponent(`*${text(args.product, 60).replace(/[*,()]/g, " ")}*`)}`;
+      }
+      const offers = await db.select(path);
+      return { count: offers.length, offers };
+    },
+  },
+  {
+    name: "save_receipt_prices",
+    title: "Uložit ceny z účtenky",
+    description:
+      "Uloží skutečné ceny z účtenky (např. z fotky, kterou uživatel poslal) k prodejně v Sušici. " +
+      "Sdílí se s rodinou a nákupní košík je použije pro porovnání. Opiš jen ceny, které na účtence jsou.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["store_id", "items"],
+      properties: {
+        store_id: {
+          type: "string",
+          enum: [
+            "tesco-hradecka", "penny-nadrazni", "lidl-hradecka", "albert-hradecka", "albert-tgm",
+            "jip-hradecka", "coop-namesti", "coop-nadrazni", "coop-lerchova", "coop-smetanova",
+          ],
+        },
+        bought_on: { type: "string", description: "RRRR-MM-DD (výchozí dnes)" },
+        items: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["product", "price"],
+            properties: {
+              product: { type: "string" },
+              price: { type: "number", description: "Cena za kus/balení v Kč." },
+              pack_qty: { type: "number" },
+              pack_unit: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const household = await db.rpc("my_household", {}).catch(() => null);
+      const day = typeof args?.bought_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.bought_on)
+        ? args.bought_on
+        : new Date().toISOString().slice(0, 10);
+      let saved = 0;
+      for (const item of Array.isArray(args?.items) ? args.items.slice(0, 100) : []) {
+        const product = text(item?.product, 160);
+        const price = Number(item?.price);
+        if (!product || !(price > 0 && price < 100000)) continue;
+        await db.insert("price_receipts", {
+          store_id: String(args?.store_id ?? ""),
+          household_id: typeof household === "string" ? household : null,
+          product,
+          price,
+          pack_qty: typeof item?.pack_qty === "number" && item.pack_qty > 0 ? item.pack_qty : null,
+          pack_unit: text(item?.pack_unit, 20),
+          bought_on: day,
+          note: "účtenka (ChatGPT)",
+        });
+        saved++;
+      }
+      if (saved === 0) throw new ToolError("Žádná položka s platnou cenou.");
+      return { saved, message: `Uloženo cen z účtenky: ${saved}.` };
     },
   },
   {

@@ -1,0 +1,876 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../app/kitchen_providers.dart';
+import '../../app/providers.dart';
+import '../../core/app_colors.dart';
+import '../../core/best_buy.dart';
+import '../../core/material.dart';
+import '../../core/ocr.dart';
+import '../../core/receipt_text.dart';
+import '../../core/stores.dart';
+import '../../core/widgets.dart';
+import '../../data/kitchen_docs.dart';
+
+// „Nejvýhodnější nákup“ přímo v nákupním seznamu: kompaktní panel nahoře,
+// štítky akcí u položek, detail akce a ceny z účtenky. Počítá se jen
+// s ověřenými cenami (akce z oficiálních webů, vlastní účtenky).
+
+/// „39,90 Kč“
+String kc(double value) =>
+    '${value.toStringAsFixed(2).replaceAll('.', ',')} Kč';
+
+/// „18. 11.“
+String shortDay(DateTime d) => '${d.day}. ${d.month}.';
+
+BuyItem buyItemOf(ShoppingItem item) => BuyItem(
+  id: item.id,
+  name: item.name,
+  quantity: item.quantity,
+  unit: item.unit,
+);
+
+/// Výpočet pro otevřené (nezaškrtnuté) položky seznamu.
+final bestBuyProvider = Provider.family<BestBuy?, String>((ref, listId) {
+  final items = ref.watch(shoppingItemsProvider(listId)).value;
+  if (items == null) return null;
+  final offers = ref.watch(priceOffersProvider).value ?? const <PriceOffer>[];
+  final receipts =
+      ref.watch(receiptPricesProvider).value ?? const <ReceiptPrice>[];
+  return computeBestBuy(
+    items: [
+      for (final i in items)
+        if (!i.checked) buyItemOf(i),
+    ],
+    offers: offers,
+    receipts: receipts,
+    today: DateTime.now(),
+  );
+});
+
+/// Kompaktní panel nad nákupním seznamem.
+class BestBuyPanel extends ConsumerStatefulWidget {
+  const BestBuyPanel({super.key, required this.listId});
+
+  final String listId;
+
+  @override
+  ConsumerState<BestBuyPanel> createState() => _BestBuyPanelState();
+}
+
+class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
+  var _busy = false;
+
+  Future<void> _refresh() async {
+    final service = ref.read(priceServiceProvider);
+    final items = ref.read(shoppingItemsProvider(widget.listId)).value ?? [];
+    final names = [
+      for (final i in items)
+        if (!i.checked) i.name,
+    ];
+    if (service == null) {
+      showMessage(context, 'Hledání akcí potřebuje přihlášení.');
+      return;
+    }
+    if (names.isEmpty) {
+      showMessage(context, 'V seznamu není nic k nákupu.');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final r = await service.refresh(names);
+      await ref.read(priceOffersProvider.notifier).reload();
+      if (!mounted) return;
+      if (r.noProvider) {
+        showMessage(
+          context,
+          'Hledání akcí zatím není zapnuté – na serveru chybí bezplatný '
+          'klíč Google Gemini. Akce zatím může uložit ChatGPT a ceny '
+          'můžete přidat z účtenky.',
+        );
+      } else if (r.scanned == 0 && r.cached > 0) {
+        showMessage(
+          context,
+          'Dnes už prohledáno – zobrazuji uložené akce (nic se znovu '
+          'neplatilo ani nečerpalo).',
+        );
+      } else {
+        showMessage(
+          context,
+          'Nalezeno akcí: ${r.found} (ověřených ${r.verified}). '
+          '${r.provider == 'gemini' ? 'Zdarma přes Google Gemini.' : ''}',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        showMessage(
+          context,
+          'Akce se teď nepodařilo načíst. Zkuste to prosím později.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = ref.watch(bestBuyPrefsProvider);
+    final notifier = ref.read(bestBuyPrefsProvider.notifier);
+    final result = ref.watch(bestBuyProvider(widget.listId));
+    if (!prefs.enabled || result == null || result.items.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final multi = prefs.multiStore;
+    final total = multi
+        ? result.combinationTotal
+        : result.singleStore?.total ?? 0;
+    final savings = multi ? result.savingsCombination : result.savingsSingle;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: HkCard(
+        padding: const EdgeInsets.fromLTRB(14, 6, 6, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.savings_outlined,
+                  color: AppColors.copperGold,
+                  size: 22,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    prefs.collapsed && result.hasPrices
+                        ? 'Nejvýhodnější nákup · ${kc(total)}'
+                        : 'Nejvýhodnější nákup',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (_busy)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else
+                  IconButton(
+                    tooltip: 'Najít aktuální akce',
+                    icon: const Icon(Icons.refresh_rounded),
+                    onPressed: _refresh,
+                  ),
+                IconButton(
+                  tooltip: prefs.collapsed ? 'Rozbalit' : 'Sbalit',
+                  icon: Icon(
+                    prefs.collapsed
+                        ? Icons.expand_more_rounded
+                        : Icons.expand_less_rounded,
+                  ),
+                  onPressed: () => notifier.update(
+                    prefs.copyWith(collapsed: !prefs.collapsed),
+                  ),
+                ),
+              ],
+            ),
+            if (!prefs.collapsed) ...[
+              Padding(
+                padding: const EdgeInsets.only(right: 8, bottom: 8),
+                child: SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      label: Text('Jeden obchod'),
+                      icon: Icon(Icons.store_outlined),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      label: Text('Více obchodů'),
+                      icon: Icon(Icons.alt_route_rounded),
+                    ),
+                  ],
+                  selected: {multi},
+                  onSelectionChanged: (v) =>
+                      notifier.update(prefs.copyWith(multiStore: v.first)),
+                ),
+              ),
+              if (!result.hasPrices)
+                _NoPrices(onRefresh: _refresh, busy: _busy)
+              else if (multi)
+                _MultiSummary(
+                  result: result,
+                  total: total,
+                  savings: savings,
+                  grouped: prefs.groupByStore,
+                  onGroup: (v) =>
+                      notifier.update(prefs.copyWith(groupByStore: v)),
+                )
+              else
+                _SingleSummary(result: result, savings: savings),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Jen ověřené akce z webů obchodů a ceny z vašich '
+                      'účtenek.',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => showReceiptSheet(context, ref),
+                    icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                    label: const Text('Účtenka'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NoPrices extends StatelessWidget {
+  const _NoPrices({required this.onRefresh, required this.busy});
+
+  final VoidCallback onRefresh;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Zatím neznám ceny položek v sušických obchodech. Najděte '
+            'aktuální akce (zdarma) nebo přidejte ceny z účtenky.',
+            style: TextStyle(color: AppColors.textSecondary, height: 1.35),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : onRefresh,
+            icon: const Icon(Icons.local_offer_outlined),
+            label: const Text('Najít akce'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Money extends StatelessWidget {
+  const _Money({required this.total, required this.savings});
+
+  final double total;
+  final double savings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(
+          kc(total),
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            color: AppColors.copperGold,
+          ),
+        ),
+        const SizedBox(width: 10),
+        if (savings > 0)
+          Flexible(
+            child: Text(
+              'ušetříte ${kc(savings)}',
+              style: const TextStyle(
+                color: AppColors.success,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _coverage(int known, int all) =>
+    known == all ? 'ceny všech $all položek' : 'ceny $known z $all položek';
+
+class _SingleSummary extends StatelessWidget {
+  const _SingleSummary({required this.result, required this.savings});
+
+  final BestBuy result;
+  final double savings;
+
+  @override
+  Widget build(BuildContext context) {
+    final best = result.singleStore!;
+    final others = result.storePlans.skip(1).take(3).toList();
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            best.store.label,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+          ),
+          _Money(total: best.total, savings: savings),
+          Text(
+            [
+              _coverage(best.prices.length, result.items.length),
+              if (best.missing.isNotEmpty)
+                'bez ceny: ${best.missing.map((i) => i.name).join(', ')}',
+            ].join(' · '),
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12.5,
+            ),
+          ),
+          if (others.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            for (final p in others)
+              Text(
+                '${p.store.label}: ${kc(p.total)} '
+                '(${p.prices.length}/${result.items.length})',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12.5,
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MultiSummary extends StatelessWidget {
+  const _MultiSummary({
+    required this.result,
+    required this.total,
+    required this.savings,
+    required this.grouped,
+    required this.onGroup,
+  });
+
+  final BestBuy result;
+  final double total;
+  final double savings;
+  final bool grouped;
+  final ValueChanged<bool> onGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = result.combinationByStore;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Money(total: total, savings: savings),
+          Text(
+            [
+              '${groups.length} '
+                  '${groups.length == 1
+                      ? 'obchod'
+                      : groups.length < 5
+                      ? 'obchody'
+                      : 'obchodů'}',
+              _coverage(result.combination.length, result.items.length),
+            ].join(' · '),
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12.5,
+            ),
+          ),
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Seskupit seznam podle prodejen'),
+            value: grouped,
+            onChanged: onGroup,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Malý štítek ověřené akce u položky seznamu.
+class OfferTag extends StatelessWidget {
+  const OfferTag({super.key, required this.offer, required this.onTap});
+
+  final PriceOffer offer;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final chain = chainById(offer.chain)?.name ?? offer.chain;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: AppColors.copper.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.copper.withValues(alpha: 0.5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.local_offer_outlined,
+                size: 13,
+                color: AppColors.copperGold,
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  '$chain · ${kc(offer.price)} · do ${shortDay(offer.validTo)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.copperGold,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _providerLabel(String p) => switch (p) {
+  'gemini' => 'Google Gemini (vyhledávání Google)',
+  'openai' => 'OpenAI',
+  'chatgpt' => 'ChatGPT',
+  _ => 'ručně',
+};
+
+/// Detail akce: cena, platnost, prodejny, zdroj a jak byla ověřena.
+Future<void> showOfferDetail(
+  BuildContext context,
+  PriceOffer offer, {
+  List<PriceOffer> unverified = const [],
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (context) {
+    final chain = chainById(offer.chain);
+    final stores = [
+      for (final s in susiceStores)
+        if (offer.appliesTo(s)) s,
+    ];
+    final discount =
+        offer.regularPrice != null && offer.regularPrice! > offer.price
+        ? ((1 - offer.price / offer.regularPrice!) * 100).round()
+        : null;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                offer.product,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              if (offer.label.isNotEmpty)
+                Text(
+                  offer.label,
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    kc(offer.price),
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.copperGold,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  if (offer.regularPrice != null)
+                    Text(
+                      kc(offer.regularPrice!),
+                      style: const TextStyle(
+                        decoration: TextDecoration.lineThrough,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  if (discount != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '−$discount %',
+                      style: const TextStyle(
+                        color: AppColors.success,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (offer.packQty != null)
+                Text(
+                  'Balení: ${offer.packQty!.toString().replaceAll('.0', '').replaceAll('.', ',')} ${offer.packUnit}',
+                ),
+              const SizedBox(height: 10),
+              _DetailRow(
+                Icons.event_outlined,
+                offer.validFrom == null
+                    ? 'Platí do ${shortDay(offer.validTo)}${offer.validTo.year}'
+                    : 'Platí ${shortDay(offer.validFrom!)} – ${shortDay(offer.validTo)}${offer.validTo.year}',
+              ),
+              _DetailRow(
+                Icons.store_outlined,
+                [for (final s in stores) s.label].join('\n'),
+              ),
+              if (offer.conditions.isNotEmpty)
+                _DetailRow(Icons.info_outline_rounded, offer.conditions),
+              _DetailRow(
+                offer.verified
+                    ? Icons.verified_outlined
+                    : Icons.help_outline_rounded,
+                offer.verified
+                    ? 'Ověřeno: ${offer.verifyMethod == 'stránka' ? 'cena je na oficiální stránce obchodu' : 'cenu dokládá citace oficiálního webu'}.'
+                    : 'Neověřeno – do porovnání se nepočítá.',
+              ),
+              _DetailRow(
+                Icons.travel_explore_outlined,
+                'Nalezl: ${_providerLabel(offer.provider)}',
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => launchUrl(
+                  Uri.parse(offer.sourceUrl),
+                  mode: LaunchMode.externalApplication,
+                ),
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: Text(
+                  'Zdroj: ${Uri.tryParse(offer.sourceUrl)?.host ?? chain?.name ?? ''}',
+                ),
+              ),
+              if (unverified.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Neověřené nabídky (jen pro informaci)',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                for (final o in unverified)
+                  Text(
+                    '${chainById(o.chain)?.name ?? o.chain}: ${o.product} – '
+                    '${kc(o.price)}, do ${shortDay(o.validTo)}',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  },
+);
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow(this.icon, this.text);
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: const TextStyle(height: 1.35))),
+        ],
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------ účtenka
+
+/// Ceny z účtenky: vyfotit (čtení textu bez AI) nebo zapsat ručně.
+Future<void> showReceiptSheet(BuildContext context, WidgetRef ref) =>
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => const _ReceiptSheet(),
+    );
+
+class _ReceiptSheet extends ConsumerStatefulWidget {
+  const _ReceiptSheet();
+
+  @override
+  ConsumerState<_ReceiptSheet> createState() => _ReceiptSheetState();
+}
+
+class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
+  String? _store;
+  DateTime _date = DateTime.now();
+  final _lines = <ReceiptLine>[];
+  var _busy = false;
+  String? _error;
+
+  Future<void> _photo() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      maxWidth: 2400,
+      maxHeight: 2400,
+      imageQuality: 90,
+    );
+    if (picked == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final text = await readTextFromImage(picked.path);
+      final parsed = parseReceiptText(text);
+      setState(() {
+        _lines
+          ..clear()
+          ..addAll(parsed.lines);
+        _store ??= parsed.storeId;
+        if (parsed.date != null) _date = parsed.date!;
+        if (parsed.lines.isEmpty) {
+          _error =
+              'Na účtence jsem nenašel položky s cenou. Zkuste ostřejší '
+              'fotku nebo je zapište ručně.';
+        }
+      });
+    } catch (error) {
+      setState(
+        () => _error = error is OcrException
+            ? error.message
+            : 'Účtenku se nepodařilo přečíst. Zkuste to znovu.',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _addManual() =>
+      setState(() => _lines.add(ReceiptLine(product: '', price: 0)));
+
+  Future<void> _save() async {
+    final store = _store;
+    final valid = [
+      for (final l in _lines)
+        if (l.product.trim().isNotEmpty && l.price > 0) l,
+    ];
+    if (store == null || valid.isEmpty) return;
+    final docs = await ref.read(docsRepositoryProvider.future);
+    await docs.saveReceipts([
+      for (final l in valid)
+        ReceiptPrice(
+          id: docs.newId(),
+          storeId: store,
+          product: l.product.trim(),
+          price: l.price,
+          packQty: l.packQty,
+          packUnit: l.packUnit,
+          boughtOn: _date,
+          note: 'účtenka',
+          updatedAt: docs.now(),
+        ),
+    ]);
+    ref.read(syncProvider.notifier).schedule(const Duration(seconds: 1));
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    showMessage(context, 'Uloženo cen z účtenky: ${valid.length}.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave =
+        _store != null &&
+        _lines.any((l) => l.product.trim().isNotEmpty && l.price > 0);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        0,
+        20,
+        16 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Ceny z účtenky',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Skutečné ceny z vašeho nákupu. Uloží se k prodejně a porovnání '
+              'je použije (sdílí se s rodinou).',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _store,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Prodejna'),
+              items: [
+                for (final s in susiceStores)
+                  DropdownMenuItem(value: s.id, child: Text(s.label)),
+              ],
+              onChanged: (v) => setState(() => _store = v),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Datum nákupu: ${_date.day}. ${_date.month}. ${_date.year}',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if (ocrAvailable)
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _photo,
+                      icon: const Icon(Icons.photo_camera_outlined),
+                      label: const Text('Vyfotit účtenku'),
+                    ),
+                  ),
+                if (ocrAvailable) const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _addManual,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Zapsat ručně'),
+                  ),
+                ),
+              ],
+            ),
+            if (_busy)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger),
+                ),
+              ),
+            for (var i = 0; i < _lines.length; i++)
+              _ReceiptLineRow(
+                key: ObjectKey(_lines[i]),
+                line: _lines[i],
+                onChanged: () => setState(() {}),
+                onRemove: () => setState(() => _lines.removeAt(i)),
+              ),
+            const SizedBox(height: 14),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(50),
+              ),
+              onPressed: canSave ? _save : null,
+              child: const Text('Uložit ceny'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReceiptLineRow extends StatelessWidget {
+  const _ReceiptLineRow({
+    super.key,
+    required this.line,
+    required this.onChanged,
+    required this.onRemove,
+  });
+
+  final ReceiptLine line;
+  final VoidCallback onChanged;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: TextFormField(
+              initialValue: line.product,
+              decoration: const InputDecoration(labelText: 'Produkt'),
+              onChanged: (v) {
+                line.product = v;
+                onChanged();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: TextFormField(
+              initialValue: line.price > 0
+                  ? line.price.toStringAsFixed(2).replaceAll('.', ',')
+                  : '',
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Kč / ks'),
+              onChanged: (v) {
+                line.price =
+                    double.tryParse(v.trim().replaceAll(',', '.')) ?? 0;
+                onChanged();
+              },
+            ),
+          ),
+          IconButton(
+            tooltip: 'Odebrat',
+            icon: const Icon(Icons.close_rounded),
+            onPressed: onRemove,
+          ),
+        ],
+      ),
+    );
+  }
+}

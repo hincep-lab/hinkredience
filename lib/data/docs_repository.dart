@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../core/shopping.dart';
 import 'app_database.dart';
+import '../core/best_buy.dart';
 import 'kitchen_docs.dart';
 
 /// Záznam z tabulky `docs` připravený k odeslání na server.
@@ -215,6 +216,25 @@ class DocsRepository {
 
   Future<void> deleteWish(String id) => _softDelete([id]);
 
+  // ------------------------------------------------------ ceny z účtenek
+
+  Future<List<ReceiptPrice>> receipts() async => [
+    for (final json in await _all(DocKind.receipt)) ReceiptPrice.fromJson(json),
+  ];
+
+  Future<void> saveReceipts(Iterable<ReceiptPrice> prices) async {
+    final now = _clock();
+    await _db.transaction((txn) async {
+      for (final p in prices) {
+        final json = {...p.toJson(), 'updated_at': now.toIso8601String()};
+        await _put(txn, DocKind.receipt, p.id, json, now);
+      }
+    });
+    _notify();
+  }
+
+  Future<void> deleteReceipt(String id) => _softDelete([id]);
+
   // ------------------------------------------------------ nákupní seznamy
 
   /// Nákupní seznamy, nejnovější první.
@@ -408,6 +428,7 @@ class DocsRepository {
       DocKind.shoppingList,
       DocKind.shopping,
       DocKind.wish,
+      DocKind.receipt,
     ]) {
       for (final doc in await dirty(kind)) {
         if (kind == DocKind.session &&

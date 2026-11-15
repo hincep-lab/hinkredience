@@ -245,6 +245,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_family",
     "get_kitchen_equipment",
     "get_meal_plan",
+    "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
@@ -262,6 +263,8 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "remove_shopping_item",
     "reorder_recipe_photos",
     "restore_recipe",
+    "save_price_offer",
+    "save_receipt_prices",
     "search_recipes",
     "set_greeting_name",
     "set_recipe_cover_photo",
@@ -282,6 +285,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_family",
     "get_kitchen_equipment",
     "get_meal_plan",
+    "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
@@ -298,7 +302,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 43);
+  assertEquals(tools.length, 46);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");

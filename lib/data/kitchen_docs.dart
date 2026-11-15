@@ -12,6 +12,7 @@ abstract final class DocKind {
   static const shopping = 'shopping_item';
   static const shoppingList = 'shopping_list';
   static const wish = 'meal_wish';
+  static const receipt = 'price_receipt';
 }
 
 DateTime? _date(Object? value) =>

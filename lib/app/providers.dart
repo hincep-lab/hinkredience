@@ -624,6 +624,17 @@ class SyncController extends Notifier<SyncState> {
           )
           .subscribe();
       ref.onDispose(() => client.removeChannel(wishes));
+      // Ceny z účtenek (migrace 14) – vlastní kanál ze stejného důvodu.
+      final receipts = client
+          .channel('hinkredience-receipts')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'price_receipts',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .subscribe();
+      ref.onDispose(() => client.removeChannel(receipts));
     } catch (error) {
       debugPrint('Realtime se nepodařilo zapnout: $error');
     }

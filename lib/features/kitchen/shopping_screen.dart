@@ -10,6 +10,8 @@ import '../../core/material.dart';
 import '../../core/shopping.dart';
 import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
+import '../../core/best_buy.dart';
+import 'best_buy_panel.dart';
 import 'shopping_lists_screen.dart';
 
 /// Množství položky k zobrazení („1,5 kg“, „3 ks“).
@@ -128,11 +130,59 @@ class ShoppingScreen extends ConsumerWidget {
 
     final remaining = items.where((i) => !i.checked).length;
     final checked = items.length - remaining;
+    final prefs = ref.watch(bestBuyPrefsProvider);
+    final offers = ref.watch(priceOffersProvider).value ?? const <PriceOffer>[];
+    final best = prefs.enabled ? ref.watch(bestBuyProvider(listId)) : null;
+    final today = DateTime.now();
+    final byStore =
+        prefs.enabled &&
+        prefs.multiStore &&
+        prefs.groupByStore &&
+        best != null &&
+        best.combination.isNotEmpty;
+
+    Widget tile(ShoppingItem item) {
+      final tag = !prefs.enabled || item.checked
+          ? null
+          : bestOfferFor(buyItemOf(item), offers, today);
+      return _ItemTile(
+        item: item,
+        onToggle: () => _toggle(ref, item),
+        onEdit: () => _edit(context, ref, item),
+        onRemove: () => _remove(context, ref, item),
+        tag: tag == null
+            ? null
+            : OfferTag(
+                offer: tag.offer,
+                onTap: () => showOfferDetail(
+                  context,
+                  tag.offer,
+                  unverified: unverifiedOffersFor(
+                    buyItemOf(item),
+                    offers,
+                    today,
+                  ),
+                ),
+              ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: Text(list.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
+          IconButton(
+            tooltip: prefs.enabled
+                ? 'Skrýt nejvýhodnější nákup'
+                : 'Zobrazit nejvýhodnější nákup',
+            icon: Icon(
+              prefs.enabled ? Icons.savings_rounded : Icons.savings_outlined,
+              color: prefs.enabled ? AppColors.copperGold : null,
+            ),
+            onPressed: () => ref
+                .read(bestBuyPrefsProvider.notifier)
+                .update(prefs.copyWith(enabled: !prefs.enabled)),
+          ),
           IconButton(
             tooltip: 'Sdílet seznam jako text',
             icon: const Icon(Icons.ios_share_rounded),
@@ -160,6 +210,7 @@ class ShoppingScreen extends ConsumerWidget {
             total: items.length,
             shared: list.shared,
           ),
+          if (items.isNotEmpty) BestBuyPanel(listId: listId),
           Expanded(
             child: items.isEmpty
                 ? const EmptyState(
@@ -173,26 +224,52 @@ class ShoppingScreen extends ConsumerWidget {
                 : ListView(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 120),
                     children: [
-                      for (final category in ShoppingCategory.all)
-                        if (items
-                                .where((i) => categoryOf(i) == category)
-                                .toList()
-                            case final group when group.isNotEmpty) ...[
-                          _CategoryHeader(
-                            category: category,
-                            remaining: group.where((i) => !i.checked).length,
-                          ),
-                          for (final item in [
-                            ...group.where((i) => !i.checked),
-                            ...group.where((i) => i.checked),
-                          ])
-                            _ItemTile(
-                              item: item,
-                              onToggle: () => _toggle(ref, item),
-                              onEdit: () => _edit(context, ref, item),
-                              onRemove: () => _remove(context, ref, item),
+                      if (byStore) ...[
+                        // Varianta „více obchodů“: položky podle prodejen.
+                        for (final entry
+                            in best!.combinationByStore.entries) ...[
+                          _StoreHeader(
+                            title: entry.key.label,
+                            subtotal: entry.value.fold(
+                              0.0,
+                              (sum, p) => sum + p.cost,
                             ),
+                          ),
+                          for (final p in entry.value)
+                            if (items
+                                    .where((i) => i.id == p.item.id)
+                                    .firstOrNull
+                                case final item?)
+                              tile(item),
                         ],
+                        if (best!.combinationMissing.isNotEmpty) ...[
+                          const _StoreHeader(title: 'Bez známé ceny'),
+                          for (final m in best!.combinationMissing)
+                            if (items.where((i) => i.id == m.id).firstOrNull
+                                case final item?)
+                              tile(item),
+                        ],
+                        if (checked > 0) ...[
+                          const _StoreHeader(title: 'Nakoupeno'),
+                          for (final item in items)
+                            if (item.checked) tile(item),
+                        ],
+                      ] else
+                        for (final category in ShoppingCategory.all)
+                          if (items
+                                  .where((i) => categoryOf(i) == category)
+                                  .toList()
+                              case final group when group.isNotEmpty) ...[
+                            _CategoryHeader(
+                              category: category,
+                              remaining: group.where((i) => !i.checked).length,
+                            ),
+                            for (final item in [
+                              ...group.where((i) => !i.checked),
+                              ...group.where((i) => i.checked),
+                            ])
+                              tile(item),
+                          ],
                       if (checked > 0)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(8, 20, 8, 0),
@@ -328,18 +405,55 @@ class _CategoryHeader extends StatelessWidget {
   }
 }
 
+/// Nadpis skupiny podle prodejny (varianta více obchodů).
+class _StoreHeader extends StatelessWidget {
+  const _StoreHeader({required this.title, this.subtotal});
+
+  final String title;
+  final double? subtotal;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 4),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.store_outlined,
+            size: 20,
+            color: AppColors.copperGold,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+          ),
+          if (subtotal != null)
+            Text(
+              kc(subtotal!),
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ItemTile extends StatelessWidget {
   const _ItemTile({
     required this.item,
     required this.onToggle,
     required this.onEdit,
     required this.onRemove,
+    this.tag,
   });
 
   final ShoppingItem item;
   final VoidCallback onToggle;
   final VoidCallback onEdit;
   final VoidCallback onRemove;
+
+  /// Štítek ověřené akce (obchod, cena, platnost).
+  final Widget? tag;
 
   @override
   Widget build(BuildContext context) {
@@ -414,6 +528,7 @@ class _ItemTile extends StatelessWidget {
                               color: AppColors.textSecondary,
                             ),
                           ),
+                        ?tag,
                       ],
                     ),
                   ),

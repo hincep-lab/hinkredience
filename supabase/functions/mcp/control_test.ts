@@ -189,5 +189,24 @@ Deno.test("nové nástroje mají správné příznaky", () => {
   const byName = (n: string) => tools.find((t) => t.name === n)!;
   for (const n of ["get_meal_plan", "get_trash", "get_family"]) assert(byName(n).readOnly, n);
   for (const n of ["remove_meal_plan_entry"]) assert(byName(n).destructive, n);
-  assertEquals(tools.length, 43);
+  assertEquals(tools.length, 46);
+});
+
+Deno.test("ceny: akci ověřuje serverová funkce prices s tokenem uživatele", async () => {
+  const calls: { url: string; auth: string; body: any }[] = [];
+  const db = {
+    callFunction: async (name: string, body: any) => {
+      calls.push({ url: name, auth: "", body });
+      return { saved: true, verified: false, reason: "zdroj není oficiální web řetězce" };
+    },
+  };
+  const tool = tools.find((t) => t.name === "save_price_offer")!;
+  const r = await tool.run(db as any, {
+    chain: "penny", product: "Máslo", price: 39.9, valid_to: "2026-11-18", source_url: "https://www.kupi.cz/x",
+  }, "u", fetch);
+  assertEquals(calls[0].url, "prices");
+  assertEquals(calls[0].body.provider, "chatgpt");
+  assertEquals(calls[0].body.offer.price, 39.9);
+  assertEquals((r as any).verified, false);
+  assert(String((r as any).message).includes("NEOVĚŘENÉ"));
 });

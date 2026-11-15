@@ -72,6 +72,8 @@ class DocsSync {
     // Poslední: bez migrace 12 server tabulku nemá a synchronizace zde
     // tiše skončí (DocsNotSupported) – ostatní už jsou hotové.
     DocKind.wish,
+    // Bez migrace 14 tabulka chybí – synchronizace zde tiše skončí.
+    DocKind.receipt,
   ];
 
   /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
@@ -304,6 +306,7 @@ class DocsSync {
     DocKind.plan => 'Plán vaření',
     DocKind.shoppingList => 'Nákupní seznamy',
     DocKind.wish => 'Přání rodiny',
+    DocKind.receipt => 'Ceny z účtenek',
     _ => 'Nákupní seznam',
   };
 }
@@ -347,6 +350,7 @@ class SupabaseRemoteDocs implements RemoteDocs {
     DocKind.shoppingList: 'shopping_lists',
     DocKind.shopping: 'shopping_items',
     DocKind.wish: 'meal_wishes',
+    DocKind.receipt: 'price_receipts',
   };
 
   @override
@@ -401,6 +405,20 @@ class SupabaseRemoteDocs implements RemoteDocs {
         'title': row['title'] ?? '',
         'note': row['note'] ?? '',
         'servings': row['servings'],
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'updated_at': row['updated_at'],
+      },
+      DocKind.receipt => {
+        'id': row['id'],
+        'store_id': row['store_id'],
+        'product': row['product'] ?? '',
+        'label': row['label'] ?? '',
+        'price': row['price'],
+        'pack_qty': row['pack_qty'],
+        'pack_unit': row['pack_unit'] ?? '',
+        'bought_on': row['bought_on'],
+        'note': row['note'] ?? '',
         'owner_id': row['owner_id'],
         'household_id': row['household_id'],
         'updated_at': row['updated_at'],
@@ -493,6 +511,22 @@ class SupabaseRemoteDocs implements RemoteDocs {
           'title': d['title'] ?? '',
           'note': d['note'] ?? '',
           'servings': d['servings'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      case DocKind.receipt:
+        row = {
+          'id': doc.id,
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'] ?? householdId,
+          'store_id': d['store_id'],
+          'product': d['product'] ?? '',
+          'label': d['label'] ?? '',
+          'price': d['price'],
+          'pack_qty': d['pack_qty'],
+          'pack_unit': d['pack_unit'] ?? '',
+          'bought_on': d['bought_on'],
+          'note': d['note'] ?? '',
           'updated_at': updated,
           'deleted_at': deleted,
         };

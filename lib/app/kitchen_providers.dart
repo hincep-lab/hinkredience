@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/best_buy.dart';
 import '../core/personalization.dart';
 import '../data/docs_repository.dart';
 import '../data/kitchen_docs.dart';
+import '../data/price_service.dart';
 import 'providers.dart';
 
 /// Proud, který se obnoví při každé změně deníku, plánu nebo nákupu.
@@ -122,6 +124,96 @@ final shoppingListProvider = StreamProvider.family<ShoppingList?, String>(
 final shoppingItemsProvider = StreamProvider.family<List<ShoppingItem>, String>(
   (ref, listId) => _watch(ref, (docs) => docs.shopping(listId: listId)),
 );
+
+/// Ceny z vlastních účtenek (synchronizované s rodinou).
+final receiptPricesProvider = StreamProvider<List<ReceiptPrice>>(
+  (ref) => _watch(ref, (docs) => docs.receipts()),
+);
+
+/// Služba cen (bez Supabase null).
+final priceServiceProvider = Provider<PriceService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null) return null;
+  return PriceService(client, ref.watch(sharedPreferencesProvider));
+});
+
+/// Platné akce z letáků; [PriceOffersNotifier.reload] po hledání.
+final priceOffersProvider =
+    AsyncNotifierProvider<PriceOffersNotifier, List<PriceOffer>>(
+      PriceOffersNotifier.new,
+    );
+
+class PriceOffersNotifier extends AsyncNotifier<List<PriceOffer>> {
+  @override
+  Future<List<PriceOffer>> build() async {
+    final service = ref.watch(priceServiceProvider);
+    if (service == null) return const [];
+    return service.offers(DateTime.now());
+  }
+
+  Future<void> reload() async {
+    final service = ref.read(priceServiceProvider);
+    if (service == null) return;
+    state = AsyncData(await service.offers(DateTime.now()));
+  }
+}
+
+/// Nastavení panelu „Nejvýhodnější nákup“ (zapnuto, sbaleno, varianta,
+/// seskupení podle prodejen) – pamatuje si ho telefon.
+class BestBuyPrefs {
+  const BestBuyPrefs({
+    this.enabled = true,
+    this.collapsed = false,
+    this.multiStore = false,
+    this.groupByStore = false,
+  });
+
+  final bool enabled;
+  final bool collapsed;
+  final bool multiStore;
+  final bool groupByStore;
+
+  BestBuyPrefs copyWith({
+    bool? enabled,
+    bool? collapsed,
+    bool? multiStore,
+    bool? groupByStore,
+  }) => BestBuyPrefs(
+    enabled: enabled ?? this.enabled,
+    collapsed: collapsed ?? this.collapsed,
+    multiStore: multiStore ?? this.multiStore,
+    groupByStore: groupByStore ?? this.groupByStore,
+  );
+}
+
+final bestBuyPrefsProvider =
+    NotifierProvider<BestBuyPrefsNotifier, BestBuyPrefs>(
+      BestBuyPrefsNotifier.new,
+    );
+
+class BestBuyPrefsNotifier extends Notifier<BestBuyPrefs> {
+  static const _prefix = 'best_buy_';
+
+  @override
+  BestBuyPrefs build() {
+    final p = ref.watch(sharedPreferencesProvider);
+    return BestBuyPrefs(
+      enabled: p.getBool('${_prefix}enabled') ?? true,
+      collapsed: p.getBool('${_prefix}collapsed') ?? false,
+      multiStore: p.getBool('${_prefix}multi') ?? false,
+      groupByStore: p.getBool('${_prefix}group') ?? false,
+    );
+  }
+
+  Future<void> update(BestBuyPrefs next) async {
+    state = next;
+    final p = ref.read(sharedPreferencesProvider);
+    await p.setBool('${_prefix}enabled', next.enabled);
+    await p.setBool('${_prefix}collapsed', next.collapsed);
+    await p.setBool('${_prefix}multi', next.multiStore);
+    await p.setBool('${_prefix}group', next.groupByStore);
+  }
+}
 
 /// Přání rodiny „mám chuť na…“ (čekající a ještě nesnědená naplánovaná).
 final wishesProvider = StreamProvider<List<MealWish>>(

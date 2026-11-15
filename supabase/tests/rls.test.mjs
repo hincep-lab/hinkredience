@@ -89,7 +89,7 @@ before(async () => {
 test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => {
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
-    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes',
+    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes', 'price_ai_usage', 'price_offers', 'price_receipts', 'price_scans',
     'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
@@ -714,6 +714,37 @@ test('oznámení: zařízení vidí jen vlastník, klíč serveru nikdo', async 
   const item = await as(PAVEL, `insert into public.shopping_items (list_id, name) values ($1, 'Mléko') returning added_by`, [list]);
   assert.equal(item.rows[0].added_by, PAVEL);
   const sql = readFileSync(join(migrationsDir, '20261115000013_web_push.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async () => {
+  // Uživatel ani AI v aplikaci nesmí vložit akci (jen serverová funkce).
+  await denied(as(PAVEL, `insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'Máslo', 39.9, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+  // Server (role postgres) vloží; přihlášení ji vidí.
+  await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified)
+    values ('penny', 'Máslo 250 g', 'maslo', 39.9, '2026-11-20', 'https://www.penny.cz/nabidky', 'gemini', true)`);
+  assert.equal((await as(CIZI, `select product from public.price_offers`)).rows[0].product, 'Máslo 250 g');
+  await denied(as(PAVEL, `update public.price_offers set price = 1`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'X', 0, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'X', 10, '2026-11-20', 'http://nezabezpecene.cz/', 'manual')`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, store_id, product, price, valid_to, source_url, provider)
+    values ('penny', 'penny-praha', 'X', 10, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+
+  const hid = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const r = await as(MARTINKA, `insert into public.price_receipts (household_id, store_id, product, price, bought_on)
+    values ($1, 'lidl-hradecka', 'Mléko 1 l', 21.9, '2026-11-14') returning id`, [hid]);
+  assert.equal((await as(PAVEL, `select price from public.price_receipts where id = $1`, [r.rows[0].id])).rows.length, 1);
+  assert.equal((await as(CIZI, `select 1 from public.price_receipts where id = $1`, [r.rows[0].id])).rows.length, 0);
+  await denied(as(CIZI, `insert into public.price_receipts (owner_id, store_id, product, price) values ($1, 'lidl-hradecka', 'X', 1)`, [PAVEL]));
+  await assert.rejects(as(PAVEL, `insert into public.price_receipts (store_id, product, price) values ('lidl-praha', 'X', 1)`));
+  // Mezipaměť a počítadla AI: uživatel nezapíše.
+  await denied(as(PAVEL, `insert into public.price_scans (chain, product_key) values ('penny', 'maslo')`));
+  await denied(as(PAVEL, `select * from public.price_ai_usage`));
+  const sql = readFileSync(join(migrationsDir, '20261115000014_best_buy.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql);
 });
