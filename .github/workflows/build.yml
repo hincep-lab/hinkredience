@@ -75,13 +75,19 @@ jobs:
         run: flutter test
       - name: Sestavení APK
         run: >
-          flutter build apk --release
+          flutter build apk --release --split-per-abi
+          --target-platform android-arm64,android-arm
           --build-number=${{ github.run_number }}
           --dart-define=BUILD_NUMBER=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
       - name: Přejmenování APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk hinkredience.apk
+        # Pro moderní telefony (64bit ARM, např. Galaxy S24) stačí arm64 – je
+        # menší a vejde se i na GitHub Pages; starší 32bit telefony mají vlastní.
+        run: |
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk hinkredience.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk hinkredience-32bit.apk
+          ls -la hinkredience*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: hinkredience-apk
@@ -95,7 +101,9 @@ jobs:
           body: |
             Automatické sestavení z commitu ${{ github.sha }}.
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
-          files: hinkredience.apk
+          files: |
+            hinkredience.apk
+            hinkredience-32bit.apk
       - name: Testovací vydání z jiné větve (ruční spuštění)
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -107,7 +115,9 @@ jobs:
           body: |
             Testovací sestavení z větve `${{ github.ref_name }}` (commit ${{ github.sha }}), ještě není v `main`.
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
-          files: hinkredience.apk
+          files: |
+            hinkredience.apk
+            hinkredience-32bit.apk
 
   web:
     name: Web – verze do prohlížeče (Android i iPhone)
