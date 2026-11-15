@@ -89,7 +89,7 @@ before(async () => {
 test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => {
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
-    'household_members', 'households', 'kitchen_equipment', 'meal_plans',
+    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes',
     'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
@@ -663,6 +663,31 @@ test('sdílet všechny recepty s rodinou: hned stávající, pak automaticky nov
 
 test('migrace 11 jde spustit znovu bez chyby', async () => {
   const sql = readFileSync(join(migrationsDir, '20261115000011_share_all_recipes.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('přání „mám chuť“: vidí je rodina, cizí ne; jde spustit znovu', async () => {
+  const hid = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const w = await as(MARTINKA,
+    `insert into public.meal_wishes (household_id, title, author_name)
+     values ($1, 'Svíčková', 'Martinka') returning id, synced_at`, [hid]);
+  const id = w.rows[0].id;
+  const seen = await as(PAVEL, `select title, author_name from public.meal_wishes where id = $1`, [id]);
+  assert.equal(seen.rows[0].title, 'Svíčková');
+  assert.equal(seen.rows[0].author_name, 'Martinka');
+  assert.equal((await as(CIZI, `select 1 from public.meal_wishes where id = $1`, [id])).rows.length, 0);
+  await denied(as(CIZI, `insert into public.meal_wishes (household_id, title) values ($1, 'Vetřelec')`, [hid]));
+  await denied(as(CIZI, `insert into public.meal_wishes (owner_id, title) values ($1, 'Podvrh')`, [PAVEL]));
+  // Pavel přání naplánuje (úprava cizího přání v rodině je dovolená).
+  await as(PAVEL, `update public.meal_wishes set planned_day = '2026-11-20' where id = $1`, [id]);
+  const after = await as(MARTINKA, `select planned_day, synced_at from public.meal_wishes where id = $1`, [id]);
+  assert.ok(after.rows[0].planned_day);
+  assert.ok(after.rows[0].synced_at >= w.rows[0].synced_at);
+  // Cizí nic nezmění.
+  await as(CIZI, `update public.meal_wishes set title = 'X' where id = $1`, [id]);
+  assert.equal((await as(PAVEL, `select title from public.meal_wishes where id = $1`, [id])).rows[0].title, 'Svíčková');
+  const sql = readFileSync(join(migrationsDir, '20261115000012_meal_wishes.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql);
 });

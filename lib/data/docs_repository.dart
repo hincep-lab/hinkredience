@@ -191,6 +191,30 @@ class DocsRepository {
 
   Future<void> deleteMeal(String id) => _softDelete([id]);
 
+  // ------------------------------------------------------- „mám chuť na…“
+
+  /// Přání rodiny: čekající první, pak naplánovaná; nejnovější nahoře.
+  Future<List<MealWish>> wishes() async {
+    final today = _clock().toLocal();
+    final list = [
+      for (final json in await _all(DocKind.wish)) MealWish.fromJson(json),
+    ].where((w) => w.isActive(today)).toList();
+    list.sort((a, b) {
+      if (a.isPlanned != b.isPlanned) return a.isPlanned ? 1 : -1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    return list;
+  }
+
+  Future<MealWish> saveWish(MealWish wish) async {
+    final saved = wish.copyWith(updatedAt: _clock());
+    await _put(_db, DocKind.wish, saved.id, saved.toJson(), saved.updatedAt);
+    _notify();
+    return saved;
+  }
+
+  Future<void> deleteWish(String id) => _softDelete([id]);
+
   // ------------------------------------------------------ nákupní seznamy
 
   /// Nákupní seznamy, nejnovější první.
@@ -371,6 +395,7 @@ class DocsRepository {
       DocKind.plan,
       DocKind.shoppingList,
       DocKind.shopping,
+      DocKind.wish,
     ]) {
       for (final doc in await dirty(kind)) {
         if (kind == DocKind.session &&

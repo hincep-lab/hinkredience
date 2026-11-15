@@ -55,6 +55,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         if (!item.checked) item,
     ].length;
     final open = ref.watch(openSessionProvider).value;
+    final wishCount = (ref.watch(wishesProvider).value ?? const [])
+        .where((w) => !w.isPlanned)
+        .length;
 
     return Scaffold(
       body: SafeArea(
@@ -235,7 +238,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   _FeatureTile(
                     icon: Icons.calendar_month_rounded,
                     title: 'Plán vaření',
-                    subtitle: 'Týden pro celou rodinu',
+                    subtitle: wishCount == 0
+                        ? 'Týden pro celou rodinu'
+                        : 'Přání rodiny · $wishCount',
                     onTap: () => context.push(Routes.plan),
                   ),
                   _FeatureTile(

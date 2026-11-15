@@ -64,6 +64,9 @@ class DocsSync {
     DocKind.plan,
     DocKind.shoppingList,
     DocKind.shopping,
+    // Poslední: bez migrace 12 server tabulku nemá a synchronizace zde
+    // tiše skončí (DocsNotSupported) – ostatní už jsou hotové.
+    DocKind.wish,
   ];
 
   /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
@@ -211,6 +214,7 @@ class DocsSync {
     DocKind.session => 'Kuchařský deník',
     DocKind.plan => 'Plán vaření',
     DocKind.shoppingList => 'Nákupní seznamy',
+    DocKind.wish => 'Přání rodiny',
     _ => 'Nákupní seznam',
   };
 }
@@ -253,6 +257,7 @@ class SupabaseRemoteDocs implements RemoteDocs {
     DocKind.plan: 'meal_plans',
     DocKind.shoppingList: 'shopping_lists',
     DocKind.shopping: 'shopping_items',
+    DocKind.wish: 'meal_wishes',
   };
 
   @override
@@ -309,6 +314,18 @@ class SupabaseRemoteDocs implements RemoteDocs {
         'servings': row['servings'],
         'owner_id': row['owner_id'],
         'household_id': row['household_id'],
+        'updated_at': row['updated_at'],
+      },
+      DocKind.wish => {
+        'id': row['id'],
+        'title': row['title'] ?? '',
+        'recipe_id': row['recipe_id'],
+        'note': row['note'] ?? '',
+        'author_name': row['author_name'] ?? '',
+        'planned_day': row['planned_day'],
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'created_at': row['created_at'],
         'updated_at': row['updated_at'],
       },
       DocKind.shoppingList => {
@@ -386,6 +403,20 @@ class SupabaseRemoteDocs implements RemoteDocs {
           'title': d['title'] ?? '',
           'note': d['note'] ?? '',
           'servings': d['servings'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      case DocKind.wish:
+        row = {
+          'id': doc.id,
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'] ?? householdId,
+          'recipe_id': d['recipe_id'],
+          'title': d['title'] ?? '',
+          'note': d['note'] ?? '',
+          'author_name': d['author_name'] ?? '',
+          'planned_day': d['planned_day'],
+          'created_at': d['created_at'],
           'updated_at': updated,
           'deleted_at': deleted,
         };

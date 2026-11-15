@@ -25,6 +25,7 @@ import '../kitchen/diary_screen.dart' show diaryDate;
 import '../kitchen/add_to_shopping_sheet.dart';
 import 'personal_cards.dart';
 import '../cooking/actual_amount.dart';
+import '../kitchen/wishes.dart';
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -348,6 +349,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                   'photos' => context.push(Routes.recipePhotos(recipe.id)),
                   'shopping' => _toShopping(recipe),
                   'plan' => _toPlan(recipe),
+                  'wish' => addWish(context, ref, recipe: recipe),
                   'diary' => context.push(Routes.diaryFor(recipe.id)),
                   'ai_improve' => _improve(recipe, withWeb: false),
                   'ai_web' => _improve(recipe, withWeb: true),
@@ -377,6 +379,11 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                     const PopupMenuItem(
                       value: 'plan',
                       child: Text('Naplánovat'),
+                    ),
+                  if (!recipe.isDeleted)
+                    const PopupMenuItem(
+                      value: 'wish',
+                      child: Text('Mám na to chuť'),
                     ),
                   const PopupMenuItem(
                     value: 'diary',

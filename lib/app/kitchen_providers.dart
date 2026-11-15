@@ -123,6 +123,11 @@ final shoppingItemsProvider = StreamProvider.family<List<ShoppingItem>, String>(
   (ref, listId) => _watch(ref, (docs) => docs.shopping(listId: listId)),
 );
 
+/// Přání rodiny „mám chuť na…“ (čekající a ještě nesnědená naplánovaná).
+final wishesProvider = StreamProvider<List<MealWish>>(
+  (ref) => _watch(ref, (docs) => docs.wishes()),
+);
+
 /// Plán vaření na týden začínající daným pondělím.
 final weekPlanProvider = StreamProvider.family<List<MealPlanEntry>, DateTime>(
   (ref, monday) => _watch(

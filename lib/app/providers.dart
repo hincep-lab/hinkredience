@@ -610,6 +610,18 @@ class SyncController extends Notifier<SyncState> {
           )
           .subscribe();
       ref.onDispose(() => client.removeChannel(channel));
+      // Přání rodiny ve vlastním kanálu: bez migrace 12 tabulka neexistuje
+      // a chyba nesmí shodit odběr ostatních změn.
+      final wishes = client
+          .channel('hinkredience-wishes')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'meal_wishes',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .subscribe();
+      ref.onDispose(() => client.removeChannel(wishes));
     } catch (error) {
       debugPrint('Realtime se nepodařilo zapnout: $error');
     }
