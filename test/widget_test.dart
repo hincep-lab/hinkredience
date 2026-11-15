@@ -413,7 +413,10 @@ void main() {
     );
     await tester.tap(find.text('Postup'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Přikryjte alobalem a pečte.'));
+    final step = find.text('Přikryjte alobalem a pečte.');
+    await Scrollable.ensureVisible(tester.element(step), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(step);
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.check_rounded), findsOneWidget);
     await tester.tap(find.text('Přikryjte alobalem a pečte.'));
