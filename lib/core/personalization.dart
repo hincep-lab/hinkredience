@@ -61,7 +61,7 @@ const _chilliStems = [
   'chilli',
   'chili',
   'feferon',
-  'jalapen',
+  'jalap',
   'habaner',
   'kajensk',
   'cayenn',
