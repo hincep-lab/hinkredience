@@ -348,8 +348,8 @@ void main() {
       await tester.pump();
       expect(screenWake.last, isTrue);
 
-      // Jiná obrazovka navrch (úprava receptu) → vypnuto, zpět → zapnuto.
-      router.push(Routes.editRecipe('recipe-1'));
+      // Jiná obrazovka navrch (správa fotek) → vypnuto, zpět → zapnuto.
+      router.push(Routes.recipePhotos('recipe-1'));
       await tester.pumpAndSettle();
       expect(screenWake.last, isFalse);
       router.pop();
@@ -389,6 +389,8 @@ void main() {
         find.byType(ListView),
         const Offset(0, -250),
       );
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
       expect(tester.widget<SwitchListTile>(tile).value, isTrue);
       await tester.tap(tile);
       await tester.pumpAndSettle();
