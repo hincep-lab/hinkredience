@@ -90,7 +90,7 @@ test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => 
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
     'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes',
-    'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
+    'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
   const { rows } = await db.query(
@@ -688,6 +688,32 @@ test('přání „mám chuť“: vidí je rodina, cizí ne; jde spustit znovu', 
   await as(CIZI, `update public.meal_wishes set title = 'X' where id = $1`, [id]);
   assert.equal((await as(PAVEL, `select title from public.meal_wishes where id = $1`, [id])).rows[0].title, 'Svíčková');
   const sql = readFileSync(join(migrationsDir, '20261115000012_meal_wishes.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('oznámení: zařízení vidí jen vlastník, klíč serveru nikdo', async () => {
+  await as(PAVEL, `select public.push_subscribe('https://web.push.apple.com/abc', 'p', 'a', 'iPhone')`);
+  assert.equal((await as(PAVEL, `select endpoint from public.push_subscriptions`)).rows.length, 1);
+  assert.equal((await as(MARTINKA, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  assert.equal((await as(CIZI, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  // Přímý zápis cizího zařízení nejde, jen přes funkci a vždy na sebe.
+  await denied(as(CIZI, `insert into public.push_subscriptions (user_id, endpoint, p256dh, auth) values ($1, 'https://x', 'p', 'a')`, [PAVEL]));
+  // Totéž zařízení převezme jiný účet (odhlášení a přihlášení někoho jiného).
+  await as(MARTINKA, `select public.push_subscribe('https://web.push.apple.com/abc', 'p2', 'a2')`);
+  assert.equal((await as(PAVEL, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  assert.equal((await as(MARTINKA, `select p256dh from public.push_subscriptions`)).rows[0].p256dh, 'p2');
+  await assert.rejects(as(PAVEL, `select public.push_subscribe('http://nezabezpecene', 'p', 'a')`), /Neplatné přihlášení/);
+  await as(MARTINKA, `delete from public.push_subscriptions`);
+  assert.equal((await as(MARTINKA, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  // Klíč serveru: ani číst, ani zapsat.
+  await denied(as(PAVEL, `select * from public.push_server_keys`));
+  await denied(as(PAVEL, `insert into public.push_server_keys (id, public_key, private_jwk) values (1, 'x', '{}')`));
+  // Kdo přidal položku nákupu se vyplní sám.
+  const list = (await as(PAVEL, `insert into public.shopping_lists (name) values ('Push test') returning id`)).rows[0].id;
+  const item = await as(PAVEL, `insert into public.shopping_items (list_id, name) values ($1, 'Mléko') returning added_by`, [list]);
+  assert.equal(item.rows[0].added_by, PAVEL);
+  const sql = readFileSync(join(migrationsDir, '20261115000013_web_push.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql);
 });

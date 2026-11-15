@@ -75,6 +75,12 @@ class FakeRemoteDocs implements RemoteDocs {
   @override
   Future<Uint8List> downloadPhoto(String remotePath) async =>
       throw Exception('není');
+
+  final announced = <Map<String, String>>[];
+
+  @override
+  Future<void> announce(List<Map<String, String>> items) async =>
+      announced.addAll(items);
 }
 
 void main() {
@@ -297,4 +303,52 @@ void main() {
       expect(third.news, isEmpty);
     },
   );
+
+  test('nové přání a položka se rodině ohlásí jednou; staré ne', () async {
+    await docs.saveWish(
+      MealWish(
+        id: 'w-new',
+        title: 'Guláš',
+        createdAt: env.now,
+        updatedAt: env.now,
+      ),
+    );
+    await docs.saveWish(
+      MealWish(
+        id: 'w-old',
+        title: 'Staré',
+        createdAt: env.now.subtract(const Duration(days: 2)),
+        updatedAt: env.now,
+      ),
+    );
+    await docs.addToShopping(const [ShoppingDraft(name: 'Mléko')]);
+    await sync.sync();
+    expect(remote.announced, [
+      {'kind': 'shopping', 'title': 'Mléko'},
+      {'kind': 'wish', 'title': 'Guláš'},
+    ]);
+    // Úprava už ohlášeného přání se znovu neohlašuje.
+    final wish = (await docs.wishes()).firstWhere((w) => w.id == 'w-new');
+    await docs.saveWish(wish.copyWith(note: 'v sobotu'));
+    await sync.sync();
+    expect(remote.announced.length, 2);
+  });
+
+  test('vlastní položka z jiného zařízení se neohlásí', () async {
+    await sync.sync();
+    remote.serverEdit(DocKind.shopping, 'i-own', {
+      'id': 'i-own',
+      'list_id': 'l1',
+      'name': 'Moje',
+      'added_by': 'user-1',
+    }, env.now);
+    remote.serverEdit(DocKind.shopping, 'i-her', {
+      'id': 'i-her',
+      'list_id': 'l1',
+      'name': 'Její',
+      'added_by': 'user-2',
+    }, env.now);
+    final result = await sync.sync();
+    expect(result.news.map((n) => n.title), ['Její']);
+  });
 }

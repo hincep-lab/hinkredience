@@ -17,6 +17,7 @@ import '../data/app_database.dart';
 import '../data/docs_repository.dart';
 import '../data/docs_sync.dart';
 import '../data/photo_store.dart';
+import '../data/push_service.dart';
 import '../data/recipe.dart';
 import '../data/recipe_repository.dart';
 import '../data/remote_store.dart';
@@ -758,6 +759,12 @@ final familyAlertsProvider = Provider<FamilyAlerts>(
 );
 
 const familyNotificationsKey = 'family_notifications';
+
+/// Oznámení do zavřené aplikace (web push); bez Supabase null.
+final pushServiceProvider = Provider<PushService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  return client == null ? null : PushService(client);
+});
 
 /// Oznámení od rodiny jsou zapnutá (výchozí stav: ano).
 bool familyNotificationsEnabled(Ref ref) =>

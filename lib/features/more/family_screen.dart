@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../core/app_colors.dart';
 import '../../core/material.dart';
+import '../../core/web_push.dart';
 import '../../core/widgets.dart';
 
 /// Rodinné účty: společná kuchařka, plán vaření a nákupní seznam.
@@ -276,7 +278,10 @@ class FamilyScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: 16),
                     const SectionTitle('Oznámení'),
-                    const _FamilyNotificationsTile(),
+                    if (kIsWeb)
+                      const _WebPushTile()
+                    else
+                      const _FamilyNotificationsTile(),
                     const SizedBox(height: 12),
                     if (house.amOwner)
                       FilledButton.icon(
@@ -350,6 +355,125 @@ class _FamilyNotificationsTileState
         ),
         value: _on,
         onChanged: _set,
+      ),
+    );
+  }
+}
+
+/// Web a aplikace z plochy iPhonu: oznámení i do zavřené aplikace.
+class _WebPushTile extends ConsumerStatefulWidget {
+  const _WebPushTile();
+
+  @override
+  ConsumerState<_WebPushTile> createState() => _WebPushTileState();
+}
+
+class _WebPushTileState extends ConsumerState<_WebPushTile> {
+  bool? _on;
+  var _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final endpoint = await webPushCurrent();
+    if (mounted) {
+      setState(
+        () => _on = endpoint.isNotEmpty && webPushPermission() == 'granted',
+      );
+    }
+  }
+
+  Future<void> _set(bool value) async {
+    final push = ref.read(pushServiceProvider);
+    if (push == null) return;
+    setState(() => _busy = true);
+    try {
+      if (value) {
+        await push.enableThisDevice();
+        if (mounted) {
+          showMessage(context, 'Oznámení jsou zapnutá na tomto zařízení.');
+        }
+      } else {
+        await push.disableThisDevice();
+      }
+      if (mounted) setState(() => _on = value);
+    } catch (error) {
+      if (mounted) {
+        showMessage(
+          context,
+          webPushPermission() == 'denied'
+              ? 'Oznámení jsou v prohlížeči zakázaná. Povolte je v nastavení '
+                    'prohlížeče (u iPhonu: Nastavení → Oznámení → HINKredience°).'
+              : 'Oznámení se nepodařilo zapnout: $error',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _test() async {
+    final push = ref.read(pushServiceProvider);
+    if (push == null) return;
+    setState(() => _busy = true);
+    try {
+      final sent = await push.test();
+      if (mounted) {
+        showMessage(
+          context,
+          sent == 0
+              ? 'Žádné zařízení oznámení nepřijalo. Zkuste oznámení vypnout '
+                    'a znovu zapnout.'
+              : 'Odesláno – oznámení by mělo za chvilku přijít.',
+        );
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, 'Zkouška se nepodařila: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!webPushSupported()) {
+      return const HkCard(
+        padding: EdgeInsets.all(14),
+        child: Text(
+          'Tady oznámení nejdou. Na iPhonu otevřete HINKredience° z plochy '
+          '(v Safari: Sdílet → Přidat na plochu) a zapněte je tam. Na '
+          'Androidu a počítači fungují v Chromu.',
+          style: TextStyle(color: AppColors.textSecondary, height: 1.4),
+        ),
+      );
+    }
+    return HkCard(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            secondary: const Icon(Icons.notifications_active_outlined),
+            title: const Text('Dát vědět, když někdo něco chce'),
+            subtitle: const Text(
+              'Oznámení na tomto zařízení – i když je aplikace zavřená – '
+              'když někdo z rodiny přidá přání nebo něco na nákup.',
+            ),
+            value: _on ?? false,
+            onChanged: _busy || _on == null ? null : _set,
+          ),
+          if (_on == true)
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _test,
+              icon: const Icon(Icons.notifications_outlined),
+              label: const Text('Poslat zkušební oznámení'),
+            ),
+        ],
       ),
     );
   }

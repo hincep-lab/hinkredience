@@ -1,11 +1,13 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'docs_repository.dart';
 import 'kitchen_docs.dart';
 import 'photo_store.dart';
+import 'push_service.dart';
 import 'remote_store.dart';
 import 'sync_service.dart' show isOfflineError;
 
@@ -49,6 +51,9 @@ abstract interface class RemoteDocs {
   });
 
   Future<Uint8List> downloadPhoto(String remotePath);
+
+  /// Dá vědět ostatním v rodině (oznámení do zavřené aplikace).
+  Future<void> announce(List<Map<String, String>> items);
 }
 
 /// Synchronizace deníku vaření, plánu vaření a nákupního seznamu.
@@ -94,6 +99,7 @@ class DocsSync {
     var pulled = 0;
     var pushed = 0;
     final news = <FamilyNews>[];
+    final announce = <Map<String, String>>[];
     String? household;
     try {
       household = await remote.householdId();
@@ -181,6 +187,9 @@ class DocsSync {
           await remote.push(kind, fresh, householdId: household);
           await docs.markClean(doc.id, doc.updatedAt);
           pushed++;
+          if (await _announcement(kind, doc) case final item?) {
+            announce.add(item);
+          }
         }
       } on DocsNotSupported {
         return (
@@ -200,6 +209,14 @@ class DocsSync {
     }
 
     if (!offline) await _cacheSessionPhotos();
+    if (!offline && announce.isNotEmpty) {
+      try {
+        await remote.announce(announce);
+      } catch (error) {
+        // Oznámení jsou bonus – synchronizaci kvůli nim nezastavíme.
+        debugPrint('Oznámení rodině se nepodařilo odeslat: $error');
+      }
+    }
     return (
       errors: errors,
       offline: offline,
@@ -207,6 +224,29 @@ class DocsSync {
       pushed: pushed,
       news: news,
     );
+  }
+
+  /// Nové přání nebo položka na nákup, o které se ještě rodině neřeklo.
+  /// Staré záznamy (starší 6 hodin) se neohlašují – ani po aktualizaci.
+  Future<Map<String, String>?> _announcement(String kind, DirtyDoc doc) async {
+    if (doc.deletedAt != null) return null;
+    if (kind != DocKind.wish && kind != DocKind.shopping) return null;
+    final d = doc.data;
+    final title =
+        ((kind == DocKind.wish ? d['title'] : d['name']) as String? ?? '')
+            .trim();
+    if (title.isEmpty) return null;
+    if (kind == DocKind.wish && d['planned_day'] != null) return null;
+    if (kind == DocKind.shopping && d['checked'] == true) return null;
+    final created = DateTime.tryParse(d['created_at'] as String? ?? '');
+    if (created == null ||
+        docs.now().difference(created.toUtc()) > const Duration(hours: 6)) {
+      return null;
+    }
+    final key = 'announced:${doc.id}';
+    if (await docs.getMeta(key) != null) return null;
+    await docs.setMeta(key, '1');
+    return {'kind': kind == DocKind.wish ? 'wish' : 'shopping', 'title': title};
   }
 
   Future<void> _uploadSessionPhotos(String id, CookingSession session) async {
@@ -387,6 +427,7 @@ class SupabaseRemoteDocs implements RemoteDocs {
       },
       _ => {
         'id': row['id'],
+        'added_by': row['added_by'],
         'list_id': row['list_id'],
         'name': row['name'],
         'quantity': row['quantity'],
@@ -547,6 +588,10 @@ class SupabaseRemoteDocs implements RemoteDocs {
   Future<Uint8List> downloadPhoto(String remotePath) => _client.storage
       .from(SupabaseRemoteStore.photoBucket)
       .download(remotePath);
+
+  @override
+  Future<void> announce(List<Map<String, String>> items) =>
+      PushService(_client).announce(items);
 }
 
 /// Co přidal někdo jiný z rodiny (nebo jiné zařízení): přání nebo položka
@@ -572,7 +617,7 @@ class FamilyNews {
       );
     }
     if (kind == DocKind.shopping) {
-      if (data['checked'] == true) return null;
+      if (data['checked'] == true || data['added_by'] == uid) return null;
       final name = (data['name'] as String? ?? '').trim();
       if (name.isEmpty) return null;
       return FamilyNews(kind: kind, title: name);

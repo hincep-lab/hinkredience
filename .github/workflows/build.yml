@@ -45,7 +45,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check supabase/functions/ai/index.ts supabase/functions/mcp/index.ts
+      - run: deno check supabase/functions/ai/index.ts supabase/functions/mcp/index.ts supabase/functions/push/index.ts
       - run: deno test supabase/functions
 
   android:
