@@ -83,15 +83,60 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
         maxHeight: 2400,
         imageQuality: 90,
       );
-      if (picked != null && mounted) setState(() => _photo = picked);
+      if (picked != null && mounted) {
+        setState(() {
+          _photo = picked;
+          _error = null;
+        });
+      }
     } on PlatformException catch (error) {
+      if (mounted) {
+        showMessage(context, _pickerErrorMessage(error, source));
+      }
+    } catch (_) {
       if (mounted) {
         showMessage(
           context,
-          'Fotografii se nepodařilo načíst: ${error.message ?? error.code}',
+          'Fotografii se nepodařilo načíst. Zkuste to prosím znovu.',
         );
       }
     }
+  }
+
+  /// Srozumitelná zpráva místo technické chyby výběru fotky.
+  String _pickerErrorMessage(PlatformException error, ImageSource source) {
+    final code = error.code.toLowerCase();
+    if (code.contains('camera_access_denied')) {
+      return 'Aplikace nemá povolený fotoaparát. Povolte ho v Nastavení '
+          'telefonu → Aplikace → HINKredience° → Oprávnění.';
+    }
+    if (code.contains('photo_access_denied') ||
+        code.contains('access_denied')) {
+      return 'Aplikace nemá přístup k fotkám. Povolte ho v Nastavení '
+          'telefonu → Aplikace → HINKredience° → Oprávnění.';
+    }
+    if (code.contains('no_available_camera')) {
+      return 'Fotoaparát není k dispozici. Vyberte fotku z galerie.';
+    }
+    return source == ImageSource.camera
+        ? 'Vyfotit se nepodařilo. Zkuste to znovu nebo vyberte fotku z galerie.'
+        : 'Fotografii se nepodařilo načíst. Zkuste to znovu nebo vyberte '
+              'jinou.';
+  }
+
+  /// Chyba importu pro uživatele (bez technických výpisů).
+  String _friendlyError(Object error) {
+    if (error is OcrException) return error.message;
+    if (error is PlatformException) {
+      return 'Text z fotky se nepodařilo přečíst. Zkuste to znovu, případně '
+          'vyberte jinou nebo ostřejší fotku.';
+    }
+    final text = error.toString().replaceFirst('Exception: ', '');
+    // Technické výpisy (třídy Javy, zásobníky) uživateli neukazujeme.
+    if (RegExp(r'java\.|\.kt|Exception|Error:|null object').hasMatch(text)) {
+      return 'Něco se nepovedlo. Zkuste to prosím znovu.';
+    }
+    return text;
   }
 
   void _review(DraftProposal proposal) {
@@ -149,9 +194,9 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
           final photo = _photo;
           if (photo == null) throw Exception('Nejdřív přidejte fotografii.');
           if (!ocrAvailable) {
-            throw Exception(
-              'Čtení textu z fotky funguje v aplikaci v telefonu, ve webové '
-              'verzi ne.',
+            throw const OcrException(
+              'Čtení textu z fotky se nenačetlo. Zavřete aplikaci, otevřete '
+              'ji znovu a zkuste to ještě jednou.',
             );
           }
           final text = await readTextFromImage(photo.path);
@@ -230,7 +275,8 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
     final aiAvailable = ref.watch(aiServiceProvider) != null;
     final error = _error;
     final photoHint = kIsWeb
-        ? 'Čtení textu z fotky funguje v aplikaci v telefonu.'
+        ? 'Vyfoťte nebo vyberte fotku receptu. Text se přečte přímo '
+              'v prohlížeči, bez AI. Poprvé se stáhne čtečka textu (asi 9 MB).'
         : 'Vyfoťte stránku z kuchařky nebo lísteček. Text se přečte přímo '
               'v telefonu, bez internetu a bez AI.';
 
@@ -289,7 +335,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
               ),
             ),
             _Source.photo => HkCard(
-              onTap: _busy || (kIsWeb && !_useAi) ? null : _pickPhoto,
+              onTap: _busy ? null : _pickPhoto,
               padding: const EdgeInsets.all(20),
               child: Row(
                 children: [
@@ -357,9 +403,35 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
             _useAi
                 ? AiErrorCard(error: error)
                 : HkCard(
-                    child: Text(
-                      error.toString().replaceFirst('Exception: ', ''),
-                      style: const TextStyle(color: AppColors.danger),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          _friendlyError(error),
+                          style: const TextStyle(
+                            color: AppColors.danger,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : _import,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('Zkusit znovu'),
+                            ),
+                            if (_source == _Source.photo)
+                              OutlinedButton.icon(
+                                onPressed: _busy ? null : _pickPhoto,
+                                icon: const Icon(Icons.add_a_photo_outlined),
+                                label: const Text('Vybrat jinou fotku'),
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
           ],

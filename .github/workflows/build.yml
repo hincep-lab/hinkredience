@@ -146,6 +146,10 @@ jobs:
           --dart-define=BUILD_NUMBER=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
+      - name: Čtení textu z fotky v prohlížeči (Tesseract, čeština)
+        run: |
+          npm ci --prefix tool/web_ocr --ignore-scripts --no-audit --no-fund
+          tool/web_ocr/copy.sh build/web
       - name: APK pro aktualizaci jedním klepnutím
         uses: actions/download-artifact@v4
         with:
@@ -211,6 +215,9 @@ jobs:
       - name: Úklid po sestavení
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk ocr-probe.apk
+          cp build/app/outputs/mapping/release/mapping.txt ocr-mapping.txt || true
+          flutter build apk --profile --target-platform android-x64 -t integration_test/ocr_probe.dart
+          cp build/app/outputs/flutter-apk/app-profile.apk ocr-probe-profile.apk
           rm -rf build ~/.gradle/caches/transforms-* ~/.gradle/caches/build-cache-* || true
           df -h /
       - name: Zapnutí KVM pro emulátor
@@ -227,18 +234,29 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
+            adb install -r ocr-probe-profile.apk
+            adb logcat -c
+            adb shell am start -n cz.hink.hinkredience/.MainActivity
+            for i in $(seq 1 90); do sleep 2; if adb logcat -d | grep -q "HINK_OCR DONE"; then break; fi; done
+            adb logcat -d > logcat-profile.txt || true
+            echo "===== PROFILE (bez R8) =====" && grep -E "HINK_OCR" logcat-profile.txt | head -60
+            adb uninstall cz.hink.hinkredience || true
             adb install -r ocr-probe.apk
             adb logcat -c
             adb shell am start -n cz.hink.hinkredience/.MainActivity
             for i in $(seq 1 90); do sleep 2; if adb logcat -d | grep -q "HINK_OCR DONE"; then break; fi; done
             adb logcat -d > logcat.txt || true
-            grep -E "HINK_OCR|AndroidRuntime|mlkit|MLKit|TextRecognizer|InputImage|ImageError|NullPointer|getClass" logcat.txt | head -200
+            echo "===== RELEASE (R8) =====" && grep -E "HINK_OCR" logcat.txt | head -60
+            echo "===== NATIVNI ZASOBNIK =====" && grep -A40 "E MethodChannel#google_mlkit_text_recognizer" logcat.txt | head -60 | tee stack.txt
+            echo "===== PO ODSIFROVANI (retrace) =====" && (R=$(ls $ANDROID_HOME/cmdline-tools/*/bin/retrace 2>/dev/null | head -1); if [ -n "$R" ] && [ -f ocr-mapping.txt ]; then sed 's/^.*E MethodChannel#google_mlkit_text_recognizer: //' stack.txt | $R ocr-mapping.txt | head -60; else echo "retrace neni k dispozici"; fi)
             grep -q "HINK_OCR PASS" logcat.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ocr-logcat
-          path: logcat.txt
+          path: |
+            logcat.txt
+            logcat-profile.txt
           if-no-files-found: ignore
 
   ios:

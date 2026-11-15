@@ -1,0 +1,10 @@
+{
+  "name": "hinkredience-web-ocr",
+  "private": true,
+  "description": "Soubory čtečky textu (Tesseract) pro webovou verzi – kopírují se do build/web/ocr v CI.",
+  "dependencies": {
+    "@tesseract.js-data/ces": "1.0.0",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "6.1.2"
+  }
+}

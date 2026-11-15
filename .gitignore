@@ -50,3 +50,4 @@ app.*.map.json
 # Webová verze – SQLite (WebAssembly) se stahuje při sestavení
 /web/sqlite3.wasm
 /web/sqflite_sw.js
+tool/web_ocr/node_modules/
