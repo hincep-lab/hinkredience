@@ -479,3 +479,74 @@ test('migrace 08 jde spustit znovu bez chyby', async () => {
   await db.exec(sql);
   await db.exec(sql);
 });
+
+test('rodina: přidání člena e-mailem, společný nákupní seznam a plán', async () => {
+  await db.exec(`insert into auth.users (id, email) values
+    ('55555555-5555-5555-5555-555555555555', 'babicka@example.cz') on conflict do nothing`);
+  const BABICKA = '55555555-5555-5555-5555-555555555555';
+  const hh = await as(PAVEL, `insert into public.households (name) values ('Rodina 09') returning id`);
+  const hid = hh.rows[0].id;
+
+  // Člena přidá jen zakladatel; neznámý e-mail se nepřidá.
+  await assert.rejects(
+    as(BABICKA, `select public.household_add_member($1, 'pavel@example.cz')`, [hid]),
+    /jen zakladatel/,
+  );
+  await assert.rejects(
+    as(PAVEL, `select public.household_add_member($1, 'nikdo@example.cz')`, [hid]),
+    /zatím není/,
+  );
+  const added = await as(PAVEL, `select public.household_add_member($1, ' Babicka@Example.cz ') as r`, [hid]);
+  assert.equal(added.rows[0].r.user_id, BABICKA);
+  assert.equal(added.rows[0].r.email, undefined, 'e-mail se nevrací');
+
+  // Společný nákupní seznam: oba dostanou stejný.
+  const babickaHouse = await as(BABICKA, `select public.my_household() as h`);
+  const myHouse = (await as(PAVEL, `select public.my_household() as h`)).rows[0].h;
+  // Pavel může být i v dřívějších domácnostech z jiných testů – ověříme, že
+  // babička je právě v této.
+  assert.equal(babickaHouse.rows[0].h, hid);
+  const listB = (await as(BABICKA, `select public.my_shopping_list() as l`)).rows[0].l;
+  const listB2 = (await as(BABICKA, `select public.my_shopping_list() as l`)).rows[0].l;
+  assert.equal(listB, listB2, 'seznam se nezakládá opakovaně');
+  await as(BABICKA, `insert into public.shopping_items (list_id, name, sources) values ($1, 'Mouka', '["Buchty"]')`, [listB]);
+  if (myHouse === hid) {
+    const listP = (await as(PAVEL, `select public.my_shopping_list() as l`)).rows[0].l;
+    assert.equal(listP, listB);
+  }
+  const pavelSees = await as(PAVEL, `select name, sources from public.shopping_items where list_id = $1`, [listB]);
+  assert.deepEqual(pavelSees.rows.map((r) => r.name), ['Mouka'], 'člen domácnosti vidí společný nákup');
+  const ciziSees = await as(CIZI, `select name from public.shopping_items where list_id = $1`, [listB]);
+  assert.equal(ciziSees.rows.length, 0);
+
+  // Plán vaření sdílený s rodinou vidí oba, cizí ne; měkké mazání a kurzor změn.
+  const plan = await as(BABICKA,
+    `insert into public.meal_plans (plan_date, meal_type, title, household_id, servings)
+     values ('2026-11-16', 'lunch', 'Svíčková', $1, 6) returning id, synced_at`, [hid]);
+  const seenByPavel = await as(PAVEL, `select title, servings from public.meal_plans where id = $1`, [plan.rows[0].id]);
+  assert.equal(seenByPavel.rows[0].title, 'Svíčková');
+  assert.equal(Number(seenByPavel.rows[0].servings), 6);
+  assert.equal((await as(CIZI, `select 1 from public.meal_plans where id = $1`, [plan.rows[0].id])).rows.length, 0);
+  await as(PAVEL, `update public.meal_plans set deleted_at = now() where id = $1`, [plan.rows[0].id]);
+  const after = await as(BABICKA, `select deleted_at, synced_at from public.meal_plans where id = $1`, [plan.rows[0].id]);
+  assert.ok(after.rows[0].deleted_at);
+  assert.ok(after.rows[0].synced_at >= plan.rows[0].synced_at);
+});
+
+test('kuchařský deník: osobní, s poznámkami a měkkým mazáním', async () => {
+  const s = await as(PAVEL,
+    `insert into public.cooking_sessions (recipe_title, rating, notes, went_well, to_improve, actual_minutes, version_number)
+     values ('Pizza', 4.5, 'Kynuto 20 h', 'Kůrka', 'Méně soli', 1234, 2) returning id`);
+  const id = s.rows[0].id;
+  const mine = await as(PAVEL, `select notes, actual_minutes, version_number from public.cooking_sessions where id = $1`, [id]);
+  assert.equal(mine.rows[0].notes, 'Kynuto 20 h');
+  assert.equal(mine.rows[0].actual_minutes, 1234);
+  assert.equal((await as(CIZI, `select 1 from public.cooking_sessions where id = $1`, [id])).rows.length, 0);
+  await denied(as(CIZI, `insert into public.cooking_sessions (user_id, recipe_title) values ($1, 'X')`, [PAVEL]));
+});
+
+test('migrace 09 jde spustit znovu bez chyby', async () => {
+  const sql = readFileSync(join(migrationsDir, '20261115000009_family_diary_plan_shopping.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});

@@ -14,13 +14,21 @@ import 'draft_review_screen.dart';
 /// Chat s AI kuchařem. Konverzace se ukládá na serveru, takže se k ní
 /// dá vrátit; AI při odpovědi vychází z uložených preferencí a vybavení.
 class AiChatScreen extends ConsumerStatefulWidget {
-  const AiChatScreen({super.key, this.conversationId, this.recipeId});
+  const AiChatScreen({
+    super.key,
+    this.conversationId,
+    this.recipeId,
+    this.draft,
+  });
 
   /// Pokračování uložené konverzace.
   final String? conversationId;
 
   /// Recept, který se k první zprávě přiloží.
   final String? recipeId;
+
+  /// Předvyplněná zpráva (uživatel ji sám odešle).
+  final String? draft;
 
   @override
   ConsumerState<AiChatScreen> createState() => _AiChatScreenState();
@@ -44,6 +52,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     super.initState();
     _conversationId = widget.conversationId;
     _attachRecipe = widget.recipeId != null;
+    if (widget.draft != null) _input.text = widget.draft!;
     if (_conversationId != null) _loadHistory();
   }
 

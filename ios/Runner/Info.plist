@@ -72,6 +72,10 @@
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>HINKredience potřebuje přístup k fotkám, abyste mohli k receptům přidávat obrázky jídel.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>HINKredience poslouchá hlasové povely při vaření (další krok, časovač) jen po stisknutí mikrofonu.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Hlasové povely při vaření se převádějí na text, aby šlo ovládat postup bez dotyku.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>HINKredience potřebuje fotoaparát, abyste mohli vyfotit uvařené jídlo k receptu.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

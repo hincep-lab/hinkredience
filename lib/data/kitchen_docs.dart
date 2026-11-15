@@ -1,5 +1,10 @@
 import 'dart:math' as math;
 
+import '../core/cook_timer.dart';
+import 'recipe.dart';
+
+export '../core/cook_timer.dart' show CookTimer, CookTimers;
+
 /// Druhy záznamů v tabulce `docs`.
 abstract final class DocKind {
   static const session = 'cooking_session';
@@ -26,99 +31,6 @@ abstract final class SessionStatus {
   static const paused = 'paused';
   static const finished = 'finished';
   static const cancelled = 'cancelled';
-}
-
-/// Kuchyňský časovač.
-///
-/// Běžící časovač si pamatuje okamžik konce ([endsAt]), ne počet zbývajících
-/// vteřin – díky tomu ukazuje správně i po zavření a znovuotevření aplikace.
-class CookTimer {
-  const CookTimer({
-    required this.id,
-    required this.label,
-    required this.durationSeconds,
-    this.stepIndex,
-    this.endsAt,
-    this.remainingSeconds,
-    this.acknowledged = false,
-  });
-
-  final String id;
-  final String label;
-  final int durationSeconds;
-
-  /// Krok receptu, ke kterému časovač patří.
-  final int? stepIndex;
-
-  /// Konec běžícího časovače; `null`, když je pozastavený.
-  final DateTime? endsAt;
-
-  /// Zbývající čas pozastaveného časovače.
-  final int? remainingSeconds;
-
-  /// Uživatel už dozvonění potvrdil.
-  final bool acknowledged;
-
-  bool get isRunning => endsAt != null;
-
-  int remaining(DateTime now) => endsAt != null
-      ? math.max(0, (endsAt!.difference(now).inMilliseconds / 1000).ceil())
-      : math.max(0, remainingSeconds ?? durationSeconds);
-
-  bool isDone(DateTime now) => endsAt != null && !now.isBefore(endsAt!);
-
-  /// Číslo oznámení v systému (stabilní pro daný časovač).
-  int get notificationId => id.hashCode & 0x3fffffff;
-
-  CookTimer pause(DateTime now) => isRunning && !isDone(now)
-      ? CookTimer(
-          id: id,
-          label: label,
-          durationSeconds: durationSeconds,
-          stepIndex: stepIndex,
-          remainingSeconds: remaining(now),
-        )
-      : this;
-
-  CookTimer resume(DateTime now) => isRunning
-      ? this
-      : CookTimer(
-          id: id,
-          label: label,
-          durationSeconds: durationSeconds,
-          stepIndex: stepIndex,
-          endsAt: now.add(Duration(seconds: remaining(now))),
-        );
-
-  CookTimer acknowledge() => CookTimer(
-    id: id,
-    label: label,
-    durationSeconds: durationSeconds,
-    stepIndex: stepIndex,
-    endsAt: endsAt,
-    remainingSeconds: remainingSeconds,
-    acknowledged: true,
-  );
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'label': label,
-    'duration_seconds': durationSeconds,
-    'step_index': ?stepIndex,
-    'ends_at': ?_iso(endsAt),
-    'remaining_seconds': ?remainingSeconds,
-    if (acknowledged) 'acknowledged': true,
-  };
-
-  factory CookTimer.fromJson(Map<String, dynamic> json) => CookTimer(
-    id: json['id'] as String? ?? '',
-    label: json['label'] as String? ?? '',
-    durationSeconds: (json['duration_seconds'] as num?)?.toInt() ?? 0,
-    stepIndex: (json['step_index'] as num?)?.toInt(),
-    endsAt: _date(json['ends_at']),
-    remainingSeconds: (json['remaining_seconds'] as num?)?.toInt(),
-    acknowledged: json['acknowledged'] == true,
-  );
 }
 
 /// Jedno vaření: rozpracované (režim Vaříme spolu) i dokončené (zápis
@@ -177,8 +89,8 @@ class CookingSession {
   final int? actualMinutes;
   final List<String> actualTemperatures;
 
-  /// Relativní cesty fotografií ve složce aplikace.
-  final List<String> photos;
+  /// Fotky hotového jídla.
+  final List<RecipePhoto> photos;
   final double? rating;
   final String notes;
   final String wentWell;
@@ -191,7 +103,9 @@ class CookingSession {
   /// Čistý čas vaření bez přestávek.
   int elapsedSeconds(DateTime now) =>
       activeSeconds +
-      (resumedAt == null ? 0 : math.max(0, now.difference(resumedAt!).inSeconds));
+      (resumedAt == null
+          ? 0
+          : math.max(0, now.difference(resumedAt!).inSeconds));
 
   static const _keep = Object();
 
@@ -209,7 +123,7 @@ class CookingSession {
     List<CookTimer>? timers,
     Object? actualMinutes = _keep,
     List<String>? actualTemperatures,
-    List<String>? photos,
+    List<RecipePhoto>? photos,
     Object? rating = _keep,
     String? notes,
     String? wentWell,
@@ -257,7 +171,7 @@ class CookingSession {
     'timers': [for (final timer in timers) timer.toJson()],
     'actual_minutes': ?actualMinutes,
     'actual_temperatures': actualTemperatures,
-    'photos': photos,
+    'photos': [for (final photo in photos) photo.toJson()],
     'rating': ?rating,
     'notes': notes,
     'went_well': wentWell,
@@ -281,11 +195,17 @@ class CookingSession {
       timers: [
         if (json['timers'] is List)
           for (final item in json['timers'] as List)
-            if (item is Map) CookTimer.fromJson(Map<String, dynamic>.from(item)),
+            if (item is Map)
+              CookTimer.fromJson(Map<String, dynamic>.from(item)),
       ],
       actualMinutes: (json['actual_minutes'] as num?)?.toInt(),
       actualTemperatures: _strings(json['actual_temperatures']),
-      photos: _strings(json['photos']),
+      photos: [
+        if (json['photos'] is List)
+          for (final item in json['photos'] as List)
+            if (item is Map && item['id'] is String)
+              RecipePhoto.fromJson(Map<String, dynamic>.from(item)),
+      ],
       rating: (json['rating'] as num?)?.toDouble(),
       notes: json['notes'] as String? ?? '',
       wentWell: json['went_well'] as String? ?? '',
@@ -331,6 +251,9 @@ class MealPlanEntry {
     this.recipeId,
     this.title = '',
     this.note = '',
+    this.servings,
+    this.ownerId,
+    this.householdId,
   });
 
   final String id;
@@ -343,7 +266,35 @@ class MealPlanEntry {
   /// Název jídla (u receptu jeho název v době plánování).
   final String title;
   final String note;
+
+  /// Na kolik porcí / kusů se má vařit (`null` = podle receptu).
+  final double? servings;
+
+  /// Kdo jídlo naplánoval a s jakou domácností je plán sdílený (ze serveru).
+  final String? ownerId;
+  final String? householdId;
   final DateTime updatedAt;
+
+  MealPlanEntry copyWith({
+    String? day,
+    String? mealType,
+    String? recipeId,
+    String? title,
+    String? note,
+    double? servings,
+    DateTime? updatedAt,
+  }) => MealPlanEntry(
+    id: id,
+    day: day ?? this.day,
+    mealType: mealType ?? this.mealType,
+    recipeId: recipeId ?? this.recipeId,
+    title: title ?? this.title,
+    note: note ?? this.note,
+    servings: servings ?? this.servings,
+    ownerId: ownerId,
+    householdId: householdId,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -352,6 +303,9 @@ class MealPlanEntry {
     'recipe_id': ?recipeId,
     'title': title,
     'note': note,
+    'servings': ?servings,
+    'owner_id': ?ownerId,
+    'household_id': ?householdId,
     'updated_at': _iso(updatedAt),
   };
 
@@ -362,6 +316,9 @@ class MealPlanEntry {
     recipeId: json['recipe_id'] as String?,
     title: json['title'] as String? ?? '',
     note: json['note'] as String? ?? '',
+    servings: (json['servings'] as num?)?.toDouble(),
+    ownerId: json['owner_id'] as String?,
+    householdId: json['household_id'] as String?,
     updatedAt:
         _date(json['updated_at']) ??
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),

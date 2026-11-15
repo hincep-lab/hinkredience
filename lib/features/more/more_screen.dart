@@ -11,8 +11,8 @@ const _buildNumber = String.fromEnvironment('BUILD_NUMBER');
 
 /// Verze aplikace včetně čísla sestavení z GitHub Actions, je-li známé.
 const appVersionLabel = _buildNumber == ''
-    ? 'Verze 1.4.0 · Etapa 3 – ChatGPT'
-    : 'Verze 1.4.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
+    ? 'Verze 1.5.0 · Etapa 4'
+    : 'Verze 1.5.0 · sestavení $_buildNumber · Etapa 4';
 
 /// Záložka „Více“: účet, synchronizace, koš, nastavení.
 class MoreScreen extends ConsumerWidget {
@@ -244,6 +244,24 @@ class MoreScreen extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
+                ListTile(
+                  leading: const Icon(Icons.group_outlined),
+                  title: const Text('Rodina'),
+                  subtitle: const Text(
+                    'Společné recepty, plán vaření a nákupní seznam',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Routes.family),
+                ),
+                const Divider(indent: 16, endIndent: 16),
+                ListTile(
+                  leading: const Icon(Icons.edit_note_rounded),
+                  title: const Text('Kuchařský deník'),
+                  subtitle: const Text('Historie vaření, výsledky, fotky'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Routes.diary),
+                ),
+                const Divider(indent: 16, endIndent: 16),
                 ListTile(
                   leading: const Icon(Icons.waving_hand_outlined),
                   title: const Text('Oslovení'),

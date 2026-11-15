@@ -10,6 +10,7 @@ import 'package:hinkredience/app/router.dart';
 import 'package:hinkredience/core/app_theme.dart';
 import 'package:hinkredience/core/material.dart';
 import 'package:hinkredience/core/screen_wake.dart';
+import 'package:hinkredience/data/docs_repository.dart';
 import 'package:hinkredience/data/photo_store.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
@@ -56,6 +57,9 @@ Future<GoRouter> pumpApp(
         // Databáze se v těchto testech nepoužívá – čeká se na ni „věčně“.
         recipeRepositoryProvider.overrideWith(
           (ref) => Completer<RecipeRepository>().future,
+        ),
+        docsRepositoryProvider.overrideWith(
+          (ref) => Completer<DocsRepository>().future,
         ),
         allRecipesProvider.overrideWith((ref) => Stream.value(recipes)),
         screenWakeProvider.overrideWithValue(screenWake),
@@ -122,15 +126,18 @@ void main() {
     expect(find.text('Přidej první recept'), findsNothing);
   });
 
-  testWidgets('funkce dalších etap jsou poctivě označené', (tester) async {
+  testWidgets('plán, nákup a deník jsou funkční, AI je poctivě vypnutá', (
+    tester,
+  ) async {
     await pumpApp(tester, location: Routes.home);
-    expect(find.text('Brzy'), findsNWidgets(3));
+    expect(find.text('Brzy'), findsNothing);
     // AI je placená a ve výchozím stavu vypnutá.
     expect(find.text('Vypnuto'), findsNWidgets(3));
 
     await tester.tap(find.text('Plán vaření'));
     await tester.pumpAndSettle();
-    expect(find.text('Připravujeme – Etapa 4'), findsOneWidget);
+    expect(find.text('Snídaně'), findsWidgets);
+    expect(find.byTooltip('Nakoupit na tento týden'), findsOneWidget);
   });
 
   testWidgets('seznam receptů: kategorie, hledání bez diakritiky', (

@@ -78,9 +78,7 @@ ShoppingMerge mergeShopping({
     if (name.isEmpty) continue;
     final key = _nameKey(name);
     final quantity = (draft.quantity ?? 0) > 0 ? draft.quantity : null;
-    final base = quantity == null
-        ? null
-        : toBaseUnit(quantity, draft.unit);
+    final base = quantity == null ? null : toBaseUnit(quantity, draft.unit);
 
     ShoppingItem? target;
     for (final id in order) {

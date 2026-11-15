@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
@@ -16,7 +17,10 @@ import '../../core/material.dart';
 import '../../core/screen_wake.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
+import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
+import '../kitchen/diary_screen.dart' show diaryDate;
+import '../kitchen/shopping_screen.dart' show recipeShoppingDrafts;
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -57,6 +61,81 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   /// Odškrtnuté (hotové) kroky postupu – příprava na režim vaření.
   final _doneSteps = <String>{};
   int _photoIndex = 0;
+
+  Future<void> _toShopping(Recipe recipe) async {
+    final servings = _servings ?? recipe.servings;
+    final docs = await ref.read(docsRepositoryProvider.future);
+    final result = await docs.addToShopping(
+      recipeShoppingDrafts(
+        title: recipe.title,
+        recipeServings: recipe.servings,
+        servings: servings,
+        ingredients: [
+          for (final i in recipe.ingredients)
+            (name: i.name, quantity: i.quantity, unit: i.unit),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Na nákupní seznam: ${result.added} nových, ${result.merged} sečteno '
+          '(${yieldLabel(servings, recipe.yieldUnit)}).',
+        ),
+        action: SnackBarAction(
+          label: 'Otevřít',
+          onPressed: () => context.push(Routes.shopping),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toPlan(Recipe recipe) async {
+    final now = DateTime.now();
+    final day = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: now.subtract(const Duration(days: 30)),
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'Kdy uvaříte „${recipe.title}“?',
+    );
+    if (day == null || !mounted) return;
+    final meal = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final type in MealType.all)
+              ListTile(
+                title: Text(MealType.label(type)),
+                onTap: () => Navigator.of(context).pop(type),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (meal == null) return;
+    final docs = await ref.read(docsRepositoryProvider.future);
+    await docs.saveMeal(
+      MealPlanEntry(
+        id: docs.newId(),
+        day: dayKey(day),
+        mealType: meal,
+        recipeId: recipe.id,
+        title: recipe.title,
+        servings: _servings ?? recipe.servings,
+        updatedAt: docs.now(),
+      ),
+    );
+    if (mounted) {
+      showMessage(
+        context,
+        'Naplánováno: ${MealType.label(meal)} ${day.day}. ${day.month}.',
+      );
+    }
+  }
 
   Future<void> _toggleFavorite(Recipe recipe) async {
     final repository = await ref.read(recipeRepositoryProvider.future);
@@ -252,6 +331,9 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 onSelected: (value) => switch (value) {
                   'edit' => context.push(Routes.editRecipe(recipe.id)),
                   'photos' => context.push(Routes.recipePhotos(recipe.id)),
+                  'shopping' => _toShopping(recipe),
+                  'plan' => _toPlan(recipe),
+                  'diary' => context.push(Routes.diaryFor(recipe.id)),
                   'ai_improve' => _improve(recipe, withWeb: false),
                   'ai_web' => _improve(recipe, withWeb: true),
                   'ai_chat' => context.push(Routes.aiChat(recipeId: recipe.id)),
@@ -271,6 +353,20 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                       value: 'photos',
                       child: Text('Fotografie'),
                     ),
+                  if (!recipe.isDeleted)
+                    const PopupMenuItem(
+                      value: 'shopping',
+                      child: Text('Na nákupní seznam'),
+                    ),
+                  if (!recipe.isDeleted)
+                    const PopupMenuItem(
+                      value: 'plan',
+                      child: Text('Naplánovat'),
+                    ),
+                  const PopupMenuItem(
+                    value: 'diary',
+                    child: Text('Historie vaření'),
+                  ),
                   if (!recipe.isDeleted && aiEnabled) ...const [
                     PopupMenuItem(
                       value: 'ai_improve',
@@ -355,6 +451,17 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                       ),
                   ],
                 ),
+                if (!recipe.isDeleted) ...[
+                  const SizedBox(height: 14),
+                  CopperButton(
+                    label: 'Vařit krok za krokem',
+                    icon: Icons.restaurant_rounded,
+                    onPressed: () => context.push(
+                      Routes.cook(recipe.id, servings: _servings),
+                    ),
+                  ),
+                  _CookedLine(recipe: recipe),
+                ],
                 _ConflictBanner(recipe: recipe),
                 if (recipe.isDeleted) ...[
                   const SizedBox(height: 12),
@@ -424,6 +531,39 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Kolikrát se recept vařil a jak dopadl naposledy (z deníku).
+class _CookedLine extends ConsumerWidget {
+  const _CookedLine({required this.recipe});
+
+  final Recipe recipe;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final history = ref.watch(recipeDiaryProvider(recipe.id)).value ?? const [];
+    if (history.isEmpty) return const SizedBox.shrink();
+    final last = history.first;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: InkWell(
+        onTap: () => context.push(Routes.diaryFor(recipe.id)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Text(
+            'Vařeno ${history.length}× · naposledy ${diaryDate(last.cookedAt)}'
+            '${last.toImprove.isEmpty ? '' : ' · zlepšit: ${last.toImprove}'}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+            ),
+          ),
+        ),
       ),
     );
   }
