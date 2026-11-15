@@ -26,6 +26,20 @@ class PhotoStore {
     return RecipePhoto(id: photoId, localPath: relative);
   }
 
+  /// Smaže z telefonu soubory fotografií (relativní cesty z databáze).
+  /// Chybějící soubor není chyba.
+  Future<void> deleteFiles(Iterable<String> relativePaths) async {
+    for (final relative in relativePaths) {
+      if (relative.isEmpty || relative.contains('..')) continue;
+      final file = File(p.join(baseDirectory.path, relative));
+      try {
+        if (await file.exists()) await file.delete();
+      } on FileSystemException {
+        // Soubor nejde smazat (např. je právě otevřený) – zkusí se příště.
+      }
+    }
+  }
+
   /// Soubor fotografie v telefonu, pokud existuje.
   File? localFile(RecipePhoto photo) {
     final relative = photo.localPath;

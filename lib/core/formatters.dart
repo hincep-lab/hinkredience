@@ -1,6 +1,8 @@
 /// Formátování čísel, množství a časů po česku.
 library;
 
+import 'recipe_time.dart';
+
 /// Množství suroviny: nejvýše 2 desetinná místa, desetinná čárka, bez zbytečných nul.
 /// `2.0 → "2"`, `0.5 → "0,5"`, `1.333 → "1,33"`.
 String formatQuantity(double value) {
@@ -33,26 +35,25 @@ double? parseQuantity(String input) {
   return value;
 }
 
-/// Přepočet množství na jiný počet porcí.
+/// Přepočet množství na jiný počet porcí (bez zaokrouhlení).
 double? scaleQuantity(
   double? quantity, {
   required double fromServings,
   required double toServings,
 }) {
   if (quantity == null) return null;
-  if (fromServings <= 0) return quantity;
-  return quantity * toServings / fromServings;
+  return quantity * scaleFactor(fromServings, toServings);
 }
 
-/// Délka v minutách: `45 → "45 min"`, `60 → "1 h"`, `90 → "1 h 30 min"`.
-String formatMinutes(int minutes) {
-  if (minutes <= 0) return '0 min';
-  final hours = minutes ~/ 60;
-  final rest = minutes % 60;
-  if (hours == 0) return '$rest min';
-  if (rest == 0) return '$hours h';
-  return '$hours h $rest min';
+/// Poměr nového a původního počtu porcí; neplatné vstupy dávají 1.
+double scaleFactor(double fromServings, double toServings) {
+  if (fromServings <= 0 || toServings <= 0) return 1;
+  return toServings / fromServings;
 }
+
+/// Délka v minutách: `45 → "45 min"`, `90 → "1 h 30 min"`,
+/// `1234 → "20 h 34 min"`, `2940 → "2 dny 1 h"`.
+String formatMinutes(int minutes) => formatDuration(minutes);
 
 /// Datum ve tvaru `14. 11. 2026`.
 String formatDate(DateTime date) {

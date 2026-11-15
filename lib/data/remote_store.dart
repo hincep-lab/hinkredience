@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/kitchen_math.dart';
+import '../core/recipe_time.dart';
 import 'recipe.dart';
 
 /// Výsledek stažení změn ze serveru.
@@ -10,6 +12,7 @@ class RemoteChange {
     required this.recipe,
     required this.syncedAt,
     this.versions = const [],
+    this.legacySchema = false,
   });
 
   final Recipe recipe;
@@ -17,6 +20,10 @@ class RemoteChange {
   /// Serverový čas změny – slouží jako kurzor pro příští stažení.
   final DateTime syncedAt;
   final List<RecipeVersion> versions;
+
+  /// Server ještě nemá sloupce přidané migrací 07 (výtěžnost, čekání, druh
+  /// kroků). Místní hodnoty těchto polí se pak při stažení nepřepisují.
+  final bool legacySchema;
 }
 
 /// Vzdálené úložiště receptů. Rozhraní existuje proto, aby šla synchronizace
@@ -41,6 +48,10 @@ abstract interface class RemoteStore {
 
   /// Dočasná adresa pro zobrazení fotografie.
   Future<String?> signedPhotoUrl(String remotePath);
+
+  /// Natrvalo smaže recept (včetně surovin, kroků a historie) a jeho
+  /// fotografie. Smazání neexistujícího receptu není chyba.
+  Future<void> deleteRecipe(String id, List<String> photoPaths);
 }
 
 /// Implementace nad Supabase (PostgreSQL + Storage).
@@ -68,8 +79,10 @@ class SupabaseRemoteStore implements RemoteStore {
       'description': recipe.description,
       'category': recipe.category,
       'servings': recipe.servings,
+      'yield_unit': YieldUnit.normalize(recipe.yieldUnit),
       'prep_minutes': recipe.prepMinutes,
       'cook_minutes': recipe.cookMinutes,
+      'rest_minutes': recipe.restMinutes,
       'total_minutes': recipe.totalMinutes,
       'temperatures': recipe.temperatures,
       'equipment': recipe.equipment,
@@ -88,12 +101,32 @@ class SupabaseRemoteStore implements RemoteStore {
       'deleted_at': recipe.deletedAt?.toUtc().toIso8601String(),
     };
 
-    if (owner == uid) {
-      await _client.from('recipes').upsert(row);
-    } else {
-      // Sdílený recept jiného člena domácnosti: smíme ho upravit, ne založit.
-      row.remove('owner_id');
-      await _client.from('recipes').update(row).eq('id', recipe.id);
+    Future<void> writeRow() async {
+      if (owner == uid) {
+        await _client.from('recipes').upsert(row);
+      } else {
+        // Sdílený recept jiného člena domácnosti: smíme ho upravit, ne založit.
+        final shared = Map<String, dynamic>.from(row)..remove('owner_id');
+        await _client.from('recipes').update(shared).eq('id', recipe.id);
+      }
+    }
+
+    // Server bez migrace 07 nové sloupce nezná; recept se pak odešle bez
+    // nich, aby synchronizace fungovala i před spuštěním migrace.
+    var legacy = _legacySchema;
+    if (legacy)
+      row
+        ..remove('yield_unit')
+        ..remove('rest_minutes');
+    try {
+      await writeRow();
+    } on PostgrestException catch (error) {
+      if (legacy || !isMissingColumnError(error)) rethrow;
+      legacy = _legacySchema = true;
+      row
+        ..remove('yield_unit')
+        ..remove('rest_minutes');
+      await writeRow();
     }
 
     await _client
@@ -126,9 +159,27 @@ class SupabaseRemoteStore implements RemoteStore {
             'instruction': recipe.steps[i].instruction,
             'duration_minutes': recipe.steps[i].durationMinutes,
             'temperature_c': recipe.steps[i].temperatureC,
+            if (!legacy) 'kind': StepKind.normalize(recipe.steps[i].kind),
+            if (!legacy) 'parallel': recipe.steps[i].parallel,
           },
       ]);
     }
+  }
+
+  /// Zjištěno, že server nemá sloupce z migrace 07. Platí do restartu
+  /// aplikace; po spuštění migrace se nové sloupce začnou používat samy.
+  bool _legacySchema = false;
+
+  @override
+  Future<void> deleteRecipe(String id, List<String> photoPaths) async {
+    if (photoPaths.isNotEmpty) {
+      try {
+        await _client.storage.from(photoBucket).remove(photoPaths);
+      } on StorageException {
+        // Fotografie mohla být smazána už dřív; recept smažeme i tak.
+      }
+    }
+    await _client.from('recipes').delete().eq('id', id);
   }
 
   @override
@@ -200,6 +251,15 @@ class SupabaseRemoteStore implements RemoteStore {
   }
 }
 
+/// Hlásí server, že tabulka nemá některý z odesílaných sloupců?
+bool isMissingColumnError(PostgrestException error) {
+  final text = '${error.code} ${error.message}'.toLowerCase();
+  return text.contains('pgrst204') ||
+      text.contains('42703') ||
+      (text.contains('column') &&
+          (text.contains('could not find') || text.contains('does not exist')));
+}
+
 /// Převede řádek tabulky `recipes` (s vnořenými surovinami, kroky a verzemi)
 /// na doménový objekt. Samostatná funkce kvůli testům.
 RemoteChange remoteChangeFromRow(Map<String, dynamic> row) {
@@ -242,5 +302,6 @@ RemoteChange remoteChangeFromRow(Map<String, dynamic> row) {
     recipe: recipe,
     syncedAt: DateTime.parse(row['synced_at'] as String).toUtc(),
     versions: versions,
+    legacySchema: !row.containsKey('yield_unit'),
   );
 }

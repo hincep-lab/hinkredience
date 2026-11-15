@@ -7,7 +7,9 @@ import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
+import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import 'recipes_screen.dart' show categoryIcon;
@@ -53,6 +55,8 @@ class _StepDraft {
     String instruction = '',
     String minutes = '',
     String temperature = '',
+    this.kind = StepKind.auto,
+    this.parallel = false,
   }) : instruction = TextEditingController(text: instruction),
        minutes = TextEditingController(text: minutes),
        temperature = TextEditingController(text: temperature);
@@ -61,6 +65,12 @@ class _StepDraft {
   final TextEditingController instruction;
   final TextEditingController minutes;
   final TextEditingController temperature;
+
+  /// Druh kroku z hlediska času; prázdné = rozpoznat z textu.
+  String kind;
+
+  /// Krok běží současně s předchozím.
+  bool parallel;
 
   void dispose() {
     instruction.dispose();
@@ -76,7 +86,9 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   final _servings = TextEditingController(text: '4');
   final _prep = TextEditingController();
   final _cook = TextEditingController();
+  final _rest = TextEditingController();
   final _total = TextEditingController();
+  String _yieldUnit = YieldUnit.servings;
   final _notes = TextEditingController();
   final _source = TextEditingController();
   final _changeSummary = TextEditingController();
@@ -124,6 +136,8 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
         _servings.text = formatQuantity(recipe.servings);
         _prep.text = recipe.prepMinutes > 0 ? '${recipe.prepMinutes}' : '';
         _cook.text = recipe.cookMinutes > 0 ? '${recipe.cookMinutes}' : '';
+        _rest.text = recipe.restMinutes > 0 ? '${recipe.restMinutes}' : '';
+        _yieldUnit = YieldUnit.normalize(recipe.yieldUnit);
         _total.text = recipe.totalMinutes > 0 ? '${recipe.totalMinutes}' : '';
         _notes.text = recipe.notes;
         _source.text = recipe.sourceUrl ?? '';
@@ -155,6 +169,8 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
               temperature: step.temperatureC == null
                   ? ''
                   : formatQuantity(step.temperatureC!),
+              kind: step.kind,
+              parallel: step.parallel,
             ),
           );
         }
@@ -173,6 +189,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       _servings,
       _prep,
       _cook,
+      _rest,
       _total,
       _notes,
       _source,
@@ -373,8 +390,10 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       description: _description.text.trim(),
       category: _category,
       servings: parseQuantity(_servings.text) ?? 4,
+      yieldUnit: _yieldUnit,
       prepMinutes: int.tryParse(_prep.text.trim()) ?? 0,
       cookMinutes: int.tryParse(_cook.text.trim()) ?? 0,
+      restMinutes: int.tryParse(_rest.text.trim()) ?? 0,
       totalMinutes: int.tryParse(_total.text.trim()) ?? 0,
       temperatures: _temperatures,
       equipment: _equipment,
@@ -401,6 +420,8 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
               instruction: draft.instruction.text.trim(),
               durationMinutes: int.tryParse(draft.minutes.text.trim()),
               temperatureC: parseQuantity(draft.temperature.text),
+              kind: draft.kind,
+              parallel: draft.parallel,
             ),
       ],
     );
@@ -476,9 +497,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
     }
 
     final theme = Theme.of(context);
-    final autoTotal =
-        (int.tryParse(_prep.text.trim()) ?? 0) +
-        (int.tryParse(_cook.text.trim()) ?? 0);
+    final pieces = _yieldUnit == YieldUnit.pieces;
 
     return PopScope(
       canPop: !_dirty,
@@ -536,6 +555,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
               ),
               const SizedBox(height: 12),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: TextFormField(
@@ -543,7 +563,9 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(labelText: 'Porce'),
+                      decoration: InputDecoration(
+                        labelText: pieces ? 'Počet kusů' : 'Počet porcí',
+                      ),
                       validator: (value) {
                         final parsed = parseQuantity(value ?? '');
                         return parsed == null || parsed <= 0
@@ -553,18 +575,76 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Expanded(child: _minutesField(_prep, 'Příprava (min)')),
-                  const SizedBox(width: 10),
-                  Expanded(child: _minutesField(_cook, 'Vaření (min)')),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: SegmentedButton<String>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(
+                          value: YieldUnit.servings,
+                          label: Text('Porce'),
+                        ),
+                        ButtonSegment(
+                          value: YieldUnit.pieces,
+                          label: Text('Kusy'),
+                        ),
+                      ],
+                      selected: {_yieldUnit},
+                      onSelectionChanged: (selection) => setState(() {
+                        _yieldUnit = selection.first;
+                        _dirty = true;
+                      }),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
-              _minutesField(
-                _total,
-                'Celkový čas (min)',
-                helper: autoTotal > 0
-                    ? 'Nevyplněno = příprava + vaření (${formatMinutes(autoTotal)})'
-                    : 'Nevyplněno = příprava + vaření',
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _minutesField(_prep, 'Aktivně (min)')),
+                  const SizedBox(width: 10),
+                  Expanded(child: _minutesField(_cook, 'Vaření (min)')),
+                  const SizedBox(width: 10),
+                  Expanded(child: _minutesField(_rest, 'Čekání (min)')),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 6, left: 4),
+                child: Text(
+                  'Aktivně = práce u linky. Vaření = pečení, dušení, smažení. '
+                  'Čekání = kynutí, marinování, chlazení, odpočinek.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Nápověda se přepočítává průběžně při psaní časů i kroků.
+              ListenableBuilder(
+                listenable: Listenable.merge([
+                  _prep,
+                  _cook,
+                  _rest,
+                  for (final step in _steps) ...[
+                    step.instruction,
+                    step.minutes,
+                  ],
+                ]),
+                builder: (context, _) {
+                  final auto = _build().copyWith(totalMinutes: 0).timeBreakdown;
+                  return _minutesField(
+                    _total,
+                    'Celkový čas ručně (min)',
+                    helper: auto.total > 0
+                        ? 'Nevyplněno = spočítá se ${formatMinutes(auto.total)}'
+                              '${auto.passive > 0 ? ' (z toho čekání ${formatMinutes(auto.passive)})' : ''}'
+                              ' z časů výše a z kroků postupu.'
+                        : 'Nevyplněno = spočítá se z časů výše a z kroků postupu.',
+                  );
+                },
               ),
 
               const SectionTitle('Suroviny'),
@@ -666,7 +746,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                     helperText:
                         'Uloží se jako verze ${(_original?.currentVersion ?? 1) + 1}. '
                         'Předchozí verze zůstane zachována.',
-                    helperMaxLines: 2,
+                    helperMaxLines: 3,
                   ),
                 ),
               ],
@@ -704,7 +784,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       decoration: InputDecoration(
         labelText: label,
         helperText: helper,
-        helperMaxLines: 2,
+        helperMaxLines: 3,
       ),
     );
   }
@@ -963,6 +1043,74 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Druh času',
+                            contentPadding: EdgeInsets.fromLTRB(12, 4, 8, 4),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: draft.kind,
+                              isDense: true,
+                              isExpanded: true,
+                              items: [
+                                DropdownMenuItem(
+                                  value: StepKind.auto,
+                                  child: Text(
+                                    'Automaticky (${_kindName(inferKind(draft.instruction.text))})',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const DropdownMenuItem(
+                                  value: StepKind.active,
+                                  child: Text('Aktivní příprava'),
+                                ),
+                                const DropdownMenuItem(
+                                  value: StepKind.cook,
+                                  child: Text('Vaření / pečení'),
+                                ),
+                                const DropdownMenuItem(
+                                  value: StepKind.passive,
+                                  child: Text('Čekání'),
+                                ),
+                              ],
+                              onChanged: (value) => setState(() {
+                                draft.kind = value ?? StepKind.auto;
+                                _dirty = true;
+                              }),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (index > 0)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Probíhá současně s předchozím krokem'),
+                      subtitle: draft.parallel
+                          ? const Text('Celkový čas neprodlužuje.')
+                          : inferParallel(draft.instruction.text)
+                          ? const Text(
+                              'Rozpoznáno z textu („mezitím“, „zatímco“…).',
+                            )
+                          : null,
+                      value:
+                          draft.parallel ||
+                          inferParallel(draft.instruction.text),
+                      onChanged: inferParallel(draft.instruction.text)
+                          ? null
+                          : (value) => setState(() {
+                              draft.parallel = value ?? false;
+                              _dirty = true;
+                            }),
+                    ),
                 ],
               ),
             ),
@@ -971,6 +1119,12 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       ),
     );
   }
+
+  String _kindName(String kind) => switch (kind) {
+    StepKind.cook => 'vaření',
+    StepKind.passive => 'čekání',
+    _ => 'aktivní',
+  };
 }
 
 /// Editor krátkých štítků (teploty, vybavení).

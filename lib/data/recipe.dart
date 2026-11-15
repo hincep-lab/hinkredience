@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 
 import '../core/formatters.dart';
+import '../core/kitchen_math.dart';
+import '../core/recipe_time.dart';
 
 /// Viditelnost receptu.
 abstract final class RecipeVisibility {
@@ -33,18 +35,37 @@ class Ingredient {
         note: note ?? this.note,
       );
 
-  /// Množství s jednotkou přepočtené na jiný počet porcí, např. „1,5 kg“.
-  String amountLabel({double fromServings = 1, double toServings = 1}) {
-    final scaled = scaleQuantity(
-      quantity,
-      fromServings: fromServings,
-      toServings: toServings,
-    );
-    if (scaled == null) return unit;
-    return unit.isEmpty
-        ? formatQuantity(scaled)
-        : '${formatQuantity(scaled)} $unit';
-  }
+  /// Množství s jednotkou přepočtené na jiný počet porcí, např. „1,2 kg“,
+  /// „1 ½ lžíce“ nebo „3 ks“. Zaokrouhluje se tak, aby šlo množství odměřit;
+  /// vejce vycházejí na celé kusy.
+  String amountLabel({double fromServings = 1, double toServings = 1}) =>
+      formatAmount(
+        quantity,
+        unit,
+        factor: scaleFactor(fromServings, toServings),
+        name: name,
+      );
+
+  /// Poznámka s přepočtenými rozsahy, např. „nebo 2–3 lžíce“ → „nebo 4–6 lžíce“.
+  String noteLabel({double fromServings = 1, double toServings = 1}) =>
+      scaleRangesInText(
+        note,
+        scaleFactor(fromServings, toServings),
+        fallbackUnit: unit,
+        name: name,
+      );
+
+  /// Název suroviny; u suroviny bez množství se přepočítá i rozsah v názvu
+  /// („2–3 stroužky česneku“).
+  String nameLabel({double fromServings = 1, double toServings = 1}) =>
+      quantity != null
+      ? name
+      : scaleRangesInText(
+          name,
+          scaleFactor(fromServings, toServings),
+          fallbackUnit: unit,
+          name: name,
+        );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -70,6 +91,8 @@ class RecipeStep {
     required this.instruction,
     this.durationMinutes,
     this.temperatureC,
+    this.kind = StepKind.auto,
+    this.parallel = false,
   });
 
   final String id;
@@ -77,18 +100,36 @@ class RecipeStep {
   final int? durationMinutes;
   final double? temperatureC;
 
+  /// Druh kroku z hlediska času ([StepKind]): aktivní příprava, vaření,
+  /// čekání, nebo prázdné = rozpoznat z textu.
+  final String kind;
+
+  /// Krok probíhá současně s předchozím a celkový čas neprodlužuje.
+  final bool parallel;
+
   RecipeStep copyWith({String? id}) => RecipeStep(
     id: id ?? this.id,
     instruction: instruction,
     durationMinutes: durationMinutes,
     temperatureC: temperatureC,
+    kind: kind,
+    parallel: parallel,
   );
+
+  /// Druh kroku, jak se s ním počítá – ručně zvolený, jinak rozpoznaný z textu.
+  String get effectiveKind =>
+      kind == StepKind.auto ? inferKind(instruction) : kind;
+
+  /// Běží krok souběžně s předchozím (ručně označeno, nebo „mezitím…“)?
+  bool get runsInParallel => parallel || inferParallel(instruction);
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'instruction': instruction,
     'duration_minutes': durationMinutes,
     'temperature_c': temperatureC,
+    'kind': kind,
+    'parallel': parallel,
   };
 
   factory RecipeStep.fromJson(Map<String, dynamic> json) => RecipeStep(
@@ -96,6 +137,8 @@ class RecipeStep {
     instruction: (json['instruction'] as String?) ?? '',
     durationMinutes: (json['duration_minutes'] as num?)?.toInt(),
     temperatureC: (json['temperature_c'] as num?)?.toDouble(),
+    kind: StepKind.normalize(json['kind'] as String?),
+    parallel: json['parallel'] == true,
   );
 }
 
@@ -145,8 +188,10 @@ class Recipe {
     this.description = '',
     this.category = '',
     this.servings = 4,
+    this.yieldUnit = YieldUnit.servings,
     this.prepMinutes = 0,
     this.cookMinutes = 0,
+    this.restMinutes = 0,
     this.totalMinutes = 0,
     this.temperatures = const [],
     this.equipment = const [],
@@ -169,9 +214,23 @@ class Recipe {
   final String title;
   final String description;
   final String category;
+
+  /// Výtěžnost receptu – počet porcí nebo kusů podle [yieldUnit].
   final double servings;
+
+  /// [YieldUnit.servings] nebo [YieldUnit.pieces].
+  final String yieldUnit;
+
+  /// Aktivní příprava v minutách.
   final int prepMinutes;
+
+  /// Vaření, pečení, smažení v minutách.
   final int cookMinutes;
+
+  /// Pasivní čekání v minutách: kynutí, marinování, chlazení, odpočinek.
+  final int restMinutes;
+
+  /// Ručně zadaný celkový čas; 0 = spočítat.
   final int totalMinutes;
   final List<String> temperatures;
   final List<String> equipment;
@@ -190,9 +249,30 @@ class Recipe {
 
   bool get isDeleted => deletedAt != null;
 
-  /// Celkový čas; když není zadaný, sečte přípravu a vaření.
-  int get effectiveTotalMinutes =>
-      totalMinutes > 0 ? totalMinutes : prepMinutes + cookMinutes;
+  /// Rozpad času: aktivní příprava, vaření, čekání a skutečný celek.
+  /// Počítá i s časy u kroků a s čekáním popsaným jen v textu postupu;
+  /// souběžné kroky se nezapočítávají dvakrát.
+  TimeBreakdown get timeBreakdown => computeRecipeTime(
+    prepMinutes: prepMinutes,
+    cookMinutes: cookMinutes,
+    restMinutes: restMinutes,
+    totalOverride: totalMinutes,
+    steps: [
+      for (final step in steps)
+        TimedStep(
+          instruction: step.instruction,
+          durationMinutes: step.durationMinutes,
+          kind: step.kind,
+          parallel: step.parallel,
+        ),
+    ],
+  );
+
+  /// Skutečný celkový čas receptu včetně kynutí, marinování a odpočinku.
+  int get effectiveTotalMinutes => timeBreakdown.total;
+
+  /// Výtěžnost slovy: „4 porce“, „12 ks“.
+  String get yieldText => yieldLabel(servings, yieldUnit);
 
   Recipe copyWith({
     String? id,
@@ -203,8 +283,10 @@ class Recipe {
     String? description,
     String? category,
     double? servings,
+    String? yieldUnit,
     int? prepMinutes,
     int? cookMinutes,
+    int? restMinutes,
     int? totalMinutes,
     List<String>? temperatures,
     List<String>? equipment,
@@ -231,8 +313,10 @@ class Recipe {
     description: description ?? this.description,
     category: category ?? this.category,
     servings: servings ?? this.servings,
+    yieldUnit: yieldUnit ?? this.yieldUnit,
     prepMinutes: prepMinutes ?? this.prepMinutes,
     cookMinutes: cookMinutes ?? this.cookMinutes,
+    restMinutes: restMinutes ?? this.restMinutes,
     totalMinutes: totalMinutes ?? this.totalMinutes,
     temperatures: temperatures ?? this.temperatures,
     equipment: equipment ?? this.equipment,
@@ -266,8 +350,10 @@ class Recipe {
     'description': description,
     'category': category,
     'servings': servings,
+    'yield_unit': yieldUnit,
     'prep_minutes': prepMinutes,
     'cook_minutes': cookMinutes,
+    'rest_minutes': restMinutes,
     'total_minutes': totalMinutes,
     'temperatures': temperatures,
     'equipment': equipment,
@@ -294,8 +380,10 @@ class Recipe {
     description: (json['description'] as String?) ?? '',
     category: (json['category'] as String?) ?? '',
     servings: (json['servings'] as num?)?.toDouble() ?? 4,
+    yieldUnit: YieldUnit.normalize(json['yield_unit'] as String?),
     prepMinutes: (json['prep_minutes'] as num?)?.toInt() ?? 0,
     cookMinutes: (json['cook_minutes'] as num?)?.toInt() ?? 0,
+    restMinutes: (json['rest_minutes'] as num?)?.toInt() ?? 0,
     totalMinutes: (json['total_minutes'] as num?)?.toInt() ?? 0,
     temperatures: _stringList(json['temperatures']),
     equipment: _stringList(json['equipment']),
@@ -327,9 +415,19 @@ class Recipe {
     final buffer = StringBuffer()..writeln(title);
     if (description.isNotEmpty) buffer.writeln(description);
     buffer.writeln();
-    buffer.writeln('Porce: ${formatQuantity(servings)}');
-    if (effectiveTotalMinutes > 0) {
-      buffer.writeln('Celkový čas: ${formatMinutes(effectiveTotalMinutes)}');
+    buffer.writeln('Výtěžnost: $yieldText');
+    final time = timeBreakdown;
+    if (time.total > 0) {
+      final parts = [
+        if (time.active > 0) 'aktivně ${formatMinutes(time.active)}',
+        if (time.cook > 0) 'vaření/pečení ${formatMinutes(time.cook)}',
+        if (time.passive > 0) 'čekání ${formatMinutes(time.passive)}',
+      ];
+      buffer.writeln(
+        parts.length > 1
+            ? 'Celkový čas: ${formatMinutes(time.total)} (${parts.join(', ')})'
+            : 'Celkový čas: ${formatMinutes(time.total)}',
+      );
     }
     if (temperatures.isNotEmpty) {
       buffer.writeln('Teploty: ${temperatures.join(', ')}');

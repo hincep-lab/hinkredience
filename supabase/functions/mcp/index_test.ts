@@ -295,7 +295,11 @@ Deno.test("create_recipe uloží očištěný recept přes atomickou funkci", as
     { name: "Kachna", quantity: 2.2, unit: "kg", note: "" },
     { name: "Sůl", quantity: null, unit: "", note: "" },
   ]);
-  assertEquals(rpc.body.p_recipe.steps, [{ instruction: "Peč.", duration_minutes: 150, temperature_c: 160 }]);
+  assertEquals(rpc.body.p_recipe.steps, [
+    { instruction: "Peč.", duration_minutes: 150, temperature_c: 160, kind: "", parallel: false },
+  ]);
+  assert(!("yield_unit" in rpc.body.p_recipe), "neuvedená výtěžnost se neposílá");
+  assert(!("rest_minutes" in rpc.body.p_recipe), "neuvedené čekání se neposílá");
   assert(!("owner_id" in rpc.body.p_recipe), "vlastníka klient podstrčit nemůže");
   assert(!("p_recipe_id" in rpc.body));
   assertEquals(rpc.headers.Authorization, "Bearer token-uzivatele");
@@ -338,6 +342,39 @@ Deno.test("create_recipe_version předá důvod, výsledek a hodnocení", async 
   assertEquals(rpc.body.p_meta.result_note, "Výborné");
   assertEquals(rpc.body.p_recipe.title, "Svíčková 3");
   assertEquals(rpc.body.p_recipe.notes, "", "nová verze nepřebírá nic potichu");
+});
+
+Deno.test("výtěžnost v kusech, čekání a druh kroků se předají databázi", async () => {
+  const w = world();
+  await call(w, "create_recipe", {
+    title: "Houskové knedlíky",
+    servings: 12,
+    yield_unit: "Kusy",
+    prep_minutes: 20,
+    cook_minutes: 25,
+    rest_minutes: 60.4,
+    ingredients: [{ name: "Mouka", quantity: 500, unit: "g" }],
+    steps: [
+      { instruction: "Nech kynout.", duration_minutes: 60, kind: "passive" },
+      { instruction: "Mezitím nakrájej housky.", kind: "cokoli", parallel: true },
+    ],
+  });
+  const rpc = w.calls.find((c) => c.url.includes("api_save_recipe"))!;
+  assertEquals(rpc.body.p_recipe.yield_unit, "ks");
+  assertEquals(rpc.body.p_recipe.rest_minutes, 60);
+  assertEquals(rpc.body.p_recipe.steps.map((s: any) => [s.kind, s.parallel]), [["passive", false], ["", true]]);
+
+  // Úprava zachová výtěžnost a čekání stávajícího receptu.
+  const existing = { ...svickova, yield_unit: "ks", rest_minutes: 90 };
+  const w2 = world({ recipes: [existing] });
+  await call(w2, "update_recipe", { recipe_id: ID1, change_summary: "x", notes: "nové" });
+  const rpc2 = w2.calls.find((c) => c.url.includes("api_save_recipe"))!;
+  assertEquals(rpc2.body.p_recipe.yield_unit, "ks");
+  assertEquals(rpc2.body.p_recipe.rest_minutes, 90);
+
+  const shown = await call(w2, "get_recipe", { recipe_id: ID1 });
+  assertEquals(shown.structuredContent.recipe.yield_unit, "ks");
+  assertEquals(shown.structuredContent.recipe.rest_minutes, 90);
 });
 
 Deno.test("delete_recipe jen přesouvá do koše", async () => {

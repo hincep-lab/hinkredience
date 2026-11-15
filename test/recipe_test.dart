@@ -60,8 +60,114 @@ void main() {
     final ribs = sampleRecipe().ingredients.first;
     expect(ribs.amountLabel(fromServings: 4, toServings: 4), '2 kg');
     expect(ribs.amountLabel(fromServings: 4, toServings: 6), '3 kg');
-    expect(ribs.amountLabel(fromServings: 4, toServings: 1), '0,5 kg');
+    expect(ribs.amountLabel(fromServings: 4, toServings: 1), '500 g');
     expect(sampleRecipe().ingredients.last.amountLabel(toServings: 8), '');
+  });
+
+  test('přepočet: lžíce zlomkem, vejce na celé kusy, rozsah v poznámce', () {
+    const mustard = Ingredient(
+      id: 'a',
+      name: 'Hořčice',
+      quantity: 2,
+      unit: 'lžíce',
+      note: 'nebo 2–3 lžíce dijonské',
+    );
+    expect(mustard.amountLabel(fromServings: 4, toServings: 3), '1 ½ lžíce');
+    expect(
+      mustard.noteLabel(fromServings: 4, toServings: 8),
+      'nebo 4–6 lžíce dijonské',
+    );
+    expect(mustard.noteLabel(fromServings: 4, toServings: 4), mustard.note);
+
+    const eggs = Ingredient(id: 'b', name: 'Vejce', quantity: 3, unit: 'ks');
+    expect(eggs.amountLabel(fromServings: 4, toServings: 8), '6 ks');
+    expect(
+      eggs.amountLabel(fromServings: 4, toServings: 2),
+      '2 ks (přesně 1,5)',
+    );
+
+    const garlic = Ingredient(id: 'c', name: '2–3 stroužky česneku');
+    expect(
+      garlic.nameLabel(fromServings: 4, toServings: 8),
+      '4–6 stroužky česneku',
+    );
+    expect(
+      mustard.nameLabel(fromServings: 4, toServings: 8),
+      'Hořčice',
+      reason: 'název suroviny s množstvím se nemění',
+    );
+  });
+
+  test('výtěžnost v kusech a nová pole přežijí uložení do JSON', () {
+    final dumplings = sampleRecipe().copyWith(
+      servings: 12,
+      yieldUnit: 'ks',
+      restMinutes: 60,
+      steps: const [
+        RecipeStep(
+          id: 's1',
+          instruction: 'Nech kynout.',
+          durationMinutes: 60,
+          kind: 'passive',
+        ),
+        RecipeStep(
+          id: 's2',
+          instruction: 'Nakrájej housky.',
+          durationMinutes: 10,
+          parallel: true,
+        ),
+      ],
+    );
+    expect(dumplings.yieldText, '12 ks');
+    final restored = Recipe.fromJson(dumplings.toJson());
+    expect(restored.yieldUnit, 'ks');
+    expect(restored.restMinutes, 60);
+    expect(restored.steps.first.kind, 'passive');
+    expect(restored.steps.last.parallel, isTrue);
+    expect(restored.toShareText(), contains('Výtěžnost: 12 ks'));
+  });
+
+  test('starší recept bez nových polí se načte s výchozími hodnotami', () {
+    final json = sampleRecipe().toJson()
+      ..remove('yield_unit')
+      ..remove('rest_minutes');
+    for (final step in json['steps'] as List) {
+      (step as Map)
+        ..remove('kind')
+        ..remove('parallel');
+    }
+    final recipe = Recipe.fromJson(json);
+    expect(recipe.yieldUnit, 'porce');
+    expect(recipe.yieldText, '4 porce');
+    expect(recipe.restMinutes, 0);
+    expect(recipe.steps.every((s) => s.kind == '' && !s.parallel), isTrue);
+    expect(recipe.effectiveTotalMinutes, 660, reason: 'čas se nezmění');
+  });
+
+  test('celkový čas zahrne kynutí a marinování popsané jen v postupu', () {
+    final pizza = sampleRecipe().copyWith(
+      prepMinutes: 14,
+      cookMinutes: 20,
+      steps: const [
+        RecipeStep(id: 's1', instruction: 'Zadělej těsto.'),
+        RecipeStep(id: 's2', instruction: 'Nech kynout 20 hodin v lednici.'),
+        RecipeStep(id: 's3', instruction: 'Vytvaruj a peč na kameni.'),
+      ],
+    );
+    expect(pizza.effectiveTotalMinutes, 1234, reason: 'ne 34 minut');
+    expect(pizza.timeBreakdown.passive, 1200);
+    expect(pizza.toShareText(), contains('Celkový čas: 20 h 34 min'));
+
+    final chicken = sampleRecipe().copyWith(
+      prepMinutes: 20,
+      cookMinutes: 120,
+      steps: const [
+        RecipeStep(id: 's1', instruction: 'Kuře nalož na 6 hodin do lednice.'),
+        RecipeStep(id: 's2', instruction: 'Peč 2 hodiny při 180 °C.'),
+      ],
+    );
+    expect(chicken.effectiveTotalMinutes, 500, reason: 'ne 140 minut');
+    expect(chicken.timeBreakdown.cook, 120, reason: 'pečení jen jednou');
   });
 
   test('vyhledávání ignoruje diakritiku a hledá i v surovinách', () {

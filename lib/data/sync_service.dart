@@ -9,12 +9,16 @@ class SyncResult {
     this.pulled = 0,
     this.pushed = 0,
     this.photosUploaded = 0,
+    this.purged = 0,
     this.errors = const [],
   });
 
   final int pulled;
   final int pushed;
   final int photosUploaded;
+
+  /// Počet receptů natrvalo smazaných na serveru (vysypaný koš).
+  final int purged;
   final List<String> errors;
 
   bool get ok => errors.isEmpty;
@@ -50,6 +54,19 @@ class SyncService {
     var pulled = 0;
     var pushed = 0;
     var photosUploaded = 0;
+    var purged = 0;
+
+    // 0) Trvalá smazání (vysypaný koš). Probíhají první, aby se smazaný
+    //    recept při stažení změn nevrátil.
+    for (final entry in (await repository.pendingPurges()).entries) {
+      try {
+        await remote.deleteRecipe(entry.key, entry.value);
+        await repository.clearPurge(entry.key);
+        purged++;
+      } catch (error) {
+        errors.add('Trvalé smazání na serveru se nepodařilo: $error');
+      }
+    }
 
     // 1) Stažení změn
     try {
@@ -61,6 +78,7 @@ class SyncService {
         final applied = await repository.applyRemote(
           change.recipe,
           versions: change.versions,
+          legacySchema: change.legacySchema,
         );
         if (applied) pulled++;
         if (newest == null || change.syncedAt.isAfter(newest)) {
@@ -76,7 +94,7 @@ class SyncService {
     } catch (error) {
       errors.add('Stažení změn se nepodařilo: $error');
       // Bez úspěšného stažení neodesíláme – mohli bychom přepsat novější data.
-      return SyncResult(errors: errors);
+      return SyncResult(purged: purged, errors: errors);
     }
 
     // 2) Odeslání místních změn
@@ -130,6 +148,7 @@ class SyncService {
       pulled: pulled,
       pushed: pushed,
       photosUploaded: photosUploaded,
+      purged: purged,
       errors: errors,
     );
   }

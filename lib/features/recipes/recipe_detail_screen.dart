@@ -11,7 +11,9 @@ import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
+import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import '../ai/ai_common.dart';
@@ -390,7 +392,10 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                         }),
                       ),
                       _Tab.steps => _StepsTab(recipe: recipe),
-                      _Tab.notes => _NotesTab(recipe: recipe),
+                      _Tab.notes => _NotesTab(
+                        recipe: recipe,
+                        servings: servings,
+                      ),
                     },
                   ),
                 ),
@@ -564,17 +569,12 @@ class _IngredientsTab extends StatelessWidget {
   final ValueChanged<double> onServings;
   final ValueChanged<String> onToggle;
 
-  String _servingsLabel(double value) {
-    final text = formatQuantity(value);
-    if (value == 1) return '$text porce';
-    return value > 1 && value < 5 && value == value.roundToDouble()
-        ? '$text porce'
-        : '$text porcí';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final pieces = YieldUnit.normalize(recipe.yieldUnit) == YieldUnit.pieces;
+    final scaled = (servings - recipe.servings).abs() > 1e-9;
+    final time = recipe.timeBreakdown;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -582,7 +582,7 @@ class _IngredientsTab extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                'Suroviny (${_servingsLabel(servings)})',
+                'Suroviny (${yieldLabel(servings, recipe.yieldUnit)})',
                 style: theme.textTheme.titleMedium,
               ),
             ),
@@ -595,7 +595,7 @@ class _IngredientsTab extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
-                    tooltip: 'Méně porcí',
+                    tooltip: pieces ? 'Méně kusů' : 'Méně porcí',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.remove_rounded),
                     onPressed: servings > 1
@@ -614,10 +614,10 @@ class _IngredientsTab extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Více porcí',
+                    tooltip: pieces ? 'Více kusů' : 'Více porcí',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.add_rounded),
-                    onPressed: servings < 99
+                    onPressed: servings < 999
                         ? () => onServings(servings + 1)
                         : null,
                   ),
@@ -626,6 +626,18 @@ class _IngredientsTab extends StatelessWidget {
             ),
           ],
         ),
+        if (scaled)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Přepočítáno z ${yieldLabel(recipe.servings, recipe.yieldUnit)}. '
+              'Množství jsou zaokrouhlená, aby šla odměřit.',
+              style: const TextStyle(
+                color: AppColors.copperGold,
+                fontSize: 12.5,
+              ),
+            ),
+          ),
         const SizedBox(height: 8),
         if (recipe.ingredients.isEmpty)
           const Padding(
@@ -652,7 +664,10 @@ class _IngredientsTab extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          item.name,
+                          item.nameLabel(
+                            fromServings: recipe.servings,
+                            toServings: servings,
+                          ),
                           style: TextStyle(
                             fontSize: 15.5,
                             color: checked.contains(item.id)
@@ -665,7 +680,10 @@ class _IngredientsTab extends StatelessWidget {
                         ),
                         if (item.note.isNotEmpty)
                           Text(
-                            item.note,
+                            item.noteLabel(
+                              fromServings: recipe.servings,
+                              toServings: servings,
+                            ),
                             style: const TextStyle(
                               color: AppColors.textSecondary,
                               fontSize: 12.5,
@@ -689,36 +707,11 @@ class _IngredientsTab extends StatelessWidget {
               ),
             ),
           ),
-        if (recipe.prepMinutes > 0 ||
-            recipe.cookMinutes > 0 ||
-            recipe.effectiveTotalMinutes > 0) ...[
+        if (time.total > 0) ...[
           const SizedBox(height: 16),
-          Row(
-            children: [
-              if (recipe.prepMinutes > 0)
-                Expanded(
-                  child: _InfoBox(
-                    label: 'Příprava',
-                    value: formatMinutes(recipe.prepMinutes),
-                  ),
-                ),
-              if (recipe.prepMinutes > 0) const SizedBox(width: 8),
-              if (recipe.cookMinutes > 0)
-                Expanded(
-                  child: _InfoBox(
-                    label: 'Vaření',
-                    value: formatMinutes(recipe.cookMinutes),
-                  ),
-                ),
-              if (recipe.cookMinutes > 0) const SizedBox(width: 8),
-              Expanded(
-                child: _InfoBox(
-                  label: 'Celkem',
-                  value: formatMinutes(recipe.effectiveTotalMinutes),
-                ),
-              ),
-            ],
-          ),
+          Text('Čas', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          _TimeSummary(time: time),
         ],
         if (recipe.temperatures.isNotEmpty) ...[
           const SizedBox(height: 16),
@@ -732,6 +725,83 @@ class _IngredientsTab extends StatelessWidget {
           const SizedBox(height: 8),
           _Chips(values: recipe.equipment, icon: Icons.countertops_rounded),
         ],
+      ],
+    );
+  }
+}
+
+/// Rozpad času receptu: aktivní příprava, vaření, čekání a skutečný celek.
+class _TimeSummary extends StatelessWidget {
+  const _TimeSummary({required this.time});
+
+  final TimeBreakdown time;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = [
+      if (time.active > 0) ('Aktivní příprava', time.active),
+      if (time.cook > 0) ('Vaření / pečení', time.cook),
+      if (time.passive > 0) ('Čekání', time.passive),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (parts.isNotEmpty)
+          Row(
+            children: [
+              for (final (index, part) in parts.indexed) ...[
+                if (index > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: _InfoBox(
+                    label: part.$1,
+                    value: formatMinutes(part.$2),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        if (parts.isNotEmpty) const SizedBox(height: 8),
+        HkCard(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          radius: 14,
+          child: Row(
+            children: [
+              const Icon(Icons.schedule_rounded, color: AppColors.copperGold),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Celkem',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
+              ),
+              Text(
+                formatMinutes(time.total),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 17,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (time.passive > 0 || time.overlap > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              [
+                if (time.passive > 0)
+                  'Čekání zahrnuje kynutí, marinování, chlazení a odpočinek.',
+                if (time.overlap > 0)
+                  'Souběžné kroky (${formatMinutes(time.overlap)}) se '
+                      'nezapočítávají dvakrát.',
+              ].join(' '),
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -879,9 +949,12 @@ class _StepsTab extends StatelessWidget {
 }
 
 class _NotesTab extends ConsumerWidget {
-  const _NotesTab({required this.recipe});
+  const _NotesTab({required this.recipe, required this.servings});
 
   final Recipe recipe;
+
+  /// Právě zvolená výtěžnost – rozsahy množství v poznámkách se jí přizpůsobí.
+  final double servings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -909,7 +982,13 @@ class _NotesTab extends ConsumerWidget {
         Text('Poznámky', style: theme.textTheme.titleMedium),
         const SizedBox(height: 6),
         Text(
-          recipe.notes.isEmpty ? 'Zatím bez poznámek.' : recipe.notes,
+          recipe.notes.isEmpty
+              ? 'Zatím bez poznámek.'
+              : scaleRangesInText(
+                  recipe.notes,
+                  scaleFactor(recipe.servings, servings),
+                  requireUnit: true,
+                ),
           style: TextStyle(
             height: 1.45,
             color: recipe.notes.isEmpty

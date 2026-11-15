@@ -378,3 +378,61 @@ test('API: recept se uloží celý v jedné transakci a úprava vytvoří verzi'
   const cizi = await as(MARTINKA, `select public.recipe_snapshot($1) as s`, [id]);
   assert.equal(cizi.rows[0].s, null, 'cizí recept přes snapshot vidět není');
 });
+
+test('výtěžnost v kusech, čekání a druh kroků: nové sloupce nic nerozbijí', async () => {
+  const stary = await as(PAVEL,
+    `insert into public.recipes (title) values ('Starý recept') returning id, yield_unit, rest_minutes`);
+  assert.equal(stary.rows[0].yield_unit, 'porce', 'stávající recepty mají výchozí porce');
+  assert.equal(stary.rows[0].rest_minutes, 0);
+
+  const pizza = {
+    title: 'Pizza těsto',
+    servings: 6,
+    yield_unit: 'ks',
+    prep_minutes: 14,
+    cook_minutes: 20,
+    rest_minutes: 1200,
+    ingredients: [{ name: 'Mouka', quantity: 1000, unit: 'g' }],
+    steps: [
+      { instruction: 'Zadělej těsto.', kind: 'active', duration_minutes: 14 },
+      { instruction: 'Nech kynout v lednici.', kind: 'passive', duration_minutes: 1200 },
+      { instruction: 'Mezitím připrav sugo.', kind: 'nesmysl', parallel: true, duration_minutes: 20 },
+    ],
+  };
+  const created = await as(PAVEL, `select public.api_save_recipe($1::jsonb) as r`, [JSON.stringify(pizza)]);
+  const id = created.rows[0].r.id;
+  const row = await as(PAVEL, `select yield_unit, rest_minutes from public.recipes where id = $1`, [id]);
+  assert.equal(row.rows[0].yield_unit, 'ks');
+  assert.equal(row.rows[0].rest_minutes, 1200);
+  const steps = await as(PAVEL,
+    `select kind, parallel from public.recipe_steps where recipe_id = $1 order by position`, [id]);
+  assert.deepEqual(steps.rows.map((s) => s.kind), ['active', 'passive', ''], 'neznámý druh se uloží jako automatický');
+  assert.deepEqual(steps.rows.map((s) => s.parallel), [false, false, true]);
+
+  const snap = await as(PAVEL, `select snapshot from public.recipe_versions where recipe_id = $1`, [id]);
+  assert.equal(snap.rows[0].snapshot.yield_unit, 'ks');
+  assert.equal(snap.rows[0].snapshot.rest_minutes, 1200);
+  assert.equal(snap.rows[0].snapshot.steps[1].kind, 'passive');
+  assert.equal(snap.rows[0].snapshot.steps[2].parallel, true);
+
+  // Úprava bez nových polí (starší klient) výtěžnost ani čekání nesmaže.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ title: 'Pizza těsto 2', servings: 6, ingredients: [], steps: [] }), id,
+  ]);
+  const kept = await as(PAVEL, `select yield_unit, rest_minutes from public.recipes where id = $1`, [id]);
+  assert.equal(kept.rows[0].yield_unit, 'ks');
+  assert.equal(kept.rows[0].rest_minutes, 1200);
+
+  await assert.rejects(
+    as(PAVEL, `update public.recipes set yield_unit = 'kila' where id = $1`, [id]),
+    /recipes_yield_unit_check/,
+    'neznámá jednotka výtěžnosti',
+  );
+
+  // Trvalé smazání (vysypaný koš) odstraní i suroviny, kroky a verze.
+  await as(PAVEL, `delete from public.recipes where id = $1`, [id]);
+  const left = await as(PAVEL,
+    `select (select count(*)::int from public.recipe_steps where recipe_id = $1) as steps,
+            (select count(*)::int from public.recipe_versions where recipe_id = $1) as versions`, [id]);
+  assert.deepEqual(left.rows[0], { steps: 0, versions: 0 });
+});

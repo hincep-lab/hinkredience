@@ -103,6 +103,8 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
         typeof step?.temperature_c === "number" && step.temperature_c > -50 && step.temperature_c < 600
           ? step.temperature_c
           : null,
+      kind: STEP_KINDS.includes(step?.kind) ? step.kind : "",
+      parallel: step?.parallel === true,
     }))
     .filter((step: { instruction: string }) => step.instruction)
     .slice(0, 80);
@@ -121,7 +123,23 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
     steps,
   };
   if (raw?.source_url !== undefined) result.source_url = text(raw.source_url, 1000);
+  // Výtěžnost a čekání se posílají jen tehdy, když je klient uvedl (nebo je
+  // má stávající recept) – jinak je databáze ponechá beze změny.
+  const yieldUnit = raw?.yield_unit === undefined ? base?.yield_unit : raw.yield_unit;
+  if (yieldUnit !== undefined) result.yield_unit = normalizeYieldUnit(yieldUnit);
+  const rest = raw?.rest_minutes === undefined ? base?.rest_minutes : raw.rest_minutes;
+  if (typeof rest === "number" && Number.isFinite(rest) && rest >= 0) {
+    result.rest_minutes = Math.round(rest);
+  }
   return result;
+}
+
+const STEP_KINDS = ["active", "cook", "passive"];
+
+/** „ks“ pro kusy, jinak „porce“. */
+export function normalizeYieldUnit(value: unknown): string {
+  const folded = typeof value === "string" ? fold(value.trim()) : "";
+  return folded === "ks" || folded.startsWith("kus") ? "ks" : "porce";
 }
 
 /** Recept z databáze ve tvaru pro klienta (bez interních polí). */
@@ -136,8 +154,10 @@ export function presentRecipe(row: any, full: boolean): Record<string, unknown> 
     description: row.description ?? "",
     category: row.category ?? "",
     servings: row.servings,
+    yield_unit: normalizeYieldUnit(row.yield_unit),
     prep_minutes: row.prep_minutes ?? 0,
     cook_minutes: row.cook_minutes ?? 0,
+    rest_minutes: row.rest_minutes ?? 0,
     rating: row.rating ?? null,
     is_favorite: row.is_favorite === true,
     current_version: row.current_version ?? 1,
@@ -163,6 +183,8 @@ export function presentRecipe(row: any, full: boolean): Record<string, unknown> 
       instruction: s.instruction,
       duration_minutes: s.duration_minutes ?? null,
       temperature_c: s.temperature_c ?? null,
+      kind: STEP_KINDS.includes(s.kind) ? s.kind : "",
+      parallel: s.parallel === true,
     })),
   };
 }
@@ -270,7 +292,7 @@ class Supabase {
 
 const RECIPE_FULL = "*,recipe_ingredients(*),recipe_steps(*)";
 const RECIPE_SUMMARY =
-  "id,title,description,category,servings,prep_minutes,cook_minutes,rating,is_favorite,current_version,last_cooked_at,updated_at";
+  "*";
 
 async function loadRecipe(db: Supabase, id: string): Promise<any> {
   const rows = await db.select(
@@ -302,6 +324,17 @@ const stepSchema = {
     instruction: { type: "string" },
     duration_minutes: { type: ["integer", "null"], description: "Délka kroku v minutách." },
     temperature_c: { type: ["number", "null"], description: "Teplota kroku ve °C." },
+    kind: {
+      type: "string",
+      enum: ["", "active", "cook", "passive"],
+      description:
+        "Druh času: active = aktivní práce, cook = vaření/pečení, passive = čekání " +
+        "(kynutí, marinování, chlazení, odpočinek). Prázdné = aplikace rozpozná z textu.",
+    },
+    parallel: {
+      type: "boolean",
+      description: "True, když krok probíhá současně s předchozím (celkový čas neprodlužuje).",
+    },
   },
 };
 
@@ -313,9 +346,20 @@ const recipeFields = {
     description:
       "Jedna z: Maso, Drůbež, Ryby, Polévky, Omáčky, Přílohy, Pečení, Dezerty, Těsta, Pizza, Gril, Zavařování – nebo vlastní.",
   },
-  servings: { type: "number", description: "Počet porcí." },
-  prep_minutes: { type: "integer", description: "Čas přípravy v minutách." },
-  cook_minutes: { type: "integer", description: "Čas vaření/pečení v minutách." },
+  servings: { type: "number", description: "Výtěžnost: počet porcí, nebo kusů (viz yield_unit)." },
+  yield_unit: {
+    type: "string",
+    enum: ["porce", "ks"],
+    description: "V čem je výtěžnost: „porce“ (výchozí), nebo „ks“ u knedlíků, housek, sušenek apod.",
+  },
+  prep_minutes: { type: "integer", description: "Aktivní příprava v minutách (práce u linky)." },
+  cook_minutes: { type: "integer", description: "Vaření, pečení, smažení v minutách." },
+  rest_minutes: {
+    type: "integer",
+    description:
+      "Pasivní čekání v minutách: kynutí, marinování, chlazení, odpočinek. " +
+      "Např. těsto kynoucí 20 hodin = 1200. Nezapočítávej ho do prep_minutes ani cook_minutes.",
+  },
   temperatures: {
     type: "array",
     items: { type: "string" },

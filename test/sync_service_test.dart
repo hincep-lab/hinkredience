@@ -20,6 +20,24 @@ class FakeRemote implements RemoteStore {
   final versions = <RecipeVersion>[];
   final uploads = <String>[];
   bool failPush = false;
+
+  /// Server bez migrace 07: nové sloupce neukládá a nevrací.
+  bool legacySchema = false;
+
+  Recipe _withoutNewColumns(Recipe recipe) => recipe.copyWith(
+    yieldUnit: 'porce',
+    restMinutes: 0,
+    steps: [
+      for (final step in recipe.steps)
+        RecipeStep(
+          id: step.id,
+          instruction: step.instruction,
+          durationMinutes: step.durationMinutes,
+          temperatureC: step.temperatureC,
+        ),
+    ],
+  );
+
   bool failPull = false;
   var _tick = DateTime.utc(2026, 11, 14, 13);
 
@@ -52,7 +70,13 @@ class FakeRemote implements RemoteStore {
     ]..sort((a, b) => syncedAt[a]!.compareTo(syncedAt[b]!));
     return [
       for (final id in ids)
-        RemoteChange(recipe: recipes[id]!, syncedAt: syncedAt[id]!),
+        RemoteChange(
+          recipe: legacySchema
+              ? _withoutNewColumns(recipes[id]!)
+              : recipes[id]!,
+          syncedAt: syncedAt[id]!,
+          legacySchema: legacySchema,
+        ),
     ];
   }
 
@@ -69,6 +93,18 @@ class FakeRemote implements RemoteStore {
 
   @override
   Future<String?> signedPhotoUrl(String remotePath) async => null;
+
+  final deletedPhotos = <String>[];
+  bool failDelete = false;
+
+  @override
+  Future<void> deleteRecipe(String id, List<String> photoPaths) async {
+    if (failDelete) throw const SocketException('bez připojení');
+    recipes.remove(id);
+    syncedAt.remove(id);
+    versions.removeWhere((v) => v.recipeId == id);
+    deletedPhotos.addAll(photoPaths);
+  }
 }
 
 void main() {
@@ -125,6 +161,83 @@ void main() {
     expect(again.pulled, 0);
     expect(again.pushed, 0);
   });
+
+  test('vysypaný koš se smaže i na serveru a už se nestáhne zpět', () async {
+    await repository.create(sampleRecipe());
+    await repository.create(sampleRecipe(id: 'r2', title: 'Svíčková'));
+    await sync.sync();
+    expect(remote.recipes.keys, containsAll(['recipe-1', 'r2']));
+
+    // Recept mimo koš se trvale smazat nedá.
+    expect((await repository.purgeDeleted(ids: ['r2'])).recipes, isEmpty);
+    expect(await repository.getById('r2'), isNotNull);
+
+    await repository.softDelete('recipe-1');
+    final purged = await repository.purgeDeleted();
+    expect(purged.recipes.single.id, 'recipe-1');
+    expect(await repository.getById('recipe-1'), isNull);
+    expect(await repository.versions('recipe-1'), isEmpty);
+    expect(await repository.pendingPurges(), contains('recipe-1'));
+
+    // Bez připojení zůstane smazání ve frontě a recept se nevrátí.
+    remote.failDelete = true;
+    await sync.sync();
+    expect(await repository.getById('recipe-1'), isNull);
+    expect(await repository.pendingPurges(), contains('recipe-1'));
+
+    remote.failDelete = false;
+    final result = await sync.sync();
+    expect(result.purged, 1);
+    expect(remote.recipes.keys, ['r2']);
+    expect(remote.versions.where((v) => v.recipeId == 'recipe-1'), isEmpty);
+    expect(await repository.pendingPurges(), isEmpty);
+    expect((await repository.getById('r2'))!.title, 'Svíčková');
+  });
+
+  test(
+    'server bez nových sloupců: recept se uloží a místní údaje zůstanou',
+    () async {
+      remote.legacySchema = true;
+      await repository.create(
+        sampleRecipe().copyWith(
+          yieldUnit: 'ks',
+          restMinutes: 90,
+          steps: const [
+            RecipeStep(
+              id: 's1',
+              instruction: 'Nech kynout.',
+              durationMinutes: 90,
+              kind: 'passive',
+            ),
+            RecipeStep(
+              id: 's2',
+              instruction: 'Připrav náplň.',
+              durationMinutes: 20,
+              parallel: true,
+            ),
+          ],
+        ),
+      );
+      final result = await sync.sync();
+      expect(result.ok, isTrue);
+      expect(remote.recipes['recipe-1'], isNotNull);
+
+      // Úprava z jiného zařízení přes starý server nesmí nová pole vynulovat.
+      remote.serverEdit(
+        remote.recipes['recipe-1']!.copyWith(
+          title: 'Buchty',
+          updatedAt: env.now.add(const Duration(hours: 1)),
+        ),
+      );
+      await sync.sync();
+      final local = (await repository.getById('recipe-1'))!;
+      expect(local.title, 'Buchty');
+      expect(local.yieldUnit, 'ks');
+      expect(local.restMinutes, 90);
+      expect(local.steps.first.kind, 'passive');
+      expect(local.steps.last.parallel, isTrue);
+    },
+  );
 
   test('smazání na jiném zařízení se projeví jako koš', () async {
     await repository.create(sampleRecipe());

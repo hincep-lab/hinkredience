@@ -204,6 +204,69 @@ void main() {
     expect(find.text('3 h'), findsOneWidget);
   });
 
+  testWidgets('detail ukáže skutečný celkový čas včetně kynutí', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipe('recipe-1'),
+      recipes: [
+        sampleRecipe().copyWith(
+          title: 'Pizza',
+          servings: 6,
+          yieldUnit: 'ks',
+          prepMinutes: 14,
+          cookMinutes: 20,
+          steps: const [
+            RecipeStep(id: 's1', instruction: 'Zadělej těsto.'),
+            RecipeStep(id: 's2', instruction: 'Nech kynout 20 hodin.'),
+          ],
+        ),
+      ],
+    );
+    expect(find.text('Suroviny (6 ks)'), findsOneWidget);
+    expect(find.byTooltip('Více kusů'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('Celkem'),
+      find.byType(Scrollable).first,
+      const Offset(0, -250),
+    );
+    expect(find.text('20 h 34 min'), findsOneWidget);
+    expect(find.text('Čekání'), findsOneWidget);
+    expect(find.text('20 h'), findsOneWidget);
+    expect(find.text('34 min'), findsNothing);
+  });
+
+  testWidgets('koš: vysypání se nejdřív zeptá', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.trash,
+      recipes: [
+        sampleRecipe().copyWith(deletedAt: DateTime(2026, 11, 1)),
+        sampleRecipe(id: 'r2', title: 'Svíčková'),
+      ],
+    );
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(find.text('Svíčková'), findsNothing);
+    expect(find.byTooltip('Smazat natrvalo'), findsOneWidget);
+
+    await tester.tap(find.text('Vysypat'));
+    await tester.pumpAndSettle();
+    expect(find.text('Vysypat koš?'), findsOneWidget);
+    expect(find.textContaining('Natrvalo se smaže 1 recept '), findsOneWidget);
+    expect(find.textContaining('nejde vrátit'), findsOneWidget);
+
+    await tester.tap(find.text('Zrušit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Vysypat koš?'), findsNothing);
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+  });
+
+  testWidgets('prázdný koš tlačítko Vysypat nenabízí', (tester) async {
+    await pumpApp(tester, location: Routes.trash, recipes: [sampleRecipe()]);
+    expect(find.text('Vysypat'), findsNothing);
+  });
+
   testWidgets('neexistující recept ukáže srozumitelnou zprávu', (tester) async {
     await pumpApp(tester, location: Routes.recipe('nic'));
     expect(find.text('Recept nenalezen'), findsOneWidget);

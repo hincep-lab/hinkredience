@@ -11,8 +11,8 @@ const _buildNumber = String.fromEnvironment('BUILD_NUMBER');
 
 /// Verze aplikace včetně čísla sestavení z GitHub Actions, je-li známé.
 const appVersionLabel = _buildNumber == ''
-    ? 'Verze 1.2.0 · Etapa 3 – ChatGPT'
-    : 'Verze 1.2.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
+    ? 'Verze 1.3.0 · Etapa 3 – ChatGPT'
+    : 'Verze 1.3.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
 
 /// Záložka „Více“: účet, synchronizace, koš, nastavení.
 class MoreScreen extends ConsumerWidget {
