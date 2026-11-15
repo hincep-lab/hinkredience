@@ -6,6 +6,7 @@ import {
   generateVapidKeys,
   handle,
   notificationsFor,
+  serviceKeyFrom,
   vapidJwt,
 } from "./index.ts";
 
@@ -259,4 +260,12 @@ Deno.test("CORS a metody", async () => {
   eq(opt.status, 204);
   eq(opt.headers.get("Access-Control-Allow-Origin"), "https://hincep-lab.github.io");
   eq((await handle(new Request("https://fn.test/push"), ENV, s.fetchImpl)).status, 405);
+});
+
+Deno.test("servisní klíč starého i nového typu", () => {
+  const env = (vars: Record<string, string>) => (n: string) => vars[n];
+  eq(serviceKeyFrom(env({ SUPABASE_SERVICE_ROLE_KEY: "eyJx" })), "eyJx");
+  eq(serviceKeyFrom(env({ SUPABASE_SECRET_KEYS: '{"default":"sb_secret_a"}' })), "sb_secret_a");
+  eq(serviceKeyFrom(env({ SUPABASE_SECRET_KEYS: '{"x":"sb_secret_b"}' })), "sb_secret_b");
+  eq(serviceKeyFrom(env({})), "");
 });

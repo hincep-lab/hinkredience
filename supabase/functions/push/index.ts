@@ -442,11 +442,29 @@ export async function handle(
   }
 }
 
+/// Servisní klíč, který Supabase dává serverovým funkcím: starý
+/// (SUPABASE_SERVICE_ROLE_KEY) nebo nový (SUPABASE_SECRET_KEYS = JSON).
+export function serviceKeyFrom(get: (name: string) => string | undefined): string {
+  const legacy = get("SUPABASE_SERVICE_ROLE_KEY");
+  if (legacy) return legacy;
+  const single = get("SUPABASE_SECRET_KEY");
+  if (single) return single;
+  try {
+    const keys = JSON.parse(get("SUPABASE_SECRET_KEYS") ?? "{}");
+    if (typeof keys?.default === "string") return keys.default;
+    const first = Object.values(keys ?? {}).find((v) => typeof v === "string");
+    if (typeof first === "string") return first;
+  } catch {
+    // není JSON
+  }
+  return "";
+}
+
 export function envFromDeno(get: (name: string) => string | undefined): Env {
   return {
     supabaseUrl: (get("SUPABASE_URL") ?? "").replace(/\/+$/, ""),
     anonKey: get("SUPABASE_ANON_KEY") ?? "",
-    serviceKey: get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    serviceKey: serviceKeyFrom(get),
     subject: get("PUSH_SUBJECT") || "https://hincep-lab.github.io/hinkredience-login/",
   };
 }
