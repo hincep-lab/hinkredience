@@ -9,7 +9,8 @@ import 'shopping.dart';
 RecipeDraft? parseRecipeText(String input) {
   final lines = [
     for (final raw in input.split(RegExp(r'\r?\n')))
-      if (_clean(raw).isNotEmpty) _clean(raw),
+      if (_clean(raw) case final line when line.isNotEmpty && !_isNoise(line))
+        line,
   ];
   if (lines.isEmpty) return null;
 
@@ -70,6 +71,19 @@ RecipeDraft? parseRecipeText(String input) {
         RegExp(r'^(\d{1,2}\s*[.)]|[-–•*·])\s*'),
         '',
       );
+      // Zalomený řádek kroku (z fotky nebo úzkého sloupce) – „a povařte…“.
+      if (!numberedStep &&
+          steps.isNotEmpty &&
+          RegExp(r'^[a-zěščřžýáíéúůťďňó]').hasMatch(instruction) &&
+          !RegExp(r'[.!?]$').hasMatch(steps.last.instruction)) {
+        final joined = '${steps.last.instruction} $instruction';
+        steps[steps.length - 1] = DraftStep(
+          instruction: joined,
+          durationMinutes: _minutesIn(joined),
+          temperatureC: _temperatureIn(joined),
+        );
+        continue;
+      }
       steps.add(
         DraftStep(
           instruction: instruction,
@@ -136,7 +150,29 @@ const _fractions = {
   '3/4': '0,75',
 };
 
-String _clean(String line) => line.replaceAll(RegExp(r'[ \t]+'), ' ').trim();
+/// Úprava řádku: mezery, odrážky z fotky („«“, „+“, „»“ → „-“) a časté
+/// záměny při čtení z fotky („|žíce“, „Ižíce“ → „lžíce“).
+String _clean(String line) {
+  var text = line.replaceAll(RegExp('[  \t]+'), ' ').trim();
+  text = text.replaceFirst(RegExp(r'^[«»+■□◦‣>~—]+\s+'), '- ');
+  text = text.replaceAllMapped(
+    RegExp(r'(^|[\s\d])[|I1](žíc|žic|žičk|žick)'),
+    (m) => '${m.group(1)}l${m.group(2)}',
+  );
+  return text;
+}
+
+/// Šum z fotky: „Z o EEEEENEE“, „o EEE“ (okraje papíru, stíny). Česká slova
+/// nemají tři stejná písmena za sebou; krátký řádek s takovým slovem je šum.
+bool _isNoise(String line) {
+  final words = line.split(' ');
+  final garbage = words.any(
+    (w) => RegExp(r'([A-Za-zÀ-ž])\1\1', caseSensitive: false).hasMatch(w),
+  );
+  if (garbage && words.length <= 3) return true;
+  // Jen interpunkce nebo jednotlivé znaky.
+  return !RegExp(r'[0-9A-Za-zÀ-ž]{2}').hasMatch(line);
+}
 
 /// „Na 4 porce“, „Porce: 6“, „12 kusů“ – nastaví počet porcí.
 bool _readServings(String line, void Function(double) set) {
