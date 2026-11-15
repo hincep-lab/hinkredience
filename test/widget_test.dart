@@ -231,7 +231,8 @@ void main() {
       find.byType(Scrollable).first,
       const Offset(0, -250),
     );
-    expect(find.text('20 h 34 min'), findsOneWidget);
+    // V záhlaví receptu i v rozpisu času.
+    expect(find.text('20 h 34 min'), findsWidgets);
     expect(find.text('Čekání'), findsOneWidget);
     expect(find.text('20 h'), findsOneWidget);
     expect(find.text('34 min'), findsNothing);

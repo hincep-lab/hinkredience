@@ -114,10 +114,11 @@ class SupabaseRemoteStore implements RemoteStore {
     // Server bez migrace 07 nové sloupce nezná; recept se pak odešle bez
     // nich, aby synchronizace fungovala i před spuštěním migrace.
     var legacy = _legacySchema;
-    if (legacy)
+    if (legacy) {
       row
         ..remove('yield_unit')
         ..remove('rest_minutes');
+    }
     try {
       await writeRow();
     } on PostgrestException catch (error) {
