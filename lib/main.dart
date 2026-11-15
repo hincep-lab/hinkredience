@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -10,6 +11,7 @@ import 'app/providers.dart';
 import 'core/app_colors.dart';
 import 'core/material.dart';
 import 'data/photo_store.dart';
+import 'data/web_database.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,7 +41,9 @@ Future<void> main() async {
     }
   }
 
-  final documents = await getApplicationDocumentsDirectory();
+  // Webová verze nemá složku aplikace: fotky se zobrazují ze serveru.
+  final documents = kIsWeb ? null : await getApplicationDocumentsDirectory();
+  final webDatabase = webDatabaseFactory();
 
   runApp(
     ProviderScope(
@@ -48,6 +52,8 @@ Future<void> main() async {
         appConfigProvider.overrideWithValue(config),
         supabaseClientProvider.overrideWithValue(client),
         photoStoreProvider.overrideWithValue(PhotoStore(documents)),
+        if (webDatabase != null)
+          databaseFactoryProvider.overrideWithValue(webDatabase),
       ],
       child: const HinkredienceApp(),
     ),

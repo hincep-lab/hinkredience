@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Webová verze – SQLite (WebAssembly) se stahuje při sestavení
+/web/sqlite3.wasm
+/web/sqflite_sw.js

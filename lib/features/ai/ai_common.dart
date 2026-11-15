@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -45,7 +44,7 @@ Future<String?> pickPhotoForAi(BuildContext context, ImageSource source) async {
       imageQuality: 72,
     );
     if (picked == null) return null;
-    final bytes = await File(picked.path).readAsBytes();
+    final bytes = await picked.readAsBytes();
     return base64Encode(bytes);
   } on PlatformException catch (error) {
     if (context.mounted) {

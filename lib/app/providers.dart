@@ -247,7 +247,7 @@ final recipeRepositoryProvider = FutureProvider<RecipeRepository>((ref) async {
       await factory.getDatabasesPath(),
       _databaseName(null),
     );
-    if (await File(localPath).exists()) {
+    if (!kIsWeb && await File(localPath).exists()) {
       try {
         final local = await AppDatabase.open(factory: factory, path: localPath);
         final localRepository = RecipeRepository(local);

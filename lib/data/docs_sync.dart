@@ -173,6 +173,7 @@ class DocsSync {
   }
 
   Future<void> _cacheSessionPhotos() async {
+    if (!photos.canStore) return;
     var budget = 20;
     for (final session in await docs.diary()) {
       for (final photo in session.photos) {

@@ -109,6 +109,49 @@ jobs:
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
           files: hinkredience.apk
 
+  web:
+    name: Web – verze do prohlížeče (Android i iPhone)
+    needs: app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: SQLite (WebAssembly) pro databázi v prohlížeči
+        run: dart run sqflite_common_ffi_web:setup
+      - name: Sestavení webu
+        run: >
+          flutter build web --release
+          --base-href /hinkredience-login/app/
+          --dart-define=BUILD_NUMBER=${{ github.run_number }}
+          --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
+          --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
+      - name: Kontrola – žádné tajné klíče v sestavení
+        run: |
+          if grep -rlE "service_role|sb_secret_|sk-[A-Za-z0-9]{20,}" build/web; then
+            echo "Sestavení obsahuje tajný klíč!"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hinkredience-web
+          path: build/web
+      - name: Uložení sestavení do větve web-build
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        working-directory: build/web
+        run: |
+          git init -q -b web-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Web ${{ github.run_number }} z ${{ github.ref_name }} (${{ github.sha }})"
+          git push -fq "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" web-build
+
   ios:
     name: iOS – kontrolní sestavení bez podpisu
     # Běží jen na vyžádání (Run workflow) nebo když zpráva commitu obsahuje [ios];

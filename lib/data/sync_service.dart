@@ -312,6 +312,7 @@ class SyncService {
   Future<int> _cachePhotos({
     required void Function(String, Object) onError,
   }) async {
+    if (!photos.canStore) return 0;
     var cached = 0;
     for (final recipe in await repository.getAll()) {
       if (recipe.isDeleted) continue;
