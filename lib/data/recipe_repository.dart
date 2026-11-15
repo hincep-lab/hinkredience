@@ -301,13 +301,20 @@ class RecipeRepository {
   }
 
   /// Vytvoří kopii receptu s novým názvem a vlastní historií.
-  Future<Recipe?> duplicate(String id, {String? ownerId}) async {
-    final source = await getById(id);
-    if (source == null) return null;
+  /// [transform] upraví obsah kopie (např. varianta bez chilli).
+  Future<Recipe?> duplicate(
+    String id, {
+    String? ownerId,
+    String? title,
+    Recipe Function(Recipe source)? transform,
+  }) async {
+    final found = await getById(id);
+    if (found == null) return null;
+    final source = transform == null ? found : transform(found);
     final copy = source.copyWith(
       id: _newId(),
       ownerId: ownerId ?? source.ownerId,
-      title: '${source.title} (kopie)',
+      title: title ?? '${source.title} (kopie)',
       isFavorite: false,
       lastCookedAt: null,
       // Fotky kopie sdílí stejné soubory, ale mají vlastní záznamy.

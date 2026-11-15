@@ -14,6 +14,7 @@ import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/personalization.dart';
 import '../../core/screen_wake.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
@@ -21,6 +22,7 @@ import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
 import '../kitchen/diary_screen.dart' show diaryDate;
 import '../kitchen/add_to_shopping_sheet.dart';
+import 'personal_cards.dart';
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -61,6 +63,22 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   /// Odškrtnuté (hotové) kroky postupu – příprava na režim vaření.
   final _doneSteps = <String>{};
   int _photoIndex = 0;
+
+  /// Zobrazit suroviny bez chilli (jen pohled, recept se nemění).
+  bool _mild = false;
+
+  Future<void> _saveMild(Recipe recipe) async {
+    final repository = await ref.read(recipeRepositoryProvider.future);
+    final copy = await repository.duplicate(
+      recipe.id,
+      ownerId: ref.read(sessionProvider).userId,
+      title: '${recipe.title} (bez chilli)',
+      transform: withoutChilli,
+    );
+    if (!mounted || copy == null) return;
+    showMessage(context, 'Uloženo jako „${copy.title}“.');
+    context.push(Routes.recipe(copy.id));
+  }
 
   Future<void> _toShopping(Recipe recipe) => showAddRecipeToShopping(
     context,
@@ -275,6 +293,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
     final theme = Theme.of(context);
     final servings = _servings ?? recipe.servings;
     final aiEnabled = ref.watch(aiEnabledProvider);
+    final shown = _mild ? withoutChilli(recipe) : recipe;
 
     return Scaffold(
       body: CustomScrollView(
@@ -440,6 +459,15 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                   _CookedLine(recipe: recipe),
                 ],
                 _ConflictBanner(recipe: recipe),
+                if (!recipe.isDeleted) ...[
+                  DiaryReminderCard(recipeId: recipe.id),
+                  ChilliCard(
+                    recipe: recipe,
+                    mild: _mild,
+                    onMild: (value) => setState(() => _mild = value),
+                    onSaveCopy: () => _saveMild(recipe),
+                  ),
+                ],
                 if (recipe.isDeleted) ...[
                   const SizedBox(height: 12),
                   const HkCard(
@@ -481,7 +509,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                     key: ValueKey(_tab),
                     child: switch (_tab) {
                       _Tab.recipe => _IngredientsTab(
-                        recipe: recipe,
+                        recipe: shown,
                         servings: servings,
                         checked: _checked,
                         onServings: (value) =>
@@ -489,7 +517,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                         onToggle: (id) => setState(() {
                           if (!_checked.remove(id)) _checked.add(id);
                         }),
-                        onShopping: () => _toShopping(recipe),
+                        onShopping: () => _toShopping(shown),
                       ),
                       _Tab.steps => _StepsTab(
                         recipe: recipe,

@@ -18,6 +18,7 @@ import '../../core/voice_commands.dart';
 import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
+import '../recipes/personal_cards.dart';
 
 /// mm:ss nebo h:mm:ss.
 String formatCountdown(int seconds) {
@@ -581,6 +582,10 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
             children: [
+              if (index == 0) ...[
+                DiaryReminderCard(recipeId: recipe.id, large: true),
+                const SizedBox(height: 12),
+              ],
               Row(
                 children: [
                   Expanded(
