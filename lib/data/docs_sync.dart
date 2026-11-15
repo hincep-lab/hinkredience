@@ -59,7 +59,12 @@ class DocsSync {
   final RemoteDocs remote;
   final PhotoStore photos;
 
-  static const kinds = [DocKind.session, DocKind.plan, DocKind.shopping];
+  static const kinds = [
+    DocKind.session,
+    DocKind.plan,
+    DocKind.shoppingList,
+    DocKind.shopping,
+  ];
 
   /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
   Future<({List<String> errors, bool offline, int pulled, int pushed})>
@@ -81,6 +86,11 @@ class DocsSync {
         return (errors: <String>[], offline: true, pulled: 0, pushed: 0);
       }
       household = null;
+    }
+
+    // Položky ze starší verze aplikace (bez seznamu) dostanou seznam.
+    if ((await docs.shopping()).any((i) => i.listId == null)) {
+      await docs.defaultShoppingList();
     }
 
     for (final kind in kinds) {
@@ -199,6 +209,7 @@ class DocsSync {
   static String _label(String kind) => switch (kind) {
     DocKind.session => 'Kuchařský deník',
     DocKind.plan => 'Plán vaření',
+    DocKind.shoppingList => 'Nákupní seznamy',
     _ => 'Nákupní seznam',
   };
 }
@@ -211,7 +222,6 @@ class SupabaseRemoteDocs implements RemoteDocs {
   SupabaseRemoteDocs(this._client);
 
   final SupabaseClient _client;
-  String? _listId;
 
   @override
   String? get userId => _client.auth.currentUser?.id;
@@ -221,7 +231,6 @@ class SupabaseRemoteDocs implements RemoteDocs {
         (isMissingColumnError(error) ||
             isMissingTableError(error) ||
             error.message.contains('my_household') ||
-            error.message.contains('my_shopping_list') ||
             error.code == 'PGRST202')) {
       throw const DocsNotSupported();
     }
@@ -238,19 +247,10 @@ class SupabaseRemoteDocs implements RemoteDocs {
     }
   }
 
-  Future<String> _shoppingList() async {
-    if (_listId != null) return _listId!;
-    try {
-      final result = await _client.rpc<dynamic>('my_shopping_list');
-      return _listId = result as String;
-    } catch (error) {
-      _rethrow(error);
-    }
-  }
-
   static const _tables = {
     DocKind.session: 'cooking_sessions',
     DocKind.plan: 'meal_plans',
+    DocKind.shoppingList: 'shopping_lists',
     DocKind.shopping: 'shopping_items',
   };
 
@@ -261,9 +261,6 @@ class SupabaseRemoteDocs implements RemoteDocs {
       var query = _client.from(_tables[kind]!).select();
       if (kind == DocKind.session) {
         query = query.eq('user_id', uid).eq('status', SessionStatus.finished);
-      }
-      if (kind == DocKind.shopping) {
-        query = query.eq('list_id', await _shoppingList());
       }
       if (since != null) {
         query = query.gt('synced_at', since.toUtc().toIso8601String());
@@ -313,11 +310,22 @@ class SupabaseRemoteDocs implements RemoteDocs {
         'household_id': row['household_id'],
         'updated_at': row['updated_at'],
       },
+      DocKind.shoppingList => {
+        'id': row['id'],
+        'name': row['name'] ?? 'Nákupní seznam',
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+      },
       _ => {
         'id': row['id'],
+        'list_id': row['list_id'],
         'name': row['name'],
         'quantity': row['quantity'],
         'unit': row['unit'] ?? '',
+        'category': row['category'] ?? '',
+        'note': row['note'] ?? '',
         'checked': row['is_checked'] == true,
         'sources': row['sources'] ?? const [],
         'created_at': row['created_at'],
@@ -380,13 +388,26 @@ class SupabaseRemoteDocs implements RemoteDocs {
           'updated_at': updated,
           'deleted_at': deleted,
         };
-      default:
+      case DocKind.shoppingList:
         row = {
           'id': doc.id,
-          'list_id': await _shoppingList(),
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'],
+          'name': d['name'] ?? 'Nákupní seznam',
+          'created_at': d['created_at'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      default:
+        if (d['list_id'] == null) return; // dostane seznam při příští synchronizaci
+        row = {
+          'id': doc.id,
+          'list_id': d['list_id'],
           'name': d['name'],
           'quantity': d['quantity'],
           'unit': d['unit'] ?? '',
+          'category': d['category'] ?? '',
+          'note': d['note'] ?? '',
           'is_checked': d['checked'] == true,
           'sources': d['sources'] ?? const [],
           'created_at': d['created_at'],

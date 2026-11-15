@@ -228,13 +228,17 @@ Deno.test("initialize dohodne verzi protokolu a oznámení vrací 202", async ()
   assertEquals((await missing.json()).error.code, -32601);
 });
 
-Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů, čtecí jsou označené", async () => {
+Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupních, čtecí jsou označené", async () => {
   const response = await handle(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }), env, world().fetchImpl);
   const list = (await response.json()).result.tools as any[];
   assertEquals(list.map((t) => t.name).sort(), [
     "add_cooking_note",
+    "add_recipe_to_shopping_list",
+    "add_shopping_items",
+    "clear_checked_items",
     "create_recipe",
     "create_recipe_version",
+    "create_shopping_list",
     "delete_recipe",
     "delete_recipe_photo",
     "get_cooking_history",
@@ -244,12 +248,16 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů, čtecí jso
     "get_recipe_photos",
     "get_recipe_versions",
     "get_recipes",
+    "get_shopping_list",
+    "get_shopping_lists",
     "list_recipes_with_photos",
+    "remove_shopping_item",
     "reorder_recipe_photos",
     "search_recipes",
     "set_recipe_cover_photo",
     "update_kitchen_equipment",
     "update_recipe",
+    "update_shopping_item",
     "upload_recipe_photo",
   ]);
   const readOnly = list.filter((t) => t.annotations.readOnlyHint).map((t) => t.name).sort();
@@ -261,6 +269,8 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů, čtecí jso
     "get_recipe_photos",
     "get_recipe_versions",
     "get_recipes",
+    "get_shopping_list",
+    "get_shopping_lists",
     "list_recipes_with_photos",
     "search_recipes",
   ]);
@@ -269,7 +279,7 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů, čtecí jso
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 19);
+  assertEquals(tools.length, 27);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");

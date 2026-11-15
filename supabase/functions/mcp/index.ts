@@ -21,7 +21,7 @@ export interface Env {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export const SERVER_NAME = "hinkredience";
-export const SERVER_VERSION = "1.1.0";
+export const SERVER_VERSION = "1.2.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 // Fotka poslaná přímo v požadavku (base64) může mít až ~10 MB.
 const MAX_BODY_BYTES = 15_000_000;
@@ -244,6 +244,12 @@ class Supabase {
     if (/row-level security|permission denied/i.test(message)) {
       throw new ToolError("K tomuto záznamu nemáte oprávnění.");
     }
+    if (/(deleted_at|synced_at|note).*(does not exist|could not find)|could not find the '.*' column/i.test(message)) {
+      throw new ToolError(
+        "Na serveru ještě chybí migrace pro nákupní seznamy (09 a 10). Spusťte je v Supabase.",
+      );
+    }
+    if (/Vlastníka nákupního seznamu/.test(message)) throw new ToolError(message);
     throw new ToolError(fallback);
   }
 
@@ -536,6 +542,345 @@ async function inlineImage(db: Supabase, photo: StoredPhoto, preferThumb: boolea
   }
   return null;
 }
+
+
+// --------------------------------------------------------- nákupní seznamy
+
+export const SHOPPING_CATEGORIES = ["maso", "zelenina", "mlecne", "koreni", "ostatni"];
+const CATEGORY_LABELS: Record<string, string> = {
+  maso: "Maso a ryby",
+  zelenina: "Zelenina a ovoce",
+  mlecne: "Mléčné výrobky a vejce",
+  koreni: "Koření",
+  ostatni: "Ostatní",
+};
+const MAX_ITEMS_PER_CALL = 100;
+
+const OTHER_FIRST = [
+  "olej", "vyvar", "bujon", "demi", "glace", "mouk", "cukr", "ocet", "testovin", "rizot", "ryze",
+  "chleb", "pecivo", "rohlik", "knedl", "kecup", "horcic", "vino", "pivo", "drozd", "prasek", "skrob",
+  "cokolad", "kakao", "konzerv", "pyre", "protlak", "omack", "drobk", "strouhank",
+];
+const SPICES = [
+  "paprika mleta", "mleta paprika", "mlety pepr", "sul", "pepr", "koreni", "bobkov", "kmin", "majorank",
+  "oregano", "tymian", "rozmar", "bazalk", "skoric", "hrebicek", "muskat", "chilli", "kari", "curry",
+  "zazvor mlet", "vanilk", "badyan", "jalovec", "kurkum", "paprika sladka", "sladka paprika",
+  "uzena paprika", "feferonk susen",
+];
+const DAIRY = [
+  "mlek", "mleko", "smetan", "maslo", "masla", "syr", "jogurt", "tvaroh", "vejce", "vajec", "vajic",
+  "zloutk", "bilk", "mascarpone", "ricott", "mozzarell", "parmazan", "eidam", "cottage", "kefir",
+  "podmasl", "zakys",
+];
+const MEAT = [
+  "maso", "masa", "kure", "kurec", "kurat", "krut", "kachn", "husa", "husi", "hovez", "veprov", "teleci",
+  "jehne", "kralik", "zverin", "srnci", "divoc", "slanin", "sunk", "klobas", "parek", "parky", "salam",
+  "mlete", "steh", "prsa", "prsni", "kridl", "zebr", "krkovic", "panenk", "svickov", "rostenc", "ryba",
+  "ryby", "losos", "pstruh", "kapr", "tunak", "treska", "krevet", "jatra", "jater", "anglick",
+];
+const VEGETABLES = [
+  "cibul", "cesnek", "paprik", "mrkev", "mrkv", "brambor", "rajc", "okurk", "zeli", "kapust", "celer",
+  "petrzel", "porek", "salat", "spenat", "rukol", "cuket", "lilek", "dyne", "brokolic", "kvetak",
+  "hrasek", "fazol", "cocka", "kukuric", "houb", "zampion", "zazvor", "chilli paprick", "jablk",
+  "hrusk", "citron", "limet", "pomeranc", "banan", "jahod", "boruvk", "malin", "svestk", "merunk",
+  "hrozn", "avokad", "pazitk", "kopr", "redkvick", "repa", "salotk", "ovoce", "zelenin",
+];
+
+/** Kategorie podle názvu suroviny (stejná pravidla jako v aplikaci). */
+export function guessCategory(name: string): string {
+  const text = ` ${fold(name).replace(/[^a-z0-9% ]/g, " ")} `;
+  const any = (stems: string[]) => stems.some((s) => text.includes(s));
+  if (any(OTHER_FIRST)) return "ostatni";
+  if (any(SPICES)) return "koreni";
+  if (any(DAIRY)) return "mlecne";
+  if (any(MEAT)) return "maso";
+  if (any(VEGETABLES)) return "zelenina";
+  return "ostatni";
+}
+
+const MASS: Record<string, number> = { g: 1, dkg: 10, dag: 10, kg: 1000 };
+const VOLUME: Record<string, number> = { ml: 1, cl: 10, dl: 100, l: 1000 };
+
+/** Sjednotí zápis jednotky: „litry“ → l, „gramů“ → g, „ks.“ → ks. */
+export function normalizeUnit(unit: unknown): string {
+  const raw = typeof unit === "string" ? unit.trim() : "";
+  const folded = fold(raw).replace(/\.$/, "");
+  if (/^(l|litr|litru|litry|litrů|litrech)$/.test(folded) || folded.startsWith("litr")) return "l";
+  if (folded.startsWith("mililitr")) return "ml";
+  if (folded.startsWith("decilitr")) return "dl";
+  if (folded.startsWith("kilogram") || folded === "kila" || folded === "kilo") return "kg";
+  if (folded.startsWith("gram")) return "g";
+  if (folded.startsWith("dekagram") || folded === "deka") return "dkg";
+  if (folded === "kus" || folded === "kusy" || folded === "kusu" || folded === "kusů") return "ks";
+  return raw.slice(0, 40);
+}
+
+/** Převod na gramy / mililitry, aby šla množství sčítat. */
+export function toBaseUnit(quantity: number, unit: string): { quantity: number; unit: string } {
+  const key = fold(unit.trim()).replace(/\.$/, "");
+  if (key in MASS) return { quantity: quantity * MASS[key], unit: "g" };
+  if (key in VOLUME) return { quantity: quantity * VOLUME[key], unit: "ml" };
+  return { quantity, unit: unit.trim() };
+}
+
+function formatNumber(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return String(rounded).replace(".", ",");
+}
+
+/** „1,5 kg“, „500 g“, „2,5 l“, „5 kuliček“, „“ (bez množství). */
+export function formatShoppingAmount(quantity: number | null, unit: string): string {
+  if (quantity === null || quantity === undefined || !(quantity > 0)) return unit.trim();
+  const key = fold(unit.trim());
+  if (key === "g" && quantity >= 1000) return `${formatNumber(quantity / 1000)} kg`;
+  if (key === "ml" && quantity >= 1000) return `${formatNumber(quantity / 1000)} l`;
+  return unit.trim() ? `${formatNumber(quantity)} ${unit.trim()}` : formatNumber(quantity);
+}
+
+interface ShoppingDraft {
+  name: string;
+  quantity: number | null;
+  unit: string;
+  category: string;
+  note: string;
+  source: string;
+}
+
+/** Ověří a očistí položky od klienta. */
+export function cleanShoppingItems(raw: unknown, source = ""): ShoppingDraft[] {
+  if (!Array.isArray(raw)) throw new ToolError("Parametr items musí být seznam položek.");
+  if (raw.length > MAX_ITEMS_PER_CALL) throw new ToolError(`Najednou lze přidat nejvýše ${MAX_ITEMS_PER_CALL} položek.`);
+  return raw.map((item: any) => {
+    const name = text(item?.name, 200);
+    if (!name) throw new ToolError("Každá položka musí mít name.");
+    const q = item?.quantity;
+    if (q !== undefined && q !== null && !(typeof q === "number" && Number.isFinite(q) && q >= 0 && q <= 1_000_000)) {
+      throw new ToolError(`Množství u „${name}“ musí být číslo od 0 do 1 000 000.`);
+    }
+    const category = typeof item?.category === "string" && SHOPPING_CATEGORIES.includes(item.category)
+      ? item.category
+      : guessCategory(name);
+    return {
+      name,
+      quantity: typeof q === "number" && q > 0 ? q : null,
+      unit: normalizeUnit(item?.unit),
+      category,
+      note: text(item?.note, 500),
+      source,
+    };
+  });
+}
+
+function nameKey(name: string): string {
+  return fold(name.trim()).replace(/\s+/g, " ");
+}
+
+/**
+ * Sloučí suroviny s nenakoupenými položkami seznamu: stejný název a
+ * sčitatelná jednotka (g + kg, ml + l) se sečte, jinak vznikne nová položka.
+ */
+export function planShoppingMerge(existing: any[], drafts: ShoppingDraft[], merge = true) {
+  const open = existing
+    .filter((i) => !i.is_checked && !i.deleted_at)
+    .map((i) => ({ ...i, sources: Array.isArray(i.sources) ? [...i.sources] : [] }));
+  const inserts: any[] = [];
+  const updates = new Map<string, any>();
+  const merged: string[] = [];
+  for (const draft of drafts) {
+    const base = draft.quantity === null ? null : toBaseUnit(draft.quantity, draft.unit);
+    let target: any = null;
+    if (merge) {
+      for (const item of [...open, ...inserts]) {
+        if (nameKey(item.name) !== nameKey(draft.name)) continue;
+        if (base === null || item.quantity === null || item.quantity === undefined) {
+          target = item;
+          break;
+        }
+        const itemBase = toBaseUnit(Number(item.quantity), item.unit ?? "");
+        if (fold(itemBase.unit) === fold(base.unit)) {
+          target = item;
+          break;
+        }
+      }
+    }
+    if (!target) {
+      inserts.push({
+        name: draft.name,
+        quantity: base?.quantity ?? null,
+        unit: base?.unit ?? draft.unit,
+        category: draft.category,
+        note: draft.note,
+        sources: draft.source ? [draft.source] : [],
+      });
+      continue;
+    }
+    if (base !== null) {
+      if (target.quantity === null || target.quantity === undefined) {
+        target.quantity = base.quantity;
+        target.unit = base.unit;
+      } else {
+        const targetBase = toBaseUnit(Number(target.quantity), target.unit ?? "");
+        target.quantity = targetBase.quantity + base.quantity;
+        target.unit = targetBase.unit;
+      }
+    }
+    if (draft.source && !target.sources.includes(draft.source)) target.sources.push(draft.source);
+    if (target.id) {
+      updates.set(target.id, target);
+      merged.push(target.name);
+    }
+  }
+  return { inserts, updates: [...updates.values()], merged };
+}
+
+function presentItem(row: any) {
+  const quantity = row.quantity === null || row.quantity === undefined ? null : Number(row.quantity);
+  return {
+    item_id: row.id,
+    name: row.name,
+    quantity,
+    unit: row.unit ?? "",
+    amount: formatShoppingAmount(quantity, row.unit ?? ""),
+    category: SHOPPING_CATEGORIES.includes(row.category) ? row.category : guessCategory(row.name ?? ""),
+    note: row.note ?? "",
+    checked: row.is_checked === true,
+    from_recipes: Array.isArray(row.sources) ? row.sources : [],
+  };
+}
+
+async function shoppingItems(db: Supabase, listId: string): Promise<any[]> {
+  return await db.select(
+    `shopping_items?select=id,name,quantity,unit,category,note,is_checked,sources,created_at,deleted_at` +
+      `&list_id=eq.${listId}&deleted_at=is.null&order=created_at.asc&limit=1000`,
+  );
+}
+
+/** Seznam podle id, názvu, jinak naposledy upravený. */
+async function resolveList(db: Supabase, args: any, required = true): Promise<any | null> {
+  if (typeof args?.list_id === "string" && args.list_id) {
+    const id = requireId(args.list_id, "list_id");
+    const rows = await db.select(`shopping_lists?select=id,name,household_id,updated_at&id=eq.${id}&deleted_at=is.null&limit=1`);
+    if (!rows.length) throw new ToolError("Nákupní seznam nenalezen. Zjistěte id přes get_shopping_lists.");
+    return rows[0];
+  }
+  const lists = await db.select(
+    "shopping_lists?select=id,name,household_id,updated_at&deleted_at=is.null&order=updated_at.desc&limit=200",
+  );
+  const wanted = text(args?.list_name, 120);
+  if (wanted) {
+    const key = nameKey(wanted);
+    const found = lists.find((l) => nameKey(l.name) === key) ?? lists.find((l) => nameKey(l.name).includes(key));
+    if (found) return found;
+    if (required) throw new ToolError(`Seznam „${wanted}“ nenalezen. Seznamy: ${lists.map((l) => l.name).join(", ") || "žádné"}.`);
+    return null;
+  }
+  if (!lists.length) {
+    if (required) throw new ToolError("Zatím nemáte žádný nákupní seznam. Vytvořte ho přes create_shopping_list.");
+    return null;
+  }
+  return lists[0];
+}
+
+async function touchList(db: Supabase, listId: string) {
+  await db.patch(`shopping_lists?id=eq.${listId}`, { updated_at: new Date().toISOString() });
+}
+
+/** Uloží výsledek sloučení a vrátí přehled. */
+async function applyShoppingMerge(db: Supabase, list: any, drafts: ShoppingDraft[], merge: boolean) {
+  const existing = await shoppingItems(db, list.id);
+  const plan = planShoppingMerge(existing, drafts, merge);
+  const now = new Date().toISOString();
+  for (const item of plan.updates) {
+    await db.patch(`shopping_items?id=eq.${item.id}&list_id=eq.${list.id}`, {
+      quantity: item.quantity,
+      unit: item.unit ?? "",
+      sources: item.sources,
+      updated_at: now,
+    });
+  }
+  if (plan.inserts.length) {
+    const position = existing.length;
+    for (const [index, item] of plan.inserts.entries()) {
+      await db.insert("shopping_items", {
+        list_id: list.id,
+        ...item,
+        is_checked: false,
+        position: position + index,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+  }
+  await touchList(db, list.id);
+  return { added: plan.inserts.length, merged: plan.merged };
+}
+
+async function presentList(db: Supabase, list: any) {
+  const rows = await shoppingItems(db, list.id);
+  const items = rows.map(presentItem);
+  const order = (c: string) => SHOPPING_CATEGORIES.indexOf(c);
+  items.sort((a, b) => order(a.category) - order(b.category));
+  const remaining = items.filter((i) => !i.checked);
+  return {
+    list_id: list.id,
+    name: list.name,
+    shared_with_family: list.household_id !== null && list.household_id !== undefined,
+    remaining_count: remaining.length,
+    total_count: items.length,
+    to_buy: remaining.map((i) => `${i.name}${i.amount ? ` – ${i.amount}` : ""}${i.note ? ` (${i.note})` : ""}`),
+    categories: SHOPPING_CATEGORIES
+      .map((c) => ({ category: c, label: CATEGORY_LABELS[c], items: items.filter((i) => i.category === c) }))
+      .filter((g) => g.items.length),
+  };
+}
+
+/** Položka podle id, nebo podle názvu v seznamu (nenakoupené mají přednost). */
+async function resolveItem(db: Supabase, args: any) {
+  if (typeof args?.item_id === "string" && args.item_id) {
+    const id = requireId(args.item_id, "item_id");
+    const rows = await db.select(
+      `shopping_items?select=id,list_id,name,quantity,unit,category,note,is_checked,sources&id=eq.${id}&deleted_at=is.null&limit=1`,
+    );
+    if (!rows.length) throw new ToolError("Položka nenalezena. Zjistěte item_id přes get_shopping_list.");
+    return rows[0];
+  }
+  const name = text(args?.name ?? args?.item_name, 200);
+  if (!name) throw new ToolError("Uveďte item_id, nebo název položky (name).");
+  const list = await resolveList(db, args);
+  const rows = await shoppingItems(db, list.id);
+  const key = nameKey(name);
+  const candidates = rows.filter((r) => nameKey(r.name) === key);
+  const loose = candidates.length ? candidates : rows.filter((r) => nameKey(r.name).includes(key));
+  if (!loose.length) throw new ToolError(`Položka „${name}“ v seznamu „${list.name}“ není.`);
+  const open = loose.filter((r) => !r.is_checked);
+  const pool = open.length ? open : loose;
+  if (pool.length > 1 && !candidates.length) {
+    throw new ToolError(`Název „${name}“ odpovídá více položkám: ${pool.map((r) => r.name).join(", ")}. Upřesněte.`);
+  }
+  return { ...pool[0], list_id: list.id };
+}
+
+const listSelector = {
+  list_id: { type: "string", description: "Id seznamu z get_shopping_lists." },
+  list_name: { type: "string", description: "Název seznamu (když neznáš id). Bez obou = naposledy upravený seznam." },
+};
+
+const shoppingItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    name: { type: "string", description: "Název, např. „Mléko“, „Kuřecí stehna s kostí“." },
+    quantity: { type: ["number", "null"], description: "Množství jako číslo; null u „podle chuti“." },
+    unit: { type: "string", description: "g, kg, ml, l, ks, kuliček, lžíce… nebo prázdné." },
+    category: {
+      type: "string",
+      enum: SHOPPING_CATEGORIES,
+      description: "maso, zelenina, mlecne, koreni, ostatni. Vynech = zařadí se podle názvu.",
+    },
+    note: { type: "string", description: "Upřesnění, např. „podle chuti“, „31 %“." },
+  },
+};
 
 // ----------------------------------------------------------------- nástroje
 
@@ -1371,6 +1716,297 @@ export const tools: Tool[] = [
       };
     },
   },
+  {
+    name: "create_shopping_list",
+    title: "Vytvořit nákupní seznam",
+    description:
+      "Vytvoří nový nákupní seznam v HINKredience (objeví se i v aplikaci) a volitelně do něj rovnou " +
+      "přidá položky. Např. „Vytvoř nákupní seznam na kuře na paprice“. Suroviny z uloženého receptu " +
+      "přidáš přes add_recipe_to_shopping_list.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name"],
+      properties: {
+        name: { type: "string", description: "Název seznamu." },
+        items: { type: "array", items: shoppingItemSchema, description: "Počáteční položky." },
+        share_with_family: { type: "boolean", description: "Sdílet s rodinou (výchozí ne)." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const name = text(args?.name, 120);
+      if (!name) throw new ToolError("Seznam musí mít název.");
+      const drafts = args?.items === undefined ? [] : cleanShoppingItems(args.items);
+      let household: string | null = null;
+      if (args?.share_with_family === true) {
+        household = await db.rpc("my_household", {}).catch(() => null);
+        if (!household) throw new ToolError("Nejste v žádné rodině – seznam nejde sdílet. Vytvořte ho bez sdílení.");
+      }
+      const now = new Date().toISOString();
+      const list = await db.insert("shopping_lists", {
+        name,
+        ...(household ? { household_id: household } : {}),
+        created_at: now,
+        updated_at: now,
+      });
+      const result = drafts.length ? await applyShoppingMerge(db, list, drafts, true) : { added: 0, merged: [] };
+      return {
+        saved: true,
+        ...(await presentList(db, list)),
+        message: `Seznam „${name}“ je vytvořený${result.added ? ` s ${result.added} položkami` : ""}. V aplikaci se objeví hned po synchronizaci.`,
+      };
+    },
+  },
+  {
+    name: "get_shopping_lists",
+    title: "Přehled nákupních seznamů",
+    description: "Vrátí všechny nákupní seznamy uživatele s počtem zbývajících položek.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    readOnly: true,
+    run: async (db) => {
+      const lists = await db.select(
+        "shopping_lists?select=id,name,household_id,updated_at,shopping_items(is_checked,deleted_at)" +
+          "&deleted_at=is.null&order=updated_at.desc&limit=200",
+      );
+      return {
+        count: lists.length,
+        lists: lists.map((l) => {
+          const items = (Array.isArray(l.shopping_items) ? l.shopping_items : []).filter((i: any) => !i.deleted_at);
+          return {
+            list_id: l.id,
+            name: l.name,
+            remaining_count: items.filter((i: any) => !i.is_checked).length,
+            total_count: items.length,
+            shared_with_family: l.household_id !== null && l.household_id !== undefined,
+            updated_at: l.updated_at,
+          };
+        }),
+      };
+    },
+  },
+  {
+    name: "get_shopping_list",
+    title: "Nákupní seznam",
+    description:
+      "Načte položky nákupního seznamu podle kategorií, včetně toho, co je už koupené. " +
+      "Použij na „Co ještě musím koupit?“ (pole to_buy). Bez list_id a list_name vrátí naposledy upravený seznam.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { ...listSelector } },
+    readOnly: true,
+    run: async (db, args) => presentList(db, await resolveList(db, args)),
+  },
+  {
+    name: "add_shopping_items",
+    title: "Přidat položky do nákupu",
+    description:
+      "Přidá jednu nebo víc položek do nákupního seznamu (např. „Přidej do nákupu 2 litry mléka“ = " +
+      "{name: \"Mléko\", quantity: 2, unit: \"l\"}). Stejné položky se sečtou (200 g + 300 g = 500 g), " +
+      "pokud merge není false.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items"],
+      properties: {
+        ...listSelector,
+        items: { type: "array", items: shoppingItemSchema },
+        merge: { type: "boolean", description: "Sečíst se stejnými nenakoupenými položkami (výchozí ano)." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const list = await resolveList(db, args);
+      const drafts = cleanShoppingItems(args?.items);
+      if (!drafts.length) throw new ToolError("Neuvedli jste žádné položky.");
+      const result = await applyShoppingMerge(db, list, drafts, args?.merge !== false);
+      return {
+        saved: true,
+        added: result.added,
+        merged_with_existing: result.merged,
+        ...(await presentList(db, list)),
+      };
+    },
+  },
+  {
+    name: "update_shopping_item",
+    title: "Upravit položku nákupu",
+    description:
+      "Upraví položku: odškrtnutí (checked=true, např. „Označ máslo jako koupené“), množství, jednotku, " +
+      "název, kategorii nebo poznámku. Položku urči item_id, nebo názvem (name) v seznamu.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        item_id: { type: "string" },
+        name: { type: "string", description: "Název položky, pokud neznáš item_id." },
+        ...listSelector,
+        checked: { type: "boolean", description: "true = koupeno, false = vrátit do nákupu." },
+        new_name: { type: "string" },
+        quantity: { type: ["number", "null"] },
+        unit: { type: "string" },
+        category: { type: "string", enum: SHOPPING_CATEGORIES },
+        note: { type: "string" },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const item = await resolveItem(db, args);
+      const fields: Record<string, unknown> = {};
+      if (typeof args?.checked === "boolean") fields.is_checked = args.checked;
+      if (args?.new_name !== undefined) {
+        const name = text(args.new_name, 200);
+        if (!name) throw new ToolError("Název nesmí být prázdný.");
+        fields.name = name;
+      }
+      if (args?.quantity !== undefined) {
+        const q = args.quantity;
+        if (q !== null && !(typeof q === "number" && Number.isFinite(q) && q >= 0 && q <= 1_000_000)) {
+          throw new ToolError("Množství musí být číslo od 0 do 1 000 000, nebo null.");
+        }
+        fields.quantity = q === null || q === 0 ? null : q;
+      }
+      if (args?.unit !== undefined) fields.unit = normalizeUnit(args.unit);
+      if (args?.category !== undefined) {
+        if (!SHOPPING_CATEGORIES.includes(args.category)) throw new ToolError("Neznámá kategorie.");
+        fields.category = args.category;
+      }
+      if (args?.note !== undefined) fields.note = text(args.note, 500);
+      if (!Object.keys(fields).length) throw new ToolError("Neuvedli jste, co změnit.");
+      fields.updated_at = new Date().toISOString();
+      const rows = await db.patch(`shopping_items?id=eq.${item.id}&deleted_at=is.null`, fields);
+      if (!rows.length) throw new ToolError("Položku se nepodařilo upravit.");
+      await touchList(db, item.list_id ?? rows[0].list_id);
+      const updated = presentItem(rows[0]);
+      return {
+        saved: true,
+        item: updated,
+        message: typeof args?.checked === "boolean"
+          ? `„${updated.name}“ ${args.checked ? "je označené jako koupené" : "je zpět v nákupu"}.`
+          : `Položka „${updated.name}“ je upravená.`,
+      };
+    },
+  },
+  {
+    name: "remove_shopping_item",
+    title: "Odstranit položku z nákupu",
+    description: "Odstraní položku z nákupního seznamu (podle item_id, nebo názvu v seznamu).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        item_id: { type: "string" },
+        name: { type: "string", description: "Název položky, pokud neznáš item_id." },
+        ...listSelector,
+      },
+    },
+    readOnly: false,
+    destructive: true,
+    run: async (db, args) => {
+      const item = await resolveItem(db, args);
+      const now = new Date().toISOString();
+      const rows = await db.patch(`shopping_items?id=eq.${item.id}&deleted_at=is.null`, {
+        deleted_at: now,
+        updated_at: now,
+      });
+      if (!rows.length) throw new ToolError("Položku se nepodařilo odstranit.");
+      await touchList(db, item.list_id ?? rows[0].list_id);
+      return { removed: true, item_id: item.id, message: `„${item.name}“ je odstraněné ze seznamu.` };
+    },
+  },
+  {
+    name: "clear_checked_items",
+    title: "Odstranit nakoupené položky",
+    description: "Odstraní ze seznamu všechny už koupené (odškrtnuté) položky.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { ...listSelector } },
+    readOnly: false,
+    destructive: true,
+    run: async (db, args) => {
+      const list = await resolveList(db, args);
+      const now = new Date().toISOString();
+      const rows = await db.patch(
+        `shopping_items?list_id=eq.${list.id}&is_checked=eq.true&deleted_at=is.null`,
+        { deleted_at: now, updated_at: now },
+      );
+      if (rows.length) await touchList(db, list.id);
+      return {
+        removed_count: rows.length,
+        ...(await presentList(db, list)),
+        message: rows.length
+          ? `Ze seznamu „${list.name}“ je odstraněno ${rows.length} nakoupených položek.`
+          : `V seznamu „${list.name}“ nejsou žádné nakoupené položky.`,
+      };
+    },
+  },
+  {
+    name: "add_recipe_to_shopping_list",
+    title: "Přidat suroviny receptu do nákupu",
+    description:
+      "Přidá suroviny uloženého receptu do nákupního seznamu, přepočtené na zvolený počet porcí/kusů. " +
+      "Stejné suroviny se sečtou s tím, co už na seznamu je. Pro víc receptů volej opakovaně se stejným " +
+      "seznamem. Když seznam neexistuje, založí ho podle new_list_name.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: {
+        recipe_id: idProperty,
+        ...listSelector,
+        new_list_name: { type: "string", description: "Založit nový seznam s tímto názvem." },
+        servings: { type: "number", description: "Na kolik porcí/kusů nakoupit (výchozí podle receptu)." },
+        exclude: {
+          type: "array",
+          items: { type: "string" },
+          description: "Suroviny, které uživatel už má doma (nepřidávat).",
+        },
+        merge: { type: "boolean", description: "Sečíst se stejnými položkami (výchozí ano)." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const recipe = await loadRecipe(db, requireId(args?.recipe_id));
+      const newName = text(args?.new_list_name, 120);
+      let list = newName && !args?.list_id && !args?.list_name ? null : await resolveList(db, args, !newName);
+      if (!list) {
+        const now = new Date().toISOString();
+        list = await db.insert("shopping_lists", {
+          name: newName || recipe.title,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+      const baseServings = Number(recipe.servings) > 0 ? Number(recipe.servings) : 4;
+      const servings = typeof args?.servings === "number" && args.servings > 0 && args.servings <= 1000
+        ? args.servings
+        : baseServings;
+      const factor = servings / baseServings;
+      const excluded = new Set(
+        (Array.isArray(args?.exclude) ? args.exclude : []).map((v: unknown) => nameKey(String(v))),
+      );
+      const ingredients = (Array.isArray(recipe.recipe_ingredients) ? [...recipe.recipe_ingredients] : [])
+        .sort((a: any, b: any) => (a?.position ?? 0) - (b?.position ?? 0));
+      const drafts = cleanShoppingItems(
+        ingredients
+          .filter((i: any) => !excluded.has(nameKey(i.name ?? "")))
+          .map((i: any) => ({
+            name: i.name,
+            quantity: i.quantity === null || i.quantity === undefined ? null : Number(i.quantity) * factor,
+            unit: i.unit ?? "",
+            note: i.note ?? "",
+          })),
+        recipe.title,
+      );
+      const result = await applyShoppingMerge(db, list, drafts, args?.merge !== false);
+      return {
+        saved: true,
+        recipe: recipe.title,
+        servings,
+        yield_unit: normalizeYieldUnit(recipe.yield_unit),
+        added: result.added,
+        merged_with_existing: result.merged,
+        skipped: [...excluded].length,
+        ...(await presentList(db, list)),
+      };
+    },
+  },
 ];
 
 const instructions =
@@ -1382,7 +2018,11 @@ const instructions =
   "Ukládej a maž jen na výslovnou žádost uživatele. " +
   "Fotky receptů: přehled list_recipes_with_photos, fotky jednoho receptu get_recipe_photos, " +
   "prohlédnutí jedné fotky get_recipe_photo, nahrání fotky z konverzace upload_recipe_photo, " +
-  "hlavní fotka set_recipe_cover_photo (první fotka = hlavní).";
+  "hlavní fotka set_recipe_cover_photo (první fotka = hlavní). " +
+  "Nákupní seznamy: get_shopping_lists, get_shopping_list (co zbývá koupit), create_shopping_list, " +
+  "add_shopping_items, update_shopping_item (odškrtnutí), remove_shopping_item, clear_checked_items, " +
+  "add_recipe_to_shopping_list (suroviny receptu s přepočtem porcí). Vždy zapisuj do databáze " +
+  "přes tyto nástroje, ne jen do odpovědi.";
 
 function toolList() {
   return tools.map((tool) => ({

@@ -191,38 +191,116 @@ class DocsRepository {
 
   Future<void> deleteMeal(String id) => _softDelete([id]);
 
-  // ------------------------------------------------------ nákupní seznam
+  // ------------------------------------------------------ nákupní seznamy
 
-  /// Položky nákupního seznamu: nejdřív nenakoupené, v pořadí přidání.
-  Future<List<ShoppingItem>> shopping() async {
+  /// Nákupní seznamy, nejnovější první.
+  Future<List<ShoppingList>> shoppingLists() async {
+    final lists = [
+      for (final json in await _all(DocKind.shoppingList))
+        ShoppingList.fromJson(json),
+    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return lists;
+  }
+
+  Future<ShoppingList?> shoppingList(String id) async {
+    final json = await _one(id);
+    return json == null ? null : ShoppingList.fromJson(json);
+  }
+
+  Future<ShoppingList> createShoppingList(
+    String name, {
+    String? householdId,
+  }) async {
+    final now = _clock();
+    final list = ShoppingList(
+      id: _newId(),
+      name: name.trim().isEmpty ? 'Nákupní seznam' : name.trim(),
+      householdId: householdId,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await _put(_db, DocKind.shoppingList, list.id, list.toJson(), now);
+    _notify();
+    return list;
+  }
+
+  Future<void> saveShoppingList(ShoppingList list) async {
+    final saved = list.copyWith(updatedAt: _clock());
+    await _put(
+      _db,
+      DocKind.shoppingList,
+      saved.id,
+      saved.toJson(),
+      saved.updatedAt,
+    );
+    _notify();
+  }
+
+  /// Smaže seznam i s jeho položkami (měkce, aby se smazání dostalo i na
+  /// ostatní zařízení).
+  Future<void> deleteShoppingList(String id) async {
+    final items = await shopping(listId: id);
+    await _softDelete([for (final item in items) item.id, id]);
+  }
+
+  /// Seznam, do kterého se přidává, když žádný není vybraný: nejnovější,
+  /// případně nově založený „Nákupní seznam“. Položky ze starší verze
+  /// aplikace (bez seznamu) se do něj přesunou.
+  Future<ShoppingList> defaultShoppingList() async {
+    final lists = await shoppingLists();
+    final list = lists.isNotEmpty
+        ? lists.first
+        : await createShoppingList('Nákupní seznam');
+    final orphans = [
+      for (final item in await shopping())
+        if (item.listId == null) item,
+    ];
+    if (orphans.isNotEmpty) {
+      final now = _clock();
+      await _db.transaction((txn) async {
+        for (final item in orphans) {
+          final moved = item.copyWith(listId: list.id, updatedAt: now);
+          await _put(txn, DocKind.shopping, moved.id, moved.toJson(), now);
+        }
+      });
+      _notify();
+    }
+    return list;
+  }
+
+  /// Položky (jednoho seznamu): nejdřív nenakoupené, v pořadí přidání.
+  Future<List<ShoppingItem>> shopping({String? listId}) async {
     final items = [
       for (final json in await _all(DocKind.shopping))
         ShoppingItem.fromJson(json),
-    ];
+    ].where((i) => listId == null || i.listId == listId).toList();
     items.sort((a, b) {
       if (a.checked != b.checked) return a.checked ? 1 : -1;
-      return a.createdAt.compareTo(b.createdAt);
+      final created = a.createdAt.compareTo(b.createdAt);
+      return created != 0 ? created : a.name.compareTo(b.name);
     });
     return items;
   }
 
-  /// Přidá suroviny a sloučí je s tím, co už na seznamu je.
-  Future<ShoppingMerge> addToShopping(Iterable<ShoppingDraft> drafts) async {
+  /// Přidá suroviny na seznam a sloučí je s tím, co už na něm je (kromě
+  /// surovin v [keepSeparate]). Bez [listId] na výchozí seznam.
+  Future<ShoppingMerge> addToShopping(
+    Iterable<ShoppingDraft> drafts, {
+    String? listId,
+    Set<int> keepSeparate = const {},
+  }) async {
+    final target = listId ?? (await defaultShoppingList()).id;
     final merge = mergeShopping(
-      existing: await shopping(),
+      existing: await shopping(listId: target),
       additions: drafts,
       newId: _newId,
       now: _clock(),
+      listId: target,
+      keepSeparate: keepSeparate,
     );
     await _db.transaction((txn) async {
       for (final item in merge.changed) {
-        await _put(
-          txn,
-          DocKind.shopping,
-          item.id,
-          item.toJson(),
-          item.updatedAt,
-        );
+        await _put(txn, DocKind.shopping, item.id, item.toJson(), item.updatedAt);
       }
     });
     if (merge.changed.isNotEmpty) _notify();
@@ -231,17 +309,21 @@ class DocsRepository {
 
   Future<void> saveShoppingItem(ShoppingItem item) async {
     final saved = item.copyWith(updatedAt: _clock());
-    await _put(
-      _db,
-      DocKind.shopping,
-      saved.id,
-      saved.toJson(),
-      saved.updatedAt,
-    );
+    await _put(_db, DocKind.shopping, saved.id, saved.toJson(), saved.updatedAt);
     _notify();
   }
 
   Future<void> deleteShoppingItems(Iterable<String> ids) => _softDelete(ids);
+
+  /// Jedním klepnutím smaže nakoupené položky seznamu. Vrací jejich počet.
+  Future<int> clearChecked(String listId) async {
+    final checked = [
+      for (final item in await shopping(listId: listId))
+        if (item.checked) item.id,
+    ];
+    if (checked.isNotEmpty) await _softDelete(checked);
+    return checked.length;
+  }
 
   // ------------------------------------------------------- synchronizace
 
@@ -272,7 +354,12 @@ class DocsRepository {
   /// ty zůstávají jen v telefonu).
   Future<int> dirtyCount() async {
     var count = 0;
-    for (final kind in [DocKind.session, DocKind.plan, DocKind.shopping]) {
+    for (final kind in [
+      DocKind.session,
+      DocKind.plan,
+      DocKind.shoppingList,
+      DocKind.shopping,
+    ]) {
       for (final doc in await dirty(kind)) {
         if (kind == DocKind.session &&
             doc.deletedAt == null &&

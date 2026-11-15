@@ -10,6 +10,7 @@ abstract final class DocKind {
   static const session = 'cooking_session';
   static const plan = 'meal_plan';
   static const shopping = 'shopping_item';
+  static const shoppingList = 'shopping_list';
 }
 
 DateTime? _date(Object? value) =>
@@ -327,6 +328,92 @@ class MealPlanEntry {
 
 // ---------------------------------------------------------- nákupní seznam
 
+/// Kategorie položek nákupního seznamu (hodnoty jako ve sloupci
+/// `shopping_items.category`). Prázdná = ještě nezařazeno.
+abstract final class ShoppingCategory {
+  static const meat = 'maso';
+  static const vegetables = 'zelenina';
+  static const dairy = 'mlecne';
+  static const spices = 'koreni';
+  static const other = 'ostatni';
+
+  /// Pořadí na obrazovce.
+  static const all = [meat, vegetables, dairy, spices, other];
+
+  static String label(String category) => switch (category) {
+    meat => 'Maso a ryby',
+    vegetables => 'Zelenina a ovoce',
+    dairy => 'Mléčné výrobky a vejce',
+    spices => 'Koření',
+    _ => 'Ostatní',
+  };
+
+  static String normalize(String? value) =>
+      all.contains(value) ? value! : other;
+}
+
+/// Nákupní seznam (může jich být víc, např. „Kuře na paprice“, „Týden“).
+class ShoppingList {
+  const ShoppingList({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+    this.ownerId,
+    this.householdId,
+  });
+
+  final String id;
+  final String name;
+  final String? ownerId;
+
+  /// Rodina, se kterou je seznam sdílený (`null` = jen můj).
+  final String? householdId;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get shared => householdId != null;
+
+  static const _keep = Object();
+
+  ShoppingList copyWith({
+    String? name,
+    Object? householdId = _keep,
+    String? ownerId,
+    DateTime? updatedAt,
+  }) => ShoppingList(
+    id: id,
+    name: name ?? this.name,
+    ownerId: ownerId ?? this.ownerId,
+    householdId: identical(householdId, _keep)
+        ? this.householdId
+        : householdId as String?,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'owner_id': ?ownerId,
+    'household_id': householdId,
+    'created_at': _iso(createdAt),
+    'updated_at': _iso(updatedAt),
+  };
+
+  factory ShoppingList.fromJson(Map<String, dynamic> json) {
+    final fallback = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    return ShoppingList(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Nákupní seznam',
+      ownerId: json['owner_id'] as String?,
+      householdId: json['household_id'] as String?,
+      createdAt: _date(json['created_at']) ?? fallback,
+      updatedAt: _date(json['updated_at']) ?? fallback,
+    );
+  }
+}
+
 /// Položka nákupního seznamu.
 class ShoppingItem {
   const ShoppingItem({
@@ -338,12 +425,24 @@ class ShoppingItem {
     this.unit = '',
     this.checked = false,
     this.sources = const [],
+    this.listId,
+    this.category = '',
+    this.note = '',
   });
 
   final String id;
+
+  /// Seznam, do kterého položka patří.
+  final String? listId;
   final String name;
   final double? quantity;
   final String unit;
+
+  /// Kategorie ([ShoppingCategory]); prázdná = zařadí se podle názvu.
+  final String category;
+
+  /// Upřesnění, např. „podle chuti“, „31 %“.
+  final String note;
 
   /// Už je v košíku.
   final bool checked;
@@ -361,9 +460,15 @@ class ShoppingItem {
     String? unit,
     bool? checked,
     List<String>? sources,
+    String? listId,
+    String? category,
+    String? note,
     DateTime? updatedAt,
   }) => ShoppingItem(
     id: id,
+    listId: listId ?? this.listId,
+    category: category ?? this.category,
+    note: note ?? this.note,
     name: name ?? this.name,
     quantity: identical(quantity, _keep) ? this.quantity : quantity as double?,
     unit: unit ?? this.unit,
@@ -375,6 +480,9 @@ class ShoppingItem {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    'list_id': ?listId,
+    'category': category,
+    'note': note,
     'name': name,
     'quantity': ?quantity,
     'unit': unit,
@@ -388,6 +496,9 @@ class ShoppingItem {
     final fallback = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
     return ShoppingItem(
       id: json['id'] as String? ?? '',
+      listId: json['list_id'] as String?,
+      category: json['category'] as String? ?? '',
+      note: json['note'] as String? ?? '',
       name: json['name'] as String? ?? '',
       quantity: (json['quantity'] as num?)?.toDouble(),
       unit: json['unit'] as String? ?? '',
