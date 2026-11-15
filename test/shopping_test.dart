@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hinkredience/core/kitchen_math.dart';
 import 'package:hinkredience/core/shopping.dart';
 import 'package:hinkredience/data/kitchen_docs.dart';
+import 'package:hinkredience/features/kitchen/shopping_screen.dart'
+    show recipeShoppingDrafts;
 
 void main() {
   final now = DateTime.utc(2026, 11, 15);
@@ -110,5 +112,68 @@ void main() {
       ['mouka', 500, 'g'],
     );
     expect(p('   ').name, '');
+  });
+
+  test('kategorie surovin pro „Kuře na paprice“', () {
+    const expected = {
+      'Kuřecí stehna s kostí': ShoppingCategory.meat,
+      'Cibule': ShoppingCategory.vegetables,
+      'Červená paprika': ShoppingCategory.vegetables,
+      'Smetana 31 %': ShoppingCategory.dairy,
+      'Sladká paprika mletá': ShoppingCategory.spices,
+      'Máslo': ShoppingCategory.dairy,
+      'Hladká mouka': ShoppingCategory.other,
+      'Kuřecí vývar': ShoppingCategory.other,
+      'Demi-glace': ShoppingCategory.other,
+      'Paprikový olej': ShoppingCategory.other,
+      'Řepkový olej': ShoppingCategory.other,
+      'Bobkový list': ShoppingCategory.spices,
+      'Nové koření': ShoppingCategory.spices,
+      'Černý pepř': ShoppingCategory.spices,
+      'Sůl': ShoppingCategory.spices,
+      'Cukr': ShoppingCategory.other,
+    };
+    for (final entry in expected.entries) {
+      expect(guessCategory(entry.key), entry.value, reason: entry.key);
+    }
+  });
+
+  test('návrh sloučení: 200 g + 300 g cibule = 500 g', () {
+    final existing = [
+      ShoppingItem(
+        id: 'a',
+        name: 'Cibule',
+        quantity: 200,
+        unit: 'g',
+        createdAt: now,
+        updatedAt: now,
+      ),
+    ];
+    final proposals = planShoppingMerge(
+      existing: existing,
+      additions: const [
+        ShoppingDraft(name: 'Mrkev', quantity: 1, unit: 'ks'),
+        ShoppingDraft(name: 'cibule', quantity: 300, unit: 'g'),
+      ],
+    );
+    expect(proposals.single.draftIndex, 1);
+    expect(proposals.single.resultQuantity, 500);
+    expect(proposals.single.describe(), contains('500 g'));
+  });
+
+  test('přepočet porcí: recept na 4, nákup na 6', () {
+    final drafts = recipeShoppingDrafts(
+      title: 'Kuře na paprice',
+      recipeServings: 4,
+      servings: 6,
+      ingredients: const [
+        (name: 'Kuřecí stehna s kostí', quantity: 1.5, unit: 'kg'),
+        (name: 'Sůl', quantity: null, unit: ''),
+      ],
+    );
+    expect(drafts.first.quantity, 2.25);
+    expect(drafts.first.category, ShoppingCategory.meat);
+    expect(drafts.last.quantity, isNull);
+    expect(drafts.first.source, 'Kuře na paprice');
   });
 }

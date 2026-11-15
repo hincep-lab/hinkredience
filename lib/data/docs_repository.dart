@@ -300,7 +300,13 @@ class DocsRepository {
     );
     await _db.transaction((txn) async {
       for (final item in merge.changed) {
-        await _put(txn, DocKind.shopping, item.id, item.toJson(), item.updatedAt);
+        await _put(
+          txn,
+          DocKind.shopping,
+          item.id,
+          item.toJson(),
+          item.updatedAt,
+        );
       }
     });
     if (merge.changed.isNotEmpty) _notify();
@@ -309,7 +315,13 @@ class DocsRepository {
 
   Future<void> saveShoppingItem(ShoppingItem item) async {
     final saved = item.copyWith(updatedAt: _clock());
-    await _put(_db, DocKind.shopping, saved.id, saved.toJson(), saved.updatedAt);
+    await _put(
+      _db,
+      DocKind.shopping,
+      saved.id,
+      saved.toJson(),
+      saved.updatedAt,
+    );
     _notify();
   }
 

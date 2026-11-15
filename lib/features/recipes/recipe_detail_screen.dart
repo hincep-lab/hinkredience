@@ -20,7 +20,7 @@ import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
 import '../kitchen/diary_screen.dart' show diaryDate;
-import '../kitchen/shopping_screen.dart' show recipeShoppingDrafts;
+import '../kitchen/add_to_shopping_sheet.dart';
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -62,34 +62,11 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   final _doneSteps = <String>{};
   int _photoIndex = 0;
 
-  Future<void> _toShopping(Recipe recipe) async {
-    final servings = _servings ?? recipe.servings;
-    final docs = await ref.read(docsRepositoryProvider.future);
-    final result = await docs.addToShopping(
-      recipeShoppingDrafts(
-        title: recipe.title,
-        recipeServings: recipe.servings,
-        servings: servings,
-        ingredients: [
-          for (final i in recipe.ingredients)
-            (name: i.name, quantity: i.quantity, unit: i.unit),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Na nákupní seznam: ${result.added} nových, ${result.merged} sečteno '
-          '(${yieldLabel(servings, recipe.yieldUnit)}).',
-        ),
-        action: SnackBarAction(
-          label: 'Otevřít',
-          onPressed: () => context.push(Routes.shopping),
-        ),
-      ),
-    );
-  }
+  Future<void> _toShopping(Recipe recipe) => showAddRecipeToShopping(
+    context,
+    recipe: recipe,
+    servings: _servings ?? recipe.servings,
+  );
 
   Future<void> _toPlan(Recipe recipe) async {
     final now = DateTime.now();
@@ -356,7 +333,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                   if (!recipe.isDeleted)
                     const PopupMenuItem(
                       value: 'shopping',
-                      child: Text('Na nákupní seznam'),
+                      child: Text('Přidat do nákupního seznamu'),
                     ),
                   if (!recipe.isDeleted)
                     const PopupMenuItem(
@@ -512,6 +489,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                         onToggle: (id) => setState(() {
                           if (!_checked.remove(id)) _checked.add(id);
                         }),
+                        onShopping: () => _toShopping(recipe),
                       ),
                       _Tab.steps => _StepsTab(
                         recipe: recipe,
@@ -807,6 +785,7 @@ class _IngredientsTab extends StatelessWidget {
     required this.checked,
     required this.onServings,
     required this.onToggle,
+    required this.onShopping,
   });
 
   final Recipe recipe;
@@ -814,6 +793,7 @@ class _IngredientsTab extends StatelessWidget {
   final Set<String> checked;
   final ValueChanged<double> onServings;
   final ValueChanged<String> onToggle;
+  final VoidCallback onShopping;
 
   @override
   Widget build(BuildContext context) {
@@ -953,6 +933,17 @@ class _IngredientsTab extends StatelessWidget {
               ),
             ),
           ),
+        if (recipe.ingredients.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+            onPressed: onShopping,
+            icon: const Icon(Icons.add_shopping_cart_rounded),
+            label: const Text('Přidat do nákupního seznamu'),
+          ),
+        ],
         if (time.total > 0) ...[
           const SizedBox(height: 16),
           Text('Čas', style: theme.textTheme.titleMedium),

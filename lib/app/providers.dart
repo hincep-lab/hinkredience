@@ -565,6 +565,12 @@ class SyncController extends Notifier<SyncState> {
             table: 'shopping_items',
             callback: (_) => schedule(const Duration(seconds: 1)),
           )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'shopping_lists',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
           .subscribe();
       ref.onDispose(() => client.removeChannel(channel));
     } catch (error) {

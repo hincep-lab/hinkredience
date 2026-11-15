@@ -12,6 +12,7 @@ import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
 import 'recipe_picker.dart';
+import 'add_to_shopping_sheet.dart';
 import 'shopping_screen.dart';
 
 const _dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
@@ -209,14 +210,20 @@ class _PlanScreenState extends ConsumerState<PlanScreen> {
       showMessage(context, 'V tomto týdnu nejsou naplánované žádné recepty.');
       return;
     }
+    final listId = await pickShoppingList(
+      context,
+      ref,
+      suggestedName: 'Týden od ${_monday.day}. ${_monday.month}.',
+    );
+    if (listId == null || !mounted) return;
     final docs = await ref.read(docsRepositoryProvider.future);
-    final result = await docs.addToShopping(drafts);
+    final result = await docs.addToShopping(drafts, listId: listId);
     if (!mounted) return;
     showMessage(
       context,
       'Na seznam přidáno: ${result.added}, sečteno se stávajícími: ${result.merged}.',
     );
-    context.push(Routes.shopping);
+    context.push(Routes.shoppingList(listId));
   }
 
   @override

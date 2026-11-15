@@ -56,9 +56,50 @@ final openSessionProvider = StreamProvider<CookingSession?>(
   (ref) => _watch(ref, (docs) => docs.openSession()),
 );
 
-/// Nákupní seznam.
+/// Všechny položky všech nákupních seznamů.
 final shoppingProvider = StreamProvider<List<ShoppingItem>>(
   (ref) => _watch(ref, (docs) => docs.shopping()),
+);
+
+/// Nákupní seznam s počtem zbývajících položek.
+class ShoppingListSummary {
+  const ShoppingListSummary({
+    required this.list,
+    required this.remaining,
+    required this.total,
+  });
+
+  final ShoppingList list;
+  final int remaining;
+  final int total;
+}
+
+/// Nákupní seznamy (nejnovější první) s počty položek.
+final shoppingListsProvider = StreamProvider<List<ShoppingListSummary>>(
+  (ref) => _watch(ref, (docs) async {
+    final lists = await docs.shoppingLists();
+    final items = await docs.shopping();
+    return [
+      for (final list in lists)
+        ShoppingListSummary(
+          list: list,
+          remaining: items
+              .where((i) => i.listId == list.id && !i.checked)
+              .length,
+          total: items.where((i) => i.listId == list.id).length,
+        ),
+    ];
+  }),
+);
+
+/// Jeden nákupní seznam (null = smazaný nebo neexistuje).
+final shoppingListProvider = StreamProvider.family<ShoppingList?, String>(
+  (ref, id) => _watch(ref, (docs) => docs.shoppingList(id)),
+);
+
+/// Položky jednoho nákupního seznamu.
+final shoppingItemsProvider = StreamProvider.family<List<ShoppingItem>, String>(
+  (ref, listId) => _watch(ref, (docs) => docs.shopping(listId: listId)),
 );
 
 /// Plán vaření na týden začínající daným pondělím.

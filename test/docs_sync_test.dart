@@ -18,6 +18,7 @@ class FakeRemoteDocs implements RemoteDocs {
   final rows = <String, Map<String, RemoteDoc>>{
     DocKind.session: {},
     DocKind.plan: {},
+    DocKind.shoppingList: {},
     DocKind.shopping: {},
   };
   final pushedHousehold = <String, String?>{};
@@ -170,5 +171,73 @@ void main() {
     final result = await sync.sync();
     expect(result.errors, isEmpty);
     expect(await docs.dirtyCount(), 1, reason: 'odešle se po spuštění migrace');
+  });
+
+  test(
+    'seznam vytvořený v ChatGPT se objeví v telefonu a odškrtnutí se vrátí',
+    () async {
+      remote.serverEdit(DocKind.shoppingList, 'l1', {
+        'id': 'l1',
+        'name': 'Kuře na paprice',
+        'owner_id': 'user-1',
+        'household_id': null,
+        'created_at': env.now.toIso8601String(),
+        'updated_at': env.now.toIso8601String(),
+      }, env.now);
+      remote.serverEdit(DocKind.shopping, 'i1', {
+        'id': 'i1',
+        'list_id': 'l1',
+        'name': 'Máslo',
+        'quantity': 60,
+        'unit': 'g',
+        'category': 'mlecne',
+        'note': '',
+        'checked': false,
+        'sources': <String>[],
+        'created_at': env.now.toIso8601String(),
+        'updated_at': env.now.toIso8601String(),
+      }, env.now);
+      await sync.sync();
+      final lists = await docs.shoppingLists();
+      expect(lists.single.name, 'Kuře na paprice');
+      final butter = (await docs.shopping(listId: 'l1')).single;
+      expect(butter.category, 'mlecne');
+
+      env.advance(const Duration(minutes: 1));
+      await docs.saveShoppingItem(butter.copyWith(checked: true));
+      await sync.sync();
+      expect(remote.rows[DocKind.shopping]!['i1']!.data['checked'], isTrue);
+      expect(remote.rows[DocKind.shopping]!['i1']!.data['list_id'], 'l1');
+      expect(await docs.dirtyCount(), 0);
+    },
+  );
+
+  test('nový seznam z telefonu se odešle dřív než jeho položky', () async {
+    final list = await docs.createShoppingList('Víkend');
+    await docs.addToShopping(const [
+      ShoppingDraft(name: 'Cibule', quantity: 300, unit: 'g'),
+    ], listId: list.id);
+    await sync.sync();
+    expect(remote.rows[DocKind.shoppingList]!.keys, [list.id]);
+    expect(
+      remote.rows[DocKind.shopping]!.values.single.data['list_id'],
+      list.id,
+    );
+  });
+
+  test('smazání seznamu na serveru zmizí i v telefonu', () async {
+    final list = await docs.createShoppingList('Pryč');
+    await sync.sync();
+    env.advance(const Duration(minutes: 1));
+    final row = remote.rows[DocKind.shoppingList]![list.id]!;
+    remote.rows[DocKind.shoppingList]![list.id] = RemoteDoc(
+      id: row.id,
+      data: row.data,
+      updatedAt: env.now,
+      syncedAt: DateTime.utc(2030),
+      deletedAt: env.now,
+    );
+    await sync.sync();
+    expect(await docs.shoppingLists(), isEmpty);
   });
 }

@@ -212,7 +212,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     subtitle: shoppingCount == 0
                         ? 'Podle receptů'
                         : 'K nákupu · $shoppingCount',
-                    onTap: () => context.push(Routes.shopping),
+                    onTap: () => context.go(Routes.shopping),
                   ),
                   _FeatureTile(
                     icon: Icons.favorite_outline_rounded,

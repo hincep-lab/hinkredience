@@ -20,6 +20,7 @@ import '../features/cooking/cooking_screen.dart';
 import '../features/kitchen/diary_entry_screen.dart';
 import '../features/kitchen/diary_screen.dart';
 import '../features/kitchen/plan_screen.dart';
+import '../features/kitchen/shopping_lists_screen.dart';
 import '../features/kitchen/shopping_screen.dart';
 import '../features/more/family_screen.dart';
 import '../features/photos/recipe_photos_screen.dart';
@@ -90,6 +91,7 @@ abstract final class Routes {
   }
 
   static String recipe(String id) => '/recipe/$id';
+  static String shoppingList(String id) => '/shopping/$id';
   static String editRecipe(String id) => '/recipe/$id/edit';
   static String recipePhotos(String id) => '/recipe/$id/photos';
 
@@ -156,6 +158,25 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                     initialCategory: state.uri.queryParameters['category'],
                   ),
                 ),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: Routes.shopping,
+                pageBuilder: (context, state) =>
+                    tab(state, const ShoppingListsScreen()),
+                routes: [
+                  GoRoute(
+                    path: ':id',
+                    parentNavigatorKey: rootKey,
+                    pageBuilder: (context, state) => page(
+                      state,
+                      ShoppingScreen(listId: state.pathParameters['id']!),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -258,11 +279,6 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
             },
           ),
         ],
-      ),
-      GoRoute(
-        path: Routes.shopping,
-        parentNavigatorKey: rootKey,
-        pageBuilder: (context, state) => page(state, const ShoppingScreen()),
       ),
       GoRoute(
         path: Routes.plan,

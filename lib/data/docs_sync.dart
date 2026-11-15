@@ -399,7 +399,8 @@ class SupabaseRemoteDocs implements RemoteDocs {
           'deleted_at': deleted,
         };
       default:
-        if (d['list_id'] == null) return; // dostane seznam při příští synchronizaci
+        if (d['list_id'] == null)
+          return; // dostane seznam při příští synchronizaci
         row = {
           'id': doc.id,
           'list_id': d['list_id'],

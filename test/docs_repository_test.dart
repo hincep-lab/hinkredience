@@ -195,4 +195,63 @@ void main() {
     expect(formatCountdown(65), '01:05');
     expect(formatCountdown(3725), '1:02:05');
   });
+
+  test(
+    'více nákupních seznamů: položky odděleně, smazání nakoupených',
+    () async {
+      final kure = await docs.createShoppingList('Kuře na paprice');
+      env.advance(const Duration(seconds: 1));
+      final tyden = await docs.createShoppingList('Týden');
+      await docs.addToShopping(const [
+        ShoppingDraft(name: 'Cibule', quantity: 200, unit: 'g'),
+        ShoppingDraft(name: 'Máslo', quantity: 60, unit: 'g'),
+      ], listId: kure.id);
+      await docs.addToShopping(const [
+        ShoppingDraft(name: 'Cibule', quantity: 1, unit: 'kg'),
+      ], listId: tyden.id);
+      // Sloučení jen v rámci jednoho seznamu.
+      final merge = await docs.addToShopping(const [
+        ShoppingDraft(name: 'cibule', quantity: 300, unit: 'g'),
+      ], listId: kure.id);
+      expect(merge.merged, 1);
+      final onion = (await docs.shopping(listId: kure.id))
+          .firstWhere((i) => i.name == 'Cibule');
+      expect(onion.quantity, 500);
+      expect((await docs.shopping(listId: tyden.id)).single.quantity, 1000);
+      expect(onion.category, 'zelenina');
+
+      // Nové seznamy jsou nahoře.
+      expect((await docs.shoppingLists()).map((l) => l.name), [
+        'Týden',
+        'Kuře na paprice',
+      ]);
+
+      final butter = (await docs.shopping(listId: kure.id))
+          .firstWhere((i) => i.name == 'Máslo');
+      await docs.saveShoppingItem(butter.copyWith(checked: true));
+      expect(await docs.clearChecked(kure.id), 1);
+      expect((await docs.shopping(listId: kure.id)).map((i) => i.name), [
+        'Cibule',
+      ]);
+
+      // Bez sloučení zůstane samostatná položka.
+      await docs.addToShopping(
+        const [ShoppingDraft(name: 'Cibule', quantity: 100, unit: 'g')],
+        listId: kure.id,
+        keepSeparate: {0},
+      );
+      expect((await docs.shopping(listId: kure.id)).length, 2);
+
+      await docs.deleteShoppingList(kure.id);
+      expect((await docs.shoppingLists()).map((l) => l.name), ['Týden']);
+      expect(await docs.shopping(listId: kure.id), isEmpty);
+    },
+  );
+
+  test('položky ze starší verze dostanou výchozí seznam', () async {
+    await docs.addToShopping(const [ShoppingDraft(name: 'Mléko')]);
+    final lists = await docs.shoppingLists();
+    expect(lists.single.name, 'Nákupní seznam');
+    expect((await docs.shopping()).single.listId, lists.single.id);
+  });
 }

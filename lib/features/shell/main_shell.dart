@@ -39,6 +39,11 @@ class MainShell extends StatelessWidget {
               label: 'Recepty',
             ),
             NavigationDestination(
+              icon: Icon(Icons.shopping_cart_outlined),
+              selectedIcon: Icon(Icons.shopping_cart_rounded),
+              label: 'Nákupy',
+            ),
+            NavigationDestination(
               icon: Icon(Icons.favorite_outline_rounded),
               selectedIcon: Icon(Icons.favorite_rounded),
               label: 'Oblíbené',
