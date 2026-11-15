@@ -20,6 +20,7 @@ class FakeRemoteDocs implements RemoteDocs {
     DocKind.plan: {},
     DocKind.shoppingList: {},
     DocKind.shopping: {},
+    DocKind.wish: {},
   };
   final pushedHousehold = <String, String?>{};
   var _tick = DateTime.utc(2026, 11, 15, 12);
