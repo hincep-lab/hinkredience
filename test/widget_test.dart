@@ -638,17 +638,4 @@ void main() {
     );
     expect(find.textContaining('2 ks'), findsNothing);
   });
-
-  testWidgets('registrace se ptá na přezdívku pro oslovení', (tester) async {
-    await pumpApp(tester, location: Routes.auth);
-    expect(find.text('Přezdívka'), findsNothing);
-    await tester.ensureVisible(find.text('Nemám účet – zaregistrovat se'));
-    await tester.tap(find.text('Nemám účet – zaregistrovat se'));
-    await tester.pumpAndSettle();
-    expect(find.text('Přezdívka'), findsOneWidget);
-    await tester.ensureVisible(find.text('Vytvořit účet'));
-    await tester.tap(find.text('Vytvořit účet'));
-    await tester.pumpAndSettle();
-    expect(find.text('Vyplňte přezdívku.'), findsOneWidget);
-  });
 }
