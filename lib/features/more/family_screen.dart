@@ -133,6 +133,48 @@ class FamilyScreen extends ConsumerWidget {
     ref.invalidate(householdProvider);
   }
 
+  Future<void> _setAutoShare(
+    BuildContext context,
+    WidgetRef ref,
+    bool enabled,
+  ) async {
+    try {
+      final count = await ref
+          .read(householdStoreProvider)!
+          .setShareAllRecipes(enabled);
+      ref.invalidate(shareAllRecipesProvider);
+      await ref.read(syncProvider.notifier).syncNow();
+      if (!context.mounted) return;
+      showMessage(
+        context,
+        enabled
+            ? 'Recepty se teď sdílejí automaticky. Nově nasdíleno: $count.'
+            : 'Nové recepty už se nesdílejí automaticky. Dosud sdílené '
+                  'zůstávají sdílené.',
+      );
+    } catch (error) {
+      if (context.mounted) showMessage(context, '$error');
+    }
+  }
+
+  Future<void> _shareAllNow(BuildContext context, WidgetRef ref) async {
+    try {
+      final count = await ref
+          .read(householdStoreProvider)!
+          .shareAllRecipesNow();
+      await ref.read(syncProvider.notifier).syncNow();
+      if (!context.mounted) return;
+      showMessage(
+        context,
+        count == 0
+            ? 'Všechny vaše recepty už rodina vidí.'
+            : 'Rodině nasdíleno receptů: $count.',
+      );
+    } catch (error) {
+      if (context.mounted) showMessage(context, '$error');
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(householdStoreProvider);
@@ -153,7 +195,8 @@ class FamilyScreen extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                 children: [
                   const Text(
-                    'V rodině sdílíte recepty označené „Sdílet s rodinou“, plán '
+                    'V rodině sdílíte recepty označené „Sdílet s rodinou“ '
+                    '(nebo všechny, když zapnete automatické sdílení), plán '
                     'vaření a nákupní seznam. Soukromé recepty, kuchařský deník '
                     'a chutě si každý nechává pro sebe.',
                     style: TextStyle(
@@ -194,6 +237,40 @@ class FamilyScreen extends ConsumerWidget {
                                     )
                                   : null,
                             ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const SectionTitle('Moje recepty'),
+                    HkCard(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            secondary: const Icon(Icons.group_outlined),
+                            title: const Text(
+                              'Automaticky sdílet všechny moje recepty',
+                            ),
+                            subtitle: const Text(
+                              'Každý váš recept – i nový nebo z ChatGPT – '
+                              'uvidí a upraví celá rodina.',
+                            ),
+                            value:
+                                ref.watch(shareAllRecipesProvider).value ??
+                                false,
+                            onChanged: (value) =>
+                                _setAutoShare(context, ref, value),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(48),
+                            ),
+                            onPressed: () => _shareAllNow(context, ref),
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Sdílet všechny recepty teď'),
+                          ),
                         ],
                       ),
                     ),

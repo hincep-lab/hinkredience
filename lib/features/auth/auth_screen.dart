@@ -18,6 +18,7 @@ class AuthScreen extends ConsumerStatefulWidget {
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _nickname = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _register = false;
@@ -28,6 +29,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   @override
   void dispose() {
+    _nickname.dispose();
     _email.dispose();
     _password.dispose();
     super.dispose();
@@ -43,10 +45,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final session = ref.read(sessionProvider.notifier);
     try {
       if (_register) {
+        final nickname = _nickname.text.trim();
+        await ref.read(settingsProvider.notifier).setGreetingName(nickname);
         final signedIn = await session.signUp(
           email: _email.text,
           password: _password.text,
-          greetingName: ref.read(settingsProvider).greetingName,
+          greetingName: nickname,
         );
         if (!signedIn) {
           setState(() {
@@ -173,6 +177,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         style: theme.textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 16),
+                      if (_register) ...[
+                        TextFormField(
+                          controller: _nickname,
+                          textInputAction: TextInputAction.next,
+                          textCapitalization: TextCapitalization.words,
+                          maxLength: 30,
+                          decoration: const InputDecoration(
+                            labelText: 'Přezdívka',
+                            helperText:
+                                'Jak vás má aplikace oslovovat, '
+                                'např. „Ahoj Pájo“.',
+                            prefixIcon: Icon(Icons.waving_hand_outlined),
+                            counterText: '',
+                          ),
+                          validator: (value) => (value?.trim() ?? '').isEmpty
+                              ? 'Vyplňte přezdívku.'
+                              : null,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       TextFormField(
                         controller: _email,
                         keyboardType: TextInputType.emailAddress,

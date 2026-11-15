@@ -614,3 +614,55 @@ test('migrace 10 jde spustit znovu bez chyby', async () => {
   await db.exec(sql);
   await db.exec(sql);
 });
+
+test('sdílet všechny recepty s rodinou: hned stávající, pak automaticky nové', async () => {
+  const HOUSE = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const priv = (await as(PAVEL, `insert into recipes (title) values ('Soukromá svíčková') returning id`)).rows[0].id;
+  await as(CIZI, `insert into recipes (title) values ('Cizí guláš')`);
+  assert.equal((await as(MARTINKA, `select 1 from recipes where id = $1`, [priv])).rows.length, 0);
+
+  // Zapnutí: všechny Pavlovy recepty se nasdílí jeho rodině.
+  const shared = (await as(PAVEL, `select public.set_share_recipes_with_family(true) as n`)).rows[0].n;
+  assert.ok(shared >= 1, `nasdíleno ${shared}`);
+  const left = await as(PAVEL, `select count(*)::int as c from recipes
+    where owner_id = auth.uid() and deleted_at is null and visibility <> 'household'`);
+  assert.equal(left.rows[0].c, 0, 'žádný Pavlův recept nezůstal soukromý');
+  const row = (await as(MARTINKA, `select household_id, visibility from recipes where id = $1`, [priv])).rows[0];
+  assert.deepEqual(row, { household_id: HOUSE, visibility: 'household' });
+
+  // Nový recept (aplikace i ChatGPT přes api_save_recipe) se sdílí sám.
+  const fresh = (await as(PAVEL, `insert into recipes (title) values ('Nový z aplikace') returning visibility`)).rows[0];
+  assert.equal(fresh.visibility, 'household');
+  const api = (await as(PAVEL, `select public.api_save_recipe('{"title":"Z ChatGPT"}'::jsonb) as r`)).rows[0].r;
+  assert.equal((await as(MARTINKA, `select 1 from recipes where id = $1`, [api.id])).rows.length, 1);
+
+  // Tlačítko „Sdílet všechny“ bez automatiky: Martinka nasdílí své recepty.
+  await as(MARTINKA, `insert into recipes (title) values ('Martinčiny palačinky')`);
+  assert.equal((await as(MARTINKA, `select public.share_all_my_recipes() as n`)).rows[0].n, 1);
+  assert.equal((await as(PAVEL, `select 1 from recipes where title = 'Martinčiny palačinky'`)).rows.length, 1);
+  const auto = await db.query(`select share_recipes_with_family from public.profiles where id = $1`, [MARTINKA]);
+  assert.equal(auto.rows[0].share_recipes_with_family, false, 'tlačítko automatiku nezapne');
+
+  // Cizí uživatel bez rodiny: nic se nesdílí a jeho recepty zůstávají jeho.
+  assert.equal((await as(CIZI, `select public.set_share_recipes_with_family(true) as n`)).rows[0].n, 0);
+  assert.equal((await as(CIZI, `select public.share_all_my_recipes() as n`)).rows[0].n, 0);
+  assert.equal((await as(MARTINKA, `select 1 from recipes where title = 'Cizí guláš'`)).rows.length, 0);
+  assert.equal((await as(PAVEL, `select 1 from recipes where title = 'Cizí guláš'`)).rows.length, 0);
+
+  // Volba je jen vlastní: Pavel nezmění Martinčinu.
+  await as(PAVEL, `update profiles set share_recipes_with_family = true where id = '${MARTINKA}'`);
+  const hers = await db.query(`select share_recipes_with_family from public.profiles where id = $1`, [MARTINKA]);
+  assert.equal(hers.rows[0].share_recipes_with_family, false);
+
+  // Vypnutí: sdílené zůstanou, nové už jsou soukromé.
+  await as(PAVEL, `select public.set_share_recipes_with_family(false)`);
+  const later = (await as(PAVEL, `insert into recipes (title) values ('Po vypnutí') returning visibility`)).rows[0];
+  assert.equal(later.visibility, 'private');
+  assert.equal((await as(MARTINKA, `select 1 from recipes where id = $1`, [priv])).rows.length, 1);
+});
+
+test('migrace 11 jde spustit znovu bez chyby', async () => {
+  const sql = readFileSync(join(migrationsDir, '20261115000011_share_all_recipes.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});

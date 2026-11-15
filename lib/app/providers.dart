@@ -112,11 +112,25 @@ class SettingsController extends Notifier<AppSettings> {
     );
   }
 
-  Future<void> setGreetingName(String name) async {
+  /// Nastaví oslovení. Přihlášenému uživateli ho uloží i do profilu na
+  /// serveru, aby platilo na všech jeho zařízeních.
+  Future<void> setGreetingName(String name, {bool saveToProfile = true}) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
     await ref.read(sharedPreferencesProvider).setString(_greetingKey, trimmed);
     state = state.copyWith(greetingName: trimmed);
+    if (!saveToProfile) return;
+    final client = ref.read(supabaseClientProvider);
+    final userId = client?.auth.currentUser?.id;
+    if (client == null || userId == null) return;
+    try {
+      await client
+          .from('profiles')
+          .update({'greeting_name': trimmed})
+          .eq('id', userId);
+    } catch (error) {
+      debugPrint('Oslovení se nepodařilo uložit na server: $error');
+    }
   }
 
   Future<void> setSkipAuth(bool value) async {
@@ -181,10 +195,32 @@ class SessionController extends Notifier<Session> {
   }
 
   Future<void> signIn({required String email, required String password}) async {
-    await _client.auth.signInWithPassword(
+    final response = await _client.auth.signInWithPassword(
       email: email.trim(),
       password: password,
     );
+    await _loadGreeting(response.user?.id);
+  }
+
+  /// Oslovení z profilu na serveru (přezdívka zadaná při registraci nebo
+  /// v nastavení) – na novém telefonu nebo webu se tak neztratí.
+  Future<void> _loadGreeting(String? userId) async {
+    if (userId == null) return;
+    try {
+      final Map<String, dynamic>? row = await _client
+          .from('profiles')
+          .select('greeting_name')
+          .eq('id', userId)
+          .maybeSingle();
+      final name = (row?['greeting_name'] as String?)?.trim() ?? '';
+      if (name.isNotEmpty) {
+        await ref
+            .read(settingsProvider.notifier)
+            .setGreetingName(name, saveToProfile: false);
+      }
+    } catch (error) {
+      debugPrint('Oslovení se nepodařilo načíst: $error');
+    }
   }
 
   /// Zaregistruje účet. Vrací `true`, když je uživatel rovnou přihlášen,
@@ -202,6 +238,7 @@ class SessionController extends Notifier<Session> {
           'greeting_name': greetingName,
       },
     );
+    if (response.session != null) await _loadGreeting(response.user?.id);
     return response.session != null;
   }
 
