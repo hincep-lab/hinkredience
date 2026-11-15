@@ -316,6 +316,49 @@ String _formatMetric(
   return '${formatNumber(base, decimals: 1)} $small';
 }
 
+/// Převede hmotnost na gramy a objem na mililitry, aby šla množství téže
+/// suroviny sčítat (500 g + 1 kg). Ostatní jednotky vrací beze změny.
+({double quantity, String unit}) toBaseUnit(double quantity, String unit) {
+  final trimmed = unit.trim();
+  final folded = foldText(trimmed);
+  final bare = folded.endsWith('.')
+      ? folded.substring(0, folded.length - 1)
+      : folded;
+  switch (unitKind(unit)) {
+    case UnitKind.mass:
+      return (quantity: quantity * (_massUnits[bare] ?? 1), unit: 'g');
+    case UnitKind.volume:
+      return (quantity: quantity * (_volumeUnits[bare] ?? 1), unit: 'ml');
+    case UnitKind.measure:
+    case UnitKind.count:
+    case UnitKind.other:
+      return (quantity: quantity, unit: trimmed);
+  }
+}
+
+/// Součet množství pro nákupní seznam: gramy a mililitry se zaokrouhlí a od
+/// tisíce převedou na kg / l, kusy a lžíce se zapíšou zlomkem.
+String formatTotalAmount(double? quantity, String unit) {
+  if (quantity == null || quantity <= 0) return unit.trim();
+  switch (unitKind(unit)) {
+    case UnitKind.mass:
+      return _formatMetric(quantity, unit, _massUnits, small: 'g', large: 'kg');
+    case UnitKind.volume:
+      return _formatMetric(
+        quantity,
+        unit,
+        _volumeUnits,
+        small: 'ml',
+        large: 'l',
+      );
+    case UnitKind.measure:
+    case UnitKind.count:
+      return _withUnit(formatFraction(quantity), unit);
+    case UnitKind.other:
+      return _withUnit(formatNumber(quantity), unit);
+  }
+}
+
 // ------------------------------------------------------------ rozsahy v textu
 
 final _rangePattern = RegExp(
