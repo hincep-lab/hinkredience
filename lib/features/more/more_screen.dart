@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../app/router.dart';
-import '../../core/app_colors.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
 import '../sync/sync_status.dart';

@@ -210,10 +210,9 @@ class PhotoListEditor extends ConsumerWidget {
       child: ReorderableListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: photos.length,
-        onReorder: (from, to) {
+        onReorderItem: (from, to) {
           final list = [...photos];
-          final item = list.removeAt(from);
-          list.insert(to > from ? to - 1 : to, item);
+          list.insert(to, list.removeAt(from));
           onChanged(list);
         },
         footer: SizedBox(
