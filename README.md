@@ -20,7 +20,7 @@ Snímky generuje přímo z aplikace `flutter test tool/screenshots --update-gold
 | 2 – AI a vyhledávání | AI kuchař, chat, vyhledávání receptů na internetu, import | **hotovo v kódu a nasazeno**, čeká na klíč OpenAI (viz níže) |
 | 3 – Propojení s ChatGPT | zabezpečené API, MCP server | **server hotový a otestovaný**, čeká na zapnutí přihlášení (viz [docs/chatgpt.md](docs/chatgpt.md)) |
 | Modernizace | fotky, fotky v ChatGPT, automatická synchronizace, offline, nevypínání obrazovky | **hotovo v kódu a otestováno v CI** (PR #2), na serveru čeká migrace 08 a nasazení `mcp` |
-| 4 – Pokročilé funkce | deník, režim Vaříme spolu, rodinné účty, plán, nákupní seznam | rozpracováno ve větvi `etapa-4-rozpracovano` (modely), příprava režimu vaření je hotová |
+| 4 – Pokročilé funkce | Vaříme spolu (časovače, oznámení, hlas), deník, plán, nákupní seznam, rodina | **hotovo v kódu a otestováno v CI** (PR #3), na serveru čeká migrace 09; na telefonu neověřeno |
 
 ### Co umí Etapa 1
 
@@ -144,7 +144,10 @@ region West EU, plán Free) je založený a migrace ze složky
 Migrace 01–06 jsou spuštěné a funkce `ai` je nasazená. Migrace
 `20261114000007_yield_and_time.sql` a `20261115000008_sync_tombstones.sql`
 je potřeba spustit v SQL Editoru (jen přidávají, lze je spustit opakovaně)
-a znovu nasadit funkci `mcp`. Aplikace do té doby funguje dál – výtěžnost
+a znovu nasadit funkci `mcp`. Pro Etapu 4 ještě
+`20261115000009_family_diary_plan_shopping.sql` (rodina, sdílený plán
+a nákup, synchronizace deníku). Bez ní deník, plán i nákup fungují jen
+v telefonu. Aplikace do té doby funguje dál – výtěžnost
 v kusech a čekání drží v telefonu a náhrobky jen nepoužívá.
 
 Adresa projektu a veřejný (*publishable*) klíč jsou výchozí hodnotou sestavení
