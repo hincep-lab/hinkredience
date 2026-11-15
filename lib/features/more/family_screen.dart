@@ -274,6 +274,9 @@ class FamilyScreen extends ConsumerWidget {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    const SectionTitle('Oznámení'),
+                    const _FamilyNotificationsTile(),
                     const SizedBox(height: 12),
                     if (house.amOwner)
                       FilledButton.icon(
@@ -297,6 +300,57 @@ class FamilyScreen extends ConsumerWidget {
                 ],
               ),
             ),
+    );
+  }
+}
+
+/// Vypínač oznámení „někdo z rodiny něco chce“.
+class _FamilyNotificationsTile extends ConsumerStatefulWidget {
+  const _FamilyNotificationsTile();
+
+  @override
+  ConsumerState<_FamilyNotificationsTile> createState() =>
+      _FamilyNotificationsTileState();
+}
+
+class _FamilyNotificationsTileState
+    extends ConsumerState<_FamilyNotificationsTile> {
+  late bool _on =
+      ref.read(sharedPreferencesProvider).getBool(familyNotificationsKey) ??
+      true;
+
+  Future<void> _set(bool value) async {
+    setState(() => _on = value);
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setBool(familyNotificationsKey, value);
+    if (value) {
+      await prefs.setBool('family_notifications_asked', true);
+      final allowed = await ref.read(familyAlertsProvider).requestPermission();
+      if (!allowed && mounted) {
+        showMessage(
+          context,
+          'Oznámení jsou v telefonu zakázaná. Povolte je v Nastavení '
+          'telefonu → Aplikace → HINKredience → Oznámení.',
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return HkCard(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        secondary: const Icon(Icons.notifications_active_outlined),
+        title: const Text('Dát vědět, když někdo něco chce'),
+        subtitle: const Text(
+          'Oznámení, když někdo z rodiny přidá přání „mám chuť na…“ '
+          'nebo něco na nákupní seznam.',
+        ),
+        value: _on,
+        onChanged: _set,
+      ),
     );
   }
 }

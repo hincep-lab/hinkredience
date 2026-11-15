@@ -70,23 +70,50 @@ class DocsSync {
   ];
 
   /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
-  Future<({List<String> errors, bool offline, int pulled, int pushed})>
+  Future<
+    ({
+      List<String> errors,
+      bool offline,
+      int pulled,
+      int pushed,
+      List<FamilyNews> news,
+    })
+  >
   sync() async {
     final uid = remote.userId;
     if (uid == null)
-      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+      return (
+        errors: <String>[],
+        offline: false,
+        pulled: 0,
+        pushed: 0,
+        news: const <FamilyNews>[],
+      );
     final errors = <String>[];
     var offline = false;
     var pulled = 0;
     var pushed = 0;
+    final news = <FamilyNews>[];
     String? household;
     try {
       household = await remote.householdId();
     } on DocsNotSupported {
-      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+      return (
+        errors: <String>[],
+        offline: false,
+        pulled: 0,
+        pushed: 0,
+        news: const <FamilyNews>[],
+      );
     } catch (error) {
       if (isOfflineError(error)) {
-        return (errors: <String>[], offline: true, pulled: 0, pushed: 0);
+        return (
+          errors: <String>[],
+          offline: true,
+          pulled: 0,
+          pushed: 0,
+          news: const <FamilyNews>[],
+        );
       }
       household = null;
     }
@@ -105,7 +132,17 @@ class DocsSync {
             ? null
             : DateTime.tryParse(cursorText);
         var newest = cursor;
+        // Novinky hlásíme až po první úplné synchronizaci daného druhu.
+        final seenKey = 'docs_seen:$kind:$uid';
+        final seen = await docs.getMeta(seenKey) != null;
         for (final row in await remote.pull(kind, since: cursor)) {
+          // Novinky od rodiny (ne při úplně první synchronizaci, to by
+          // ohlásilo celou historii).
+          final isNew =
+              seen &&
+              row.deletedAt == null &&
+              (kind == DocKind.wish || kind == DocKind.shopping) &&
+              !await docs.known(row.id);
           if (await docs.applyRemote(
             kind: kind,
             id: row.id,
@@ -114,6 +151,10 @@ class DocsSync {
             deletedAt: row.deletedAt,
           )) {
             pulled++;
+            if (isNew) {
+              final item = FamilyNews.from(kind, row.data, uid);
+              if (item != null) news.add(item);
+            }
           }
           if (newest == null || row.syncedAt.isAfter(newest)) {
             newest = row.syncedAt;
@@ -122,6 +163,7 @@ class DocsSync {
         if (newest != null && newest != cursor) {
           await docs.setMeta(cursorKey, newest.toUtc().toIso8601String());
         }
+        if (!seen) await docs.setMeta(seenKey, '1');
 
         // 2) Odeslání místních změn
         for (final doc in await docs.dirty(kind)) {
@@ -146,6 +188,7 @@ class DocsSync {
           offline: offline,
           pulled: pulled,
           pushed: pushed,
+          news: news,
         );
       } catch (error) {
         if (isOfflineError(error)) {
@@ -157,7 +200,13 @@ class DocsSync {
     }
 
     if (!offline) await _cacheSessionPhotos();
-    return (errors: errors, offline: offline, pulled: pulled, pushed: pushed);
+    return (
+      errors: errors,
+      offline: offline,
+      pulled: pulled,
+      pushed: pushed,
+      news: news,
+    );
   }
 
   Future<void> _uploadSessionPhotos(String id, CookingSession session) async {
@@ -498,4 +547,66 @@ class SupabaseRemoteDocs implements RemoteDocs {
   Future<Uint8List> downloadPhoto(String remotePath) => _client.storage
       .from(SupabaseRemoteStore.photoBucket)
       .download(remotePath);
+}
+
+/// Co přidal někdo jiný z rodiny (nebo jiné zařízení): přání nebo položka
+/// nákupního seznamu. Z toho vznikají oznámení.
+class FamilyNews {
+  const FamilyNews({required this.kind, required this.title, this.author = ''});
+
+  final String kind;
+  final String title;
+  final String author;
+
+  /// Null, když nejde o novinku pro tohoto uživatele (vlastní přání,
+  /// odškrtnutá položka).
+  static FamilyNews? from(String kind, Map<String, dynamic> data, String uid) {
+    if (kind == DocKind.wish) {
+      if (data['owner_id'] == uid) return null;
+      final title = (data['title'] as String? ?? '').trim();
+      if (title.isEmpty || data['planned_day'] != null) return null;
+      return FamilyNews(
+        kind: kind,
+        title: title,
+        author: (data['author_name'] as String? ?? '').trim(),
+      );
+    }
+    if (kind == DocKind.shopping) {
+      if (data['checked'] == true) return null;
+      final name = (data['name'] as String? ?? '').trim();
+      if (name.isEmpty) return null;
+      return FamilyNews(kind: kind, title: name);
+    }
+    return null;
+  }
+}
+
+/// Text oznámení: každé přání zvlášť, položky nákupu souhrnně.
+List<({String title, String body})> familyNotifications(List<FamilyNews> news) {
+  final out = <({String title, String body})>[];
+  for (final wish in news.where((n) => n.kind == DocKind.wish)) {
+    out.add((
+      title: wish.author.isEmpty
+          ? 'Nové přání do jídelníčku'
+          : '${wish.author} má chuť na…',
+      body: wish.title,
+    ));
+  }
+  final items = [
+    for (final n in news)
+      if (n.kind == DocKind.shopping) n.title,
+  ];
+  if (items.isNotEmpty) {
+    final shown = items.take(3).join(', ');
+    final rest = items.length - 3;
+    out.add((
+      title: switch (items.length) {
+        1 => 'Na nákup přibyla položka',
+        < 5 => 'Na nákup přibyly ${items.length} položky',
+        _ => 'Na nákup přibylo ${items.length} položek',
+      },
+      body: rest > 0 ? '$shown a $rest další' : shown,
+    ));
+  }
+  return out;
 }

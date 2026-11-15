@@ -241,4 +241,60 @@ void main() {
     await sync.sync();
     expect(await docs.shoppingLists(), isEmpty);
   });
+
+  test(
+    'novinky od rodiny: přání a nákup od druhého, ne vlastní ani první sync',
+    () async {
+      // První synchronizace jen stáhne historii, nic neohlásí.
+      remote.serverEdit(DocKind.wish, 'w-old', {
+        'id': 'w-old',
+        'title': 'Staré přání',
+        'owner_id': 'user-2',
+        'author_name': 'Martinka',
+      }, env.now);
+      final first = await sync.sync();
+      expect(first.news, isEmpty);
+
+      remote.serverEdit(DocKind.wish, 'w1', {
+        'id': 'w1',
+        'title': 'Svíčková',
+        'owner_id': 'user-2',
+        'author_name': 'Martinka',
+      }, env.now);
+      remote.serverEdit(DocKind.wish, 'w2', {
+        'id': 'w2',
+        'title': 'Moje vlastní',
+        'owner_id': 'user-1',
+      }, env.now);
+      for (final name in ['Mléko', 'Chléb', 'Máslo', 'Vejce', 'Sýr']) {
+        remote.serverEdit(DocKind.shopping, 'i-$name', {
+          'id': 'i-$name',
+          'list_id': 'l1',
+          'name': name,
+        }, env.now);
+      }
+      final second = await sync.sync();
+      expect(second.news.map((n) => n.title).toList(), [
+        'Mléko',
+        'Chléb',
+        'Máslo',
+        'Vejce',
+        'Sýr',
+        'Svíčková',
+      ]);
+      expect(
+        second.news.where((n) => n.kind == DocKind.wish).single.author,
+        'Martinka',
+      );
+      final texts = familyNotifications(second.news);
+      expect(texts.first.title, 'Martinka má chuť na…');
+      expect(texts.first.body, 'Svíčková');
+      expect(texts.last.title, 'Na nákup přibylo 5 položek');
+      expect(texts.last.body, 'Mléko, Chléb, Máslo a 2 další');
+
+      // Podruhé už nic nového.
+      final third = await sync.sync();
+      expect(third.news, isEmpty);
+    },
+  );
 }

@@ -21,6 +21,7 @@ import '../data/recipe.dart';
 import '../data/recipe_repository.dart';
 import '../data/remote_store.dart';
 import '../data/sync_service.dart';
+import '../core/family_alerts.dart';
 import 'app_config.dart';
 
 // --------------------------------------------------------------- základ
@@ -683,6 +684,17 @@ class SyncController extends Notifier<SyncState> {
           remote: SupabaseRemoteDocs(client),
           photos: ref.read(photoStoreProvider),
         ).sync();
+        if (extra.news.isNotEmpty && familyNotificationsEnabled(ref)) {
+          unawaited(() async {
+            final prefs = ref.read(sharedPreferencesProvider);
+            final alerts = ref.read(familyAlertsProvider);
+            if (!(prefs.getBool('family_notifications_asked') ?? false)) {
+              await prefs.setBool('family_notifications_asked', true);
+              await alerts.requestPermission();
+            }
+            await alerts.show(familyNotifications(extra.news));
+          }());
+        }
         if (extra.errors.isNotEmpty || extra.offline) {
           result = SyncResult(
             pulled: result.pulled + extra.pulled,
@@ -739,6 +751,17 @@ class SyncController extends Notifier<SyncState> {
     return result;
   }
 }
+
+/// Oznámení „někdo z rodiny něco chce“ (v testech se nahrazuje).
+final familyAlertsProvider = Provider<FamilyAlerts>(
+  (ref) => LocalFamilyAlerts(),
+);
+
+const familyNotificationsKey = 'family_notifications';
+
+/// Oznámení od rodiny jsou zapnutá (výchozí stav: ano).
+bool familyNotificationsEnabled(Ref ref) =>
+    ref.read(sharedPreferencesProvider).getBool(familyNotificationsKey) ?? true;
 
 final syncProvider = NotifierProvider<SyncController, SyncState>(
   SyncController.new,

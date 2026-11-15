@@ -363,6 +363,18 @@ class DocsRepository {
 
   // ------------------------------------------------------- synchronizace
 
+  /// Zná telefon tenhle záznam (i smazaný)?
+  Future<bool> known(String id) async {
+    final rows = await _db.query(
+      'docs',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<List<DirtyDoc>> dirty(String kind) async {
     final rows = await _db.query(
       'docs',
