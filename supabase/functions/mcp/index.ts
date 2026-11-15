@@ -21,9 +21,18 @@ export interface Env {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export const SERVER_NAME = "hinkredience";
-export const SERVER_VERSION = "1.0.0";
+export const SERVER_VERSION = "1.1.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-const MAX_BODY_BYTES = 400_000;
+// Fotka poslaná přímo v požadavku (base64) může mít až ~10 MB.
+const MAX_BODY_BYTES = 15_000_000;
+const MAX_PHOTO_BYTES = 10_000_000;
+const PHOTO_BUCKET = "recipe-photos";
+/** Platnost odkazů na fotky v odpovědích (s). */
+const SIGNED_URL_SECONDS = 900;
+/** Obrázky vložené do odpovědi přímo (base64): nejvýše tolik a takhle velké. */
+const MAX_INLINE_IMAGES = 6;
+const MAX_INLINE_IMAGE_BYTES = 1_500_000;
+export const PHOTOS_WIDGET_URI = "ui://hinkredience/photos.html";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -279,6 +288,65 @@ class Supabase {
     return Array.isArray(body) ? body : [];
   }
 
+  private objectUrl(kind: string, path: string): string {
+    const encoded = path.split("/").map(encodeURIComponent).join("/");
+    return `${this.env.supabaseUrl}/storage/v1/object/${kind}${PHOTO_BUCKET}/${encoded}`;
+  }
+
+  /** Krátkodobý podepsaný odkaz na soukromou fotku (jen pro čtení). */
+  async signedUrl(path: string, seconds = SIGNED_URL_SECONDS): Promise<string | null> {
+    try {
+      const response = await this.fetchImpl(this.objectUrl("sign/", path), {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ expiresIn: seconds }),
+      });
+      if (!response.ok) return null;
+      const body = await response.json();
+      const signed = body?.signedURL ?? body?.signedUrl;
+      if (typeof signed !== "string") return null;
+      return signed.startsWith("http") ? signed : `${this.env.supabaseUrl}/storage/v1${signed}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Stáhne fotku z úložiště s oprávněním přihlášeného uživatele (RLS). */
+  async download(path: string): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+    const response = await this.fetchImpl(this.objectUrl("authenticated/", path), {
+      headers: { apikey: this.env.anonKey, Authorization: `Bearer ${this.token}` },
+    });
+    if (response.status === 401) throw new AuthError("Přístupový token vypršel.");
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { bytes, mimeType: detectImageType(bytes) ?? "image/jpeg" };
+  }
+
+  async upload(path: string, bytes: Uint8Array, mimeType: string): Promise<void> {
+    const response = await this.fetchImpl(this.objectUrl("", path), {
+      method: "POST",
+      headers: {
+        apikey: this.env.anonKey,
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": mimeType,
+        "x-upsert": "true",
+        "cache-control": "max-age=3600",
+      },
+      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+    });
+    if (!response.ok) await this.fail(response, "Nahrání fotky do úložiště se nepodařilo.");
+  }
+
+  async removeObjects(paths: string[]): Promise<void> {
+    if (!paths.length) return;
+    const response = await this.fetchImpl(`${this.env.supabaseUrl}/storage/v1/object/${PHOTO_BUCKET}`, {
+      method: "DELETE",
+      headers: this.headers(),
+      body: JSON.stringify({ prefixes: paths }),
+    });
+    if (!response.ok) console.error("Smazání souboru fotky selhalo", response.status);
+  }
+
   async rpc(name: string, args: Record<string, unknown>): Promise<any> {
     const response = await this.fetchImpl(`${this.env.supabaseUrl}/rest/v1/rpc/${name}`, {
       method: "POST",
@@ -300,6 +368,173 @@ async function loadRecipe(db: Supabase, id: string): Promise<any> {
   );
   if (!rows.length) throw new ToolError("Recept nenalezen. Zkontrolujte id přes get_recipes.");
   return rows[0];
+}
+
+// ---------------------------------------------------------------- fotografie
+
+/** Výsledek nástroje s obrázky navíc (MCP image content). */
+export class RichResult {
+  constructor(
+    public data: Record<string, unknown>,
+    public images: { title: string; data: string; mimeType: string }[] = [],
+    /** `false` = neposílat structuredContent (někteří klienti pak obrázky zahodí). */
+    public structured = true,
+  ) {}
+}
+
+interface StoredPhoto {
+  id: string;
+  remote_path: string;
+  thumb_path?: string;
+}
+
+export function photosOf(row: any): StoredPhoto[] {
+  return (Array.isArray(row?.photos) ? row.photos : [])
+    .filter((p: any) => typeof p?.id === "string" && typeof p?.remote_path === "string")
+    .map((p: any) => ({
+      id: p.id,
+      remote_path: p.remote_path,
+      ...(typeof p.thumb_path === "string" ? { thumb_path: p.thumb_path } : {}),
+    }));
+}
+
+/** Rozpozná JPEG, PNG a WebP podle prvních bajtů (ne podle přípony). */
+export function detectImageType(bytes: Uint8Array): string | null {
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (
+    bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  ) return "image/png";
+  if (
+    bytes.length > 12 &&
+    String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" &&
+    String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP"
+  ) return "image/webp";
+  return null;
+}
+
+export function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+export function fromBase64(text: string): Uint8Array {
+  const clean = text.replace(/^data:[^,]*,/, "").replace(/\s+/g, "");
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Adresa, ze které smíme stáhnout obrázek: jen https a veřejný server. */
+export function isSafeImageUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password) return false;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host.includes(".") || host.endsWith(".local") || host.endsWith(".internal") || host === "localhost") {
+    return false;
+  }
+  if (/^[\d.]+$/.test(host) || host.includes(":")) return false; // IP adresy nepovolujeme
+  return true;
+}
+
+async function fetchImage(fetchImpl: FetchLike, url: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  if (!isSafeImageUrl(url)) throw new ToolError("Odkaz na obrázek musí být https adresa veřejného serveru.");
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20_000) });
+  } catch {
+    throw new ToolError("Obrázek se nepodařilo stáhnout. Zkuste ho poslat znovu.");
+  }
+  if (response.url && !isSafeImageUrl(response.url)) {
+    throw new ToolError("Odkaz na obrázek přesměrovává na nepovolenou adresu.");
+  }
+  if (!response.ok) throw new ToolError(`Obrázek se nepodařilo stáhnout (HTTP ${response.status}).`);
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > MAX_PHOTO_BYTES) throw new ToolError("Obrázek je větší než 10 MB.");
+  const reader = response.body?.getReader();
+  if (!reader) throw new ToolError("Obrázek je prázdný.");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > MAX_PHOTO_BYTES) {
+      await reader.cancel();
+      throw new ToolError("Obrázek je větší než 10 MB.");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { bytes, mimeType: detectImageType(bytes) ?? "" };
+}
+
+/** Vybere fotku podle id, nebo pořadí (1 = hlavní). */
+function pickPhoto(photos: StoredPhoto[], args: any): { photo: StoredPhoto; index: number } {
+  if (!photos.length) throw new ToolError("Recept nemá žádné fotografie.");
+  if (typeof args?.photo_id === "string" && args.photo_id) {
+    const index = photos.findIndex((p) => p.id === args.photo_id);
+    if (index < 0) throw new ToolError("Fotografie s tímto id u receptu není. Zjistěte id přes get_recipe_photos.");
+    return { photo: photos[index], index };
+  }
+  const position = typeof args?.position === "number" ? Math.floor(args.position) : 1;
+  if (position < 1 || position > photos.length) {
+    throw new ToolError(`Recept má ${photos.length} fotografií; position musí být 1 až ${photos.length}.`);
+  }
+  return { photo: photos[position - 1], index: position - 1 };
+}
+
+async function loadRecipeRow(db: Supabase, id: string): Promise<any> {
+  const rows = await db.select(`recipes?select=id,title,photos,owner_id,updated_at&id=eq.${id}&deleted_at=is.null&limit=1`);
+  if (!rows.length) throw new ToolError("Recept nenalezen. Zkontrolujte id přes get_recipes.");
+  return rows[0];
+}
+
+async function savePhotos(db: Supabase, id: string, photos: StoredPhoto[]): Promise<void> {
+  // Změna fotek nevytváří novou verzi receptu (stejně jako v aplikaci);
+  // čas úpravy se posune, aby si změnu stáhly telefony.
+  const rows = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+    photos,
+    updated_at: new Date().toISOString(),
+  });
+  if (!rows.length) throw new ToolError("Fotky se nepodařilo uložit – recept nenalezen nebo k němu nemáte oprávnění.");
+}
+
+async function describePhotos(db: Supabase, photos: StoredPhoto[]) {
+  return await Promise.all(
+    photos.map(async (photo, index) => ({
+      photo_id: photo.id,
+      position: index + 1,
+      is_cover: index === 0,
+      url: await db.signedUrl(photo.remote_path),
+      thumbnail_url: photo.thumb_path ? await db.signedUrl(photo.thumb_path) : null,
+    })),
+  );
+}
+
+/** Načte obrázek pro vložení do odpovědi – náhled, jinak plnou fotku. */
+async function inlineImage(db: Supabase, photo: StoredPhoto, preferThumb: boolean) {
+  const paths = preferThumb && photo.thumb_path ? [photo.thumb_path, photo.remote_path] : [photo.remote_path];
+  for (const path of paths) {
+    const file = await db.download(path);
+    if (file && file.bytes.length <= MAX_INLINE_IMAGE_BYTES) {
+      return { data: toBase64(file.bytes), mimeType: file.mimeType };
+    }
+  }
+  return null;
 }
 
 // ----------------------------------------------------------------- nástroje
@@ -381,8 +616,20 @@ interface Tool {
   inputSchema: Record<string, unknown>;
   readOnly: boolean;
   destructive?: boolean;
-  run: (db: Supabase, args: any, userId: string) => Promise<unknown>;
+  /** Nástroj zobrazuje fotky v okénku (MCP Apps / ChatGPT). */
+  widget?: boolean;
+  /** Parametry, do kterých ChatGPT předá soubor od uživatele. */
+  fileParams?: string[];
+  run: (db: Supabase, args: any, userId: string, fetchImpl: FetchLike) => Promise<unknown>;
 }
+
+const photoSelector = {
+  photo_id: { type: "string", description: "Id fotky z get_recipe_photos." },
+  position: {
+    type: "integer",
+    description: "Pořadí fotky (1 = hlavní, 2 = druhá…). Použij, když uživatel řekne „druhá fotka“.",
+  },
+};
 
 export const tools: Tool[] = [
   {
@@ -781,6 +1028,349 @@ export const tools: Tool[] = [
       throw new ToolError("Parametr action musí být add, update nebo remove.");
     },
   },
+  {
+    name: "list_recipes_with_photos",
+    title: "Recepty s fotografiemi",
+    description:
+      "Ukáže recepty z kuchařky, které mají fotografie, včetně hlavní fotky. Fotky se zobrazí " +
+      "uživateli v okénku a jako obrázky. Použij např. na „podívej se na fotky v mé kuchařce“.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "Jen recepty, jejichž název obsahuje tento text." },
+        limit: { type: "integer", description: "Max. počet receptů (výchozí 12, nejvýše 50)." },
+        include_images: { type: "boolean", description: "Přiložit náhledy jako obrázky (výchozí ano)." },
+      },
+    },
+    readOnly: true,
+    widget: true,
+    run: async (db, args) => {
+      const rows = await db.select(
+        "recipes?select=id,title,category,photos,updated_at&deleted_at=is.null&order=updated_at.desc&limit=300",
+      );
+      const query = fold(text(args?.query, 80));
+      const limit = limitOf(args?.limit, 12, 50);
+      const withPhotos = rows
+        .filter((r) => photosOf(r).length > 0)
+        .filter((r) => !query || fold(r.title ?? "").includes(query))
+        .slice(0, limit);
+      const recipes = await Promise.all(
+        withPhotos.map(async (r) => {
+          const photos = photosOf(r);
+          const cover = photos[0];
+          return {
+            recipe_id: r.id,
+            title: r.title,
+            category: r.category ?? "",
+            photo_count: photos.length,
+            cover: {
+              photo_id: cover.id,
+              url: await db.signedUrl(cover.remote_path),
+              thumbnail_url: cover.thumb_path ? await db.signedUrl(cover.thumb_path) : null,
+            },
+          };
+        }),
+      );
+      const images = [];
+      if (args?.include_images !== false) {
+        for (const r of withPhotos.slice(0, MAX_INLINE_IMAGES)) {
+          const image = await inlineImage(db, photosOf(r)[0], true);
+          if (image) images.push({ title: `Hlavní fotka receptu „${r.title}“`, ...image });
+        }
+      }
+      return new RichResult(
+        {
+          view: "recipes",
+          count: recipes.length,
+          recipes,
+          note: "Odkazy na fotky platí 15 minut. Detail fotek receptu: get_recipe_photos.",
+        },
+        images,
+      );
+    },
+  },
+  {
+    name: "get_recipe_photos",
+    title: "Fotografie receptu",
+    description:
+      "Načte všechny fotografie jednoho receptu (pořadí, hlavní fotka) a ukáže je. " +
+      "Použij např. na „vidíš novou fotku lososa?“ – nejdřív najdi id receptu přes search_recipes.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: {
+        recipe_id: idProperty,
+        include_images: { type: "boolean", description: "Přiložit fotky jako obrázky (výchozí ano)." },
+      },
+    },
+    readOnly: true,
+    widget: true,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      const photos = photosOf(row);
+      const images = [];
+      if (args?.include_images !== false) {
+        for (const [index, photo] of photos.slice(0, MAX_INLINE_IMAGES).entries()) {
+          const image = await inlineImage(db, photo, photos.length > 2);
+          if (image) {
+            images.push({
+              title: `Fotka ${index + 1}${index === 0 ? " (hlavní)" : ""} receptu „${row.title}“`,
+              ...image,
+            });
+          }
+        }
+      }
+      return new RichResult(
+        {
+          view: "photos",
+          recipe_id: id,
+          title: row.title,
+          photo_count: photos.length,
+          photos: await describePhotos(db, photos),
+          note: photos.length
+            ? "Fotka 1 je hlavní. Odkazy platí 15 minut."
+            : "Recept zatím nemá žádné fotky. Přidat je jde přes upload_recipe_photo nebo v aplikaci.",
+        },
+        images,
+      );
+    },
+  },
+  {
+    name: "get_recipe_photo",
+    title: "Jedna fotografie receptu",
+    description:
+      "Načte jednu fotografii receptu v plné kvalitě, abys ji mohl prohlédnout a posoudit " +
+      "(např. propečení, barvu, servírování). Vyber ji podle photo_id nebo pořadí.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: { recipe_id: idProperty, ...photoSelector },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      const { photo, index } = pickPhoto(photosOf(row), args);
+      const file = await db.download(photo.remote_path);
+      if (!file) throw new ToolError("Soubor fotky v úložišti nebyl nalezen.");
+      let image = file;
+      if (file.bytes.length > MAX_INLINE_IMAGE_BYTES * 3 && photo.thumb_path) {
+        image = (await db.download(photo.thumb_path)) ?? file;
+      }
+      return new RichResult(
+        {
+          recipe_id: id,
+          title: row.title,
+          photo_id: photo.id,
+          position: index + 1,
+          is_cover: index === 0,
+          url: await db.signedUrl(photo.remote_path),
+        },
+        [{
+          title: `Fotka ${index + 1}${index === 0 ? " (hlavní)" : ""} receptu „${row.title}“`,
+          data: toBase64(image.bytes),
+          mimeType: image.mimeType,
+        }],
+        false,
+      );
+    },
+  },
+  {
+    name: "upload_recipe_photo",
+    title: "Přidat fotografii k receptu",
+    description:
+      "Uloží fotografii, kterou uživatel poslal do konverzace, k receptu v kuchařce. " +
+      "Předej obrázek v parametru photo (soubor z konverzace). Jiní klienti mohou poslat " +
+      "image_base64 nebo veřejný https odkaz image_url. Ukládej jen na výslovnou žádost " +
+      "(např. „vlož ji ke králíkovi“) a jen ke správnému receptu – při nejistotě se zeptej.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: {
+        recipe_id: idProperty,
+        photo: {
+          type: "object",
+          description: "Obrázek nahraný uživatelem do konverzace.",
+          properties: {
+            download_url: { type: "string" },
+            file_id: { type: "string" },
+            mime_type: { type: "string" },
+            file_name: { type: "string" },
+          },
+        },
+        image_url: { type: "string", description: "Veřejný https odkaz na obrázek (alternativa k photo)." },
+        image_base64: { type: "string", description: "Obrázek v base64 (JPEG, PNG nebo WebP, max. 10 MB)." },
+        set_as_cover: { type: "boolean", description: "Nastavit jako hlavní fotku (výchozí ne)." },
+      },
+    },
+    readOnly: false,
+    fileParams: ["photo"],
+    run: async (db, args, userId, fetchImpl) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      let file: { bytes: Uint8Array; mimeType: string };
+      const downloadUrl = typeof args?.photo === "object" ? args.photo?.download_url : null;
+      if (typeof downloadUrl === "string" && downloadUrl) {
+        file = await fetchImage(fetchImpl, downloadUrl);
+      } else if (typeof args?.image_url === "string" && args.image_url) {
+        file = await fetchImage(fetchImpl, args.image_url);
+      } else if (typeof args?.image_base64 === "string" && args.image_base64) {
+        let bytes: Uint8Array;
+        try {
+          bytes = fromBase64(args.image_base64);
+        } catch {
+          throw new ToolError("image_base64 není platný base64.");
+        }
+        if (bytes.length > MAX_PHOTO_BYTES) throw new ToolError("Obrázek je větší než 10 MB.");
+        file = { bytes, mimeType: detectImageType(bytes) ?? "" };
+      } else {
+        throw new ToolError("Chybí obrázek. Pošlete fotku do konverzace a zopakujte žádost.");
+      }
+      if (!file.mimeType) {
+        throw new ToolError("Podporované jsou fotky JPEG, PNG a WebP (HEIC z iPhonu převeďte na JPEG).");
+      }
+      const photoId = crypto.randomUUID();
+      const extension = file.mimeType === "image/png" ? "png" : file.mimeType === "image/webp" ? "webp" : "jpg";
+      const path = `${userId}/${id}/${photoId}.${extension}`;
+      await db.upload(path, file.bytes, file.mimeType);
+      const photo: StoredPhoto = { id: photoId, remote_path: path };
+      const current = photosOf(row);
+      const photos = args?.set_as_cover === true ? [photo, ...current] : [...current, photo];
+      try {
+        await savePhotos(db, id, photos);
+      } catch (error) {
+        await db.removeObjects([path]);
+        throw error;
+      }
+      const position = photos.findIndex((p) => p.id === photoId) + 1;
+      return {
+        saved: true,
+        recipe_id: id,
+        title: row.title,
+        photo_id: photoId,
+        position,
+        is_cover: position === 1,
+        size_kb: Math.round(file.bytes.length / 1024),
+        message: `Fotka je uložená u receptu „${row.title}“ jako ${position}. fotka` +
+          `${position === 1 ? " (hlavní)" : ""}. V aplikaci se objeví po synchronizaci (obvykle hned).`,
+      };
+    },
+  },
+  {
+    name: "set_recipe_cover_photo",
+    title: "Nastavit hlavní fotografii",
+    description:
+      "Nastaví vybranou fotku receptu jako hlavní (zobrazuje se v seznamu a nahoře v detailu). " +
+      "Např. „nastav druhou fotku palačinek jako hlavní“ = position 2.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: { recipe_id: idProperty, ...photoSelector },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      const photos = photosOf(row);
+      const { photo, index } = pickPhoto(photos, args);
+      if (index > 0) {
+        photos.splice(index, 1);
+        photos.unshift(photo);
+        await savePhotos(db, id, photos);
+      }
+      return {
+        saved: index > 0,
+        recipe_id: id,
+        title: row.title,
+        cover_photo_id: photo.id,
+        message: index > 0
+          ? `Hlavní fotka receptu „${row.title}“ je teď ta, která byla ${index + 1}. v pořadí.`
+          : `Tato fotka už je u receptu „${row.title}“ hlavní.`,
+      };
+    },
+  },
+  {
+    name: "reorder_recipe_photos",
+    title: "Změnit pořadí fotografií",
+    description:
+      "Změní pořadí fotek receptu. photo_ids = id v novém pořadí (první bude hlavní); " +
+      "neuvedené fotky zůstanou za nimi v původním pořadí.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id", "photo_ids"],
+      properties: {
+        recipe_id: idProperty,
+        photo_ids: { type: "array", items: { type: "string" }, description: "Id fotek v novém pořadí." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      const photos = photosOf(row);
+      const wanted: string[] = Array.isArray(args?.photo_ids) ? args.photo_ids.filter((v: unknown) => typeof v === "string") : [];
+      const unknown = wanted.filter((pid) => !photos.some((p) => p.id === pid));
+      if (unknown.length) throw new ToolError(`Neznámá id fotek: ${unknown.join(", ")}.`);
+      const ordered = [
+        ...[...new Set(wanted)].map((pid) => photos.find((p) => p.id === pid)!),
+        ...photos.filter((p) => !wanted.includes(p.id)),
+      ];
+      await savePhotos(db, id, ordered);
+      return {
+        saved: true,
+        recipe_id: id,
+        order: ordered.map((p, i) => ({ position: i + 1, photo_id: p.id })),
+        message: `Pořadí fotek receptu „${row.title}“ je uložené.`,
+      };
+    },
+  },
+  {
+    name: "delete_recipe_photo",
+    title: "Odebrat fotografii z receptu",
+    description:
+      "Odebere fotku z receptu. Soubor se smaže z úložiště jen tehdy, když ho nepoužívá žádná " +
+      "uložená verze receptu. Použij jen na výslovnou žádost uživatele.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: { recipe_id: idProperty, ...photoSelector },
+    },
+    readOnly: false,
+    destructive: true,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const row = await loadRecipeRow(db, id);
+      const photos = photosOf(row);
+      const { photo, index } = pickPhoto(photos, args);
+      photos.splice(index, 1);
+      await savePhotos(db, id, photos);
+      // Fotku, kterou zná historie verzí, necháme v úložišti (obnova verze).
+      const inHistory = await db.select(
+        `recipe_versions?select=id&recipe_id=eq.${id}&snapshot=cs.${
+          encodeURIComponent(JSON.stringify({ photos: [{ remote_path: photo.remote_path }] }))
+        }&limit=1`,
+      );
+      if (!inHistory.length && photo.remote_path.startsWith(`${row.owner_id}/`)) {
+        await db.removeObjects([photo.remote_path, ...(photo.thumb_path ? [photo.thumb_path] : [])]);
+      }
+      return {
+        deleted: true,
+        recipe_id: id,
+        photo_id: photo.id,
+        remaining: photos.length,
+        file_kept_for_history: inHistory.length > 0,
+        message: `Fotka ${index + 1} je z receptu „${row.title}“ odebraná.`,
+      };
+    },
+  },
 ];
 
 const instructions =
@@ -789,7 +1379,10 @@ const instructions =
   "Před návrhem receptu si přes get_kitchen_equipment zjisti vybavení a chutě. " +
   "Než recept upravíš, načti ho přes get_recipe. Úpravy vždy vytvářejí novou verzi, nic se nepřepisuje. " +
   "Nevymýšlej si uložené recepty ani historii – používej jen data z nástrojů. " +
-  "Ukládej a maž jen na výslovnou žádost uživatele.";
+  "Ukládej a maž jen na výslovnou žádost uživatele. " +
+  "Fotky receptů: přehled list_recipes_with_photos, fotky jednoho receptu get_recipe_photos, " +
+  "prohlédnutí jedné fotky get_recipe_photo, nahrání fotky z konverzace upload_recipe_photo, " +
+  "hlavní fotka set_recipe_cover_photo (první fotka = hlavní).";
 
 function toolList() {
   return tools.map((tool) => ({
@@ -805,7 +1398,96 @@ function toolList() {
       openWorldHint: false,
     },
     securitySchemes: [{ type: "oauth2", scopes: [] }],
+    ...(tool.widget || tool.fileParams
+      ? {
+        _meta: {
+          ...(tool.widget
+            ? {
+              ui: { resourceUri: PHOTOS_WIDGET_URI },
+              "openai/outputTemplate": PHOTOS_WIDGET_URI,
+              "openai/toolInvocation/invoking": "Načítám fotky…",
+              "openai/toolInvocation/invoked": "Fotky načtené",
+            }
+            : {}),
+          ...(tool.fileParams ? { "openai/fileParams": tool.fileParams } : {}),
+        },
+      }
+      : {}),
   }));
+}
+
+/** Okénko s fotkami (MCP Apps). Obrázky načítá jen z úložiště projektu. */
+export function photosWidgetHtml(env: Env): string {
+  const origin = new URL(env.supabaseUrl).origin;
+  return `<!doctype html>
+<html lang="cs"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 12px; background: transparent; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  figure { margin: 0; border-radius: 12px; overflow: hidden; background: rgba(127,127,127,.12); }
+  img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+  figcaption { font-size: 12.5px; padding: 6px 8px; line-height: 1.3; }
+  .cover { color: #c98a4b; font-weight: 600; }
+  .empty { opacity: .7; font-size: 13px; }
+</style></head>
+<body><div id="root"><p class="empty">Načítám fotky…</p></div>
+<script>
+  const ORIGIN = ${JSON.stringify(origin)};
+  const root = document.getElementById("root");
+  const safe = (url) => typeof url === "string" && url.startsWith(ORIGIN + "/") ? url : null;
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
+  function render(data) {
+    if (!data || typeof data !== "object") return;
+    root.replaceChildren();
+    const items = data.view === "photos"
+      ? (data.photos || []).map((p) => ({ url: p.thumbnail_url || p.url, full: p.url, label: p.is_cover ? "Hlavní fotka" : "Fotka " + p.position, cover: p.is_cover }))
+      : (data.recipes || []).map((r) => ({ url: r.cover && (r.cover.thumbnail_url || r.cover.url), full: r.cover && r.cover.url, label: r.title + " · " + r.photo_count + " fot.", cover: false }));
+    if (data.view === "photos") root.append(el("h2", "", data.title || "Fotky receptu"));
+    if (!items.length) { root.append(el("p", "empty", "Žádné fotky.")); return; }
+    const grid = el("div", "grid");
+    for (const item of items) {
+      const src = safe(item.url) || safe(item.full);
+      if (!src) continue;
+      const figure = el("figure");
+      const img = el("img"); img.src = src; img.alt = item.label; img.loading = "lazy";
+      figure.append(img, el("figcaption", item.cover ? "cover" : "", item.label));
+      grid.append(figure);
+    }
+    root.append(grid);
+  }
+  // ChatGPT (window.openai) i standard MCP Apps (postMessage).
+  if (window.openai && window.openai.toolOutput) render(window.openai.toolOutput);
+  window.addEventListener("openai:set_globals", () => window.openai && render(window.openai.toolOutput));
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    if (msg.method === "ui/notifications/tool-result") render(msg.params && msg.params.structuredContent);
+    if (msg.id === 1 && msg.result) window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" }, "*");
+  });
+  window.parent.postMessage({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {
+    protocolVersion: "2026-01-26",
+    appInfo: { name: "hinkredience-photos", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline"] },
+  } }, "*");
+</script></body></html>`;
+}
+
+function widgetResource(env: Env) {
+  const origin = new URL(env.supabaseUrl).origin;
+  return {
+    uri: PHOTOS_WIDGET_URI,
+    name: "Fotky receptů",
+    mimeType: "text/html;profile=mcp-app",
+    _meta: {
+      ui: { csp: { resourceDomains: [origin] }, prefersBorder: true },
+      "openai/widgetCSP": { resource_domains: [origin], connect_domains: [] },
+      "openai/widgetDescription": "Mřížka fotografií receptů z kuchařky HINKredience.",
+    },
+  };
 }
 
 // ---------------------------------------------------------------- protokol
@@ -853,6 +1535,8 @@ async function handleMessage(
   message: any,
   db: Supabase,
   userId: string,
+  env: Env,
+  fetchImpl: FetchLike,
 ): Promise<unknown | null> {
   const id = message?.id;
   const isNotification = id === undefined || id === null;
@@ -864,7 +1548,7 @@ async function handleMessage(
       const requested = message.params?.protocolVersion;
       return rpcResult(id, {
         protocolVersion: PROTOCOL_VERSIONS.includes(requested) ? requested : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, title: "HINKredience°", version: SERVER_VERSION },
         instructions,
       });
@@ -877,7 +1561,19 @@ async function handleMessage(
       const tool = tools.find((t) => t.name === message.params?.name);
       if (!tool) return rpcError(id, -32602, `Neznámý nástroj: ${message.params?.name}`);
       try {
-        const result = await tool.run(db, message.params?.arguments ?? {}, userId);
+        const result = await tool.run(db, message.params?.arguments ?? {}, userId, fetchImpl);
+        if (result instanceof RichResult) {
+          const content: unknown[] = [{ type: "text", text: JSON.stringify(result.data) }];
+          for (const image of result.images) {
+            content.push({ type: "text", text: image.title });
+            content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+          }
+          return rpcResult(id, {
+            content,
+            ...(result.structured ? { structuredContent: result.data } : {}),
+            isError: false,
+          });
+        }
         return rpcResult(id, {
           content: [{ type: "text", text: JSON.stringify(result) }],
           structuredContent: result,
@@ -891,6 +1587,24 @@ async function handleMessage(
         if (!(error instanceof ToolError)) console.error("Chyba nástroje", tool.name, error);
         return rpcResult(id, { content: [{ type: "text", text }], isError: true });
       }
+    }
+    case "resources/list":
+      return rpcResult(id, { resources: [widgetResource(env)] });
+    case "resources/templates/list":
+      return rpcResult(id, { resourceTemplates: [] });
+    case "resources/read": {
+      if (message.params?.uri !== PHOTOS_WIDGET_URI) {
+        return rpcError(id, -32002, "Zdroj nenalezen.");
+      }
+      const resource = widgetResource(env);
+      return rpcResult(id, {
+        contents: [{
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: photosWidgetHtml(env),
+          _meta: resource._meta,
+        }],
+      });
     }
     default:
       if (isNotification) return null; // notifications/initialized apod.
@@ -935,12 +1649,12 @@ export async function handle(req: Request, env: Env, fetchImpl: FetchLike = fetc
     if (Array.isArray(payload)) {
       const results = [];
       for (const message of payload.slice(0, 20)) {
-        const result = await handleMessage(message, db, userId);
+        const result = await handleMessage(message, db, userId, scopedEnv, fetchImpl);
         if (result !== null) results.push(result);
       }
       return results.length ? jsonResponse(200, results) : new Response(null, { status: 202, headers: corsHeaders });
     }
-    const result = await handleMessage(payload, db, userId);
+    const result = await handleMessage(payload, db, userId, scopedEnv, fetchImpl);
     return result === null
       ? new Response(null, { status: 202, headers: corsHeaders })
       : jsonResponse(200, result);

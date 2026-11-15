@@ -146,32 +146,55 @@ class RecipeStep {
 /// v úložišti Supabase (vyplní se po nahrání).
 @immutable
 class RecipePhoto {
-  const RecipePhoto({required this.id, this.localPath, this.remotePath});
+  const RecipePhoto({
+    required this.id,
+    this.localPath,
+    this.remotePath,
+    this.thumbPath,
+  });
 
   final String id;
+
+  /// Relativní cesta souboru v telefonu (složka aplikace).
   final String? localPath;
+
+  /// Cesta v úložišti Supabase (bucket recipe-photos).
   final String? remotePath;
 
-  RecipePhoto copyWith({String? id, String? localPath, String? remotePath}) =>
-      RecipePhoto(
-        id: id ?? this.id,
-        localPath: localPath ?? this.localPath,
-        remotePath: remotePath ?? this.remotePath,
-      );
+  /// Cesta zmenšeného náhledu v úložišti (pro přehledy a ChatGPT).
+  final String? thumbPath;
+
+  RecipePhoto copyWith({
+    String? id,
+    String? localPath,
+    String? remotePath,
+    String? thumbPath,
+  }) => RecipePhoto(
+    id: id ?? this.id,
+    localPath: localPath ?? this.localPath,
+    remotePath: remotePath ?? this.remotePath,
+    thumbPath: thumbPath ?? this.thumbPath,
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'local_path': localPath,
     'remote_path': remotePath,
+    'thumb_path': ?thumbPath,
   };
 
   /// Podoba ukládaná na server – cesta v telefonu tam nepatří.
-  Map<String, dynamic> toRemoteJson() => {'id': id, 'remote_path': remotePath};
+  Map<String, dynamic> toRemoteJson() => {
+    'id': id,
+    'remote_path': remotePath,
+    'thumb_path': ?thumbPath,
+  };
 
   factory RecipePhoto.fromJson(Map<String, dynamic> json) => RecipePhoto(
     id: json['id'] as String,
     localPath: json['local_path'] as String?,
     remotePath: json['remote_path'] as String?,
+    thumbPath: json['thumb_path'] as String?,
   );
 }
 

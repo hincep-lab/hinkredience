@@ -64,15 +64,48 @@ interface Call {
   headers: Record<string, string>;
 }
 
-function world(options: { user?: boolean; recipes?: any[]; tables?: Record<string, any[]>; rpcError?: string } = {}) {
+const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+
+function world(
+  options: {
+    user?: boolean;
+    recipes?: any[];
+    tables?: Record<string, any[]>;
+    rpcError?: string;
+    files?: Record<string, Uint8Array>;
+    external?: Record<string, Uint8Array>;
+  } = {},
+) {
   const calls: Call[] = [];
   const recipes = options.recipes ?? [svickova, gulas];
+  const files: Record<string, Uint8Array> = { "u/r/p1.jpg": JPEG, ...(options.files ?? {}) };
+  const uploads: Record<string, Uint8Array> = {};
   const fetchImpl = async (input: string, init: RequestInit = {}): Promise<Response> => {
     const method = init.method ?? "GET";
     const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ url: input, method, body, headers: (init.headers ?? {}) as Record<string, string> });
     const ok = (data: unknown, status = 200) =>
       new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+
+    if (!input.startsWith("https://projekt.supabase.co/")) {
+      const bytes = options.external?.[input];
+      return bytes ? new Response(bytes.slice(), { status: 200 }) : new Response("nic", { status: 404 });
+    }
+    const storage = input.split("/storage/v1/object/")[1];
+    if (storage !== undefined) {
+      const path = decodeURIComponent(storage.replace(/^(sign|authenticated)\//, "").replace(/^recipe-photos\/?/, ""));
+      if (storage.startsWith("sign/")) return ok({ signedURL: `/object/sign/recipe-photos/${path}?token=t` });
+      if (storage.startsWith("authenticated/")) {
+        const file = files[path] ?? uploads[path];
+        return file ? new Response(file.slice(), { status: 200 }) : ok({ message: "Object not found" }, 400);
+      }
+      if (method === "POST") {
+        uploads[path] = new Uint8Array(init.body as ArrayBuffer);
+        return ok({ Key: path });
+      }
+      if (method === "DELETE") return ok([]);
+    }
 
     if (input.endsWith("/auth/v1/user")) {
       return options.user === false ? ok({ message: "invalid JWT" }, 401) : ok({ id: "uzivatel-1" });
@@ -95,7 +128,7 @@ function world(options: { user?: boolean; recipes?: any[]; tables?: Record<strin
     if (method === "PATCH" || method === "DELETE") return ok(options.tables?.[table] ?? []);
     return ok(options.tables?.[table] ?? []);
   };
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, uploads };
 }
 
 function post(body: unknown, token: string | null = "token-uzivatele") {
@@ -118,7 +151,11 @@ async function call(w: ReturnType<typeof world>, name: string, args: unknown = {
   );
   assertEquals(response.status, 200);
   const body = await response.json();
-  return body.result as { isError?: boolean; content: { text: string }[]; structuredContent?: any };
+  return body.result as {
+    isError?: boolean;
+    content: { type?: string; text: string; data?: string; mimeType?: string }[];
+    structuredContent?: any;
+  };
 }
 
 Deno.test("bez tokenu vrátí 401 s odkazem na metadata pro OAuth", async () => {
@@ -191,7 +228,7 @@ Deno.test("initialize dohodne verzi protokolu a oznámení vrací 202", async ()
   assertEquals((await missing.json()).error.code, -32601);
 });
 
-Deno.test("tools/list: všech 12 nástrojů ze zadání, čtecí jsou označené", async () => {
+Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů, čtecí jsou označené", async () => {
   const response = await handle(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }), env, world().fetchImpl);
   const list = (await response.json()).result.tools as any[];
   assertEquals(list.map((t) => t.name).sort(), [
@@ -199,22 +236,32 @@ Deno.test("tools/list: všech 12 nástrojů ze zadání, čtecí jsou označené
     "create_recipe",
     "create_recipe_version",
     "delete_recipe",
+    "delete_recipe_photo",
     "get_cooking_history",
     "get_kitchen_equipment",
     "get_recipe",
+    "get_recipe_photo",
+    "get_recipe_photos",
     "get_recipe_versions",
     "get_recipes",
+    "list_recipes_with_photos",
+    "reorder_recipe_photos",
     "search_recipes",
+    "set_recipe_cover_photo",
     "update_kitchen_equipment",
     "update_recipe",
+    "upload_recipe_photo",
   ]);
   const readOnly = list.filter((t) => t.annotations.readOnlyHint).map((t) => t.name).sort();
   assertEquals(readOnly, [
     "get_cooking_history",
     "get_kitchen_equipment",
     "get_recipe",
+    "get_recipe_photo",
+    "get_recipe_photos",
     "get_recipe_versions",
     "get_recipes",
+    "list_recipes_with_photos",
     "search_recipes",
   ]);
   for (const tool of list) {
@@ -222,7 +269,13 @@ Deno.test("tools/list: všech 12 nástrojů ze zadání, čtecí jsou označené
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 12);
+  assertEquals(tools.length, 19);
+  const byName = Object.fromEntries(list.map((t) => [t.name, t]));
+  assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
+  assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");
+  assertEquals(byName.upload_recipe_photo._meta["openai/fileParams"], ["photo"]);
+  assert(byName.delete_recipe_photo.annotations.destructiveHint, "mazání je označené");
+  assert(!byName.get_recipe._meta, "původní nástroje beze změny");
 });
 
 Deno.test("get_recipes čte tokenem uživatele a nevrací interní pole", async () => {
@@ -474,4 +527,146 @@ Deno.test("pomocné funkce", () => {
   assertEquals(merged.servings, 6);
   assertEquals((merged.ingredients as any[]).length, 1);
   assertEquals(cleanRecipe({ title: "X", servings: 0 }).servings, 4);
+});
+
+// ------------------------------------------------------------- fotografie
+
+const ID3 = "44444444-4444-4444-8444-444444444444";
+const palacinky = {
+  id: ID3,
+  title: "Palačinky",
+  category: "Dezerty",
+  owner_id: "uzivatel-1",
+  updated_at: "2026-11-14T10:00:00Z",
+  photos: [
+    { id: "a", remote_path: "uzivatel-1/p/a.jpg", thumb_path: "uzivatel-1/p/a_t.jpg" },
+    { id: "b", remote_path: "uzivatel-1/p/b.jpg" },
+  ],
+};
+
+Deno.test("okénko s fotkami: zdroj MCP Apps s CSP jen pro úložiště projektu", async () => {
+  const w = world();
+  const list = await handle(post({ jsonrpc: "2.0", id: 1, method: "resources/list" }), env, w.fetchImpl);
+  const resource = (await list.json()).result.resources[0];
+  assertEquals(resource.uri, "ui://hinkredience/photos.html");
+  assertEquals(resource.mimeType, "text/html;profile=mcp-app");
+  const read = await handle(
+    post({ jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: resource.uri } }),
+    env,
+    w.fetchImpl,
+  );
+  const content = (await read.json()).result.contents[0];
+  assertEquals(content._meta.ui.csp.resourceDomains, ["https://projekt.supabase.co"]);
+  assert(content.text.includes('const ORIGIN = "https://projekt.supabase.co"'), "obrázky jen z projektu");
+  assert(!content.text.includes("innerHTML"), "text se vkládá bezpečně");
+});
+
+Deno.test("list_recipes_with_photos: recepty s fotkou, podepsané odkazy a obrázky", async () => {
+  const w = world({ recipes: [svickova, gulas, palacinky], files: { "uzivatel-1/p/a_t.jpg": PNG } });
+  const result = await call(w, "list_recipes_with_photos");
+  const data = result.structuredContent;
+  assertEquals(data.recipes.map((r: any) => r.title), ["Svíčková na smetaně", "Palačinky"]);
+  assert(data.recipes[0].cover.url.startsWith("https://projekt.supabase.co/storage/v1/object/sign/"), "absolutní odkaz");
+  const images = result.content.filter((c) => c.type === "image");
+  assertEquals(images.length, 2);
+  assertEquals(images[1].mimeType, "image/png", "u palačinek se použije náhled");
+  assertEquals(images[0].data, btoa(String.fromCharCode(...JPEG)));
+  // Podepsané odkazy platí 15 minut.
+  const sign = w.calls.find((c) => c.url.includes("/object/sign/"))!;
+  assertEquals(sign.body, { expiresIn: 900 });
+  assertEquals(sign.headers.Authorization, "Bearer token-uzivatele", "s oprávněním uživatele");
+});
+
+Deno.test("get_recipe_photos a get_recipe_photo: fotky jednoho receptu, druhá podle pořadí", async () => {
+  const w = world({ recipes: [palacinky], files: { "uzivatel-1/p/a.jpg": JPEG, "uzivatel-1/p/b.jpg": PNG } });
+  const all = await call(w, "get_recipe_photos", { recipe_id: ID3 });
+  assertEquals(all.structuredContent.photos.map((p: any) => [p.photo_id, p.position, p.is_cover]), [
+    ["a", 1, true],
+    ["b", 2, false],
+  ]);
+  assertEquals(all.content.filter((c) => c.type === "image").length, 2);
+
+  const one = await call(w, "get_recipe_photo", { recipe_id: ID3, position: 2 });
+  assertEquals(one.structuredContent, undefined, "jen obrázek a text, aby ho model viděl");
+  const image = one.content.find((c) => c.type === "image")!;
+  assertEquals(image.mimeType, "image/png");
+  assert(one.content[0].text.includes('"photo_id":"b"'));
+
+  const bad = await call(w, "get_recipe_photo", { recipe_id: ID3, position: 5 });
+  assert(bad.isError);
+  assert(bad.content[0].text.includes("1 až 2"));
+});
+
+Deno.test("upload_recipe_photo: soubor z ChatGPT se uloží do složky uživatele a připojí k receptu", async () => {
+  const url = "https://files.oaiusercontent.com/file-123?sig=abc";
+  const w = world({ recipes: [svickova], external: { [url]: JPEG } });
+  const result = await call(w, "upload_recipe_photo", {
+    recipe_id: ID1,
+    photo: { download_url: url, file_id: "file-123", mime_type: "image/jpeg", file_name: "kralik.jpg" },
+  });
+  assert(!result.isError, result.content[0].text);
+  const saved = result.structuredContent;
+  assertEquals(saved.position, 2);
+  const path = Object.keys(w.uploads)[0];
+  assert(new RegExp(`^uzivatel-1/${ID1}/[0-9a-f-]{36}\\.jpg$`).test(path), path);
+  const upload = w.calls.find((c) => c.method === "POST" && c.url.includes("/storage/v1/object/recipe-photos/"))!;
+  assertEquals(upload.headers["Content-Type"], "image/jpeg");
+  const patch = w.calls.find((c) => c.method === "PATCH")!;
+  assertEquals(patch.body.photos.map((p: any) => p.id), ["p1", saved.photo_id]);
+  assert(typeof patch.body.updated_at === "string", "telefony si změnu stáhnou");
+
+  const cover = await call(world({ recipes: [svickova], external: { [url]: JPEG } }), "upload_recipe_photo", {
+    recipe_id: ID1,
+    image_base64: btoa(String.fromCharCode(...PNG)),
+    set_as_cover: true,
+  });
+  assertEquals(cover.structuredContent.position, 1);
+});
+
+Deno.test("upload_recipe_photo: odmítne nebezpečné odkazy a soubory, které nejsou fotka", async () => {
+  for (const image_url of ["http://example.com/a.jpg", "https://localhost/a.jpg", "https://127.0.0.1/a.jpg", "https://[::1]/a.jpg"]) {
+    const w = world();
+    const result = await call(w, "upload_recipe_photo", { recipe_id: ID1, image_url });
+    assert(result.isError, image_url);
+    assertEquals(w.calls.filter((c) => !c.url.startsWith("https://projekt.supabase.co/")).length, 0, image_url);
+  }
+  const text = await call(world(), "upload_recipe_photo", {
+    recipe_id: ID1,
+    image_base64: btoa("tohle není obrázek"),
+  });
+  assert(text.isError);
+  assert(text.content[0].text.includes("JPEG, PNG a WebP"));
+  const none = await call(world(), "upload_recipe_photo", { recipe_id: ID1 });
+  assert(none.isError);
+});
+
+Deno.test("set_recipe_cover_photo: druhá fotka palačinek se stane hlavní", async () => {
+  const w = world({ recipes: [palacinky] });
+  const result = await call(w, "set_recipe_cover_photo", { recipe_id: ID3, position: 2 });
+  assert(result.structuredContent.saved);
+  const patch = w.calls.find((c) => c.method === "PATCH")!;
+  assertEquals(patch.body.photos.map((p: any) => p.id), ["b", "a"]);
+  assertEquals(patch.body.photos[1].thumb_path, "uzivatel-1/p/a_t.jpg", "náhled se neztratí");
+});
+
+Deno.test("reorder_recipe_photos: nové pořadí, neznámé id odmítne", async () => {
+  const w = world({ recipes: [palacinky] });
+  await call(w, "reorder_recipe_photos", { recipe_id: ID3, photo_ids: ["b"] });
+  assertEquals(w.calls.find((c) => c.method === "PATCH")!.body.photos.map((p: any) => p.id), ["b", "a"]);
+  const bad = await call(world({ recipes: [palacinky] }), "reorder_recipe_photos", { recipe_id: ID3, photo_ids: ["x"] });
+  assert(bad.isError);
+});
+
+Deno.test("delete_recipe_photo: soubor smaže, jen když ho nezná historie verzí", async () => {
+  const w = world({ recipes: [palacinky] });
+  const result = await call(w, "delete_recipe_photo", { recipe_id: ID3, photo_id: "a" });
+  assertEquals(result.structuredContent.remaining, 1);
+  assertEquals(w.calls.find((c) => c.method === "PATCH")!.body.photos.map((p: any) => p.id), ["b"]);
+  const removal = w.calls.find((c) => c.method === "DELETE" && c.url.includes("/storage/"))!;
+  assertEquals(removal.body.prefixes, ["uzivatel-1/p/a.jpg", "uzivatel-1/p/a_t.jpg"]);
+
+  const kept = world({ recipes: [palacinky], tables: { recipe_versions: [{ id: "v1" }] } });
+  const keptResult = await call(kept, "delete_recipe_photo", { recipe_id: ID3, position: 1 });
+  assert(keptResult.structuredContent.file_kept_for_history);
+  assertEquals(kept.calls.filter((c) => c.method === "DELETE" && c.url.includes("/storage/")).length, 0);
 });

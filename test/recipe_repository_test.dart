@@ -132,35 +132,194 @@ void main() {
 
     test('nový recept ze serveru se uloží jako odeslaný', () async {
       final applied = await repository.applyRemote(sampleRecipe(id: 'remote'));
-      expect(applied, isTrue);
+      expect(applied, RemoteApply.applied);
       expect(await repository.dirtyCount(), 0);
       expect((await repository.getById('remote'))!.title, 'Žebra BBQ');
     });
 
-    test('novější neodeslaná místní úprava se nepřepíše', () async {
+    test('změna ze serveru se použije, když v telefonu nic nečeká', () async {
       final local = await repository.create(sampleRecipe());
+      await repository.markClean('recipe-1', local.updatedAt);
       final remote = local.copyWith(
-        title: 'Starší ze serveru',
-        updatedAt: env.now.subtract(const Duration(hours: 1)),
-      );
-      expect(await repository.applyRemote(remote), isFalse);
-      expect((await repository.getById('recipe-1'))!.title, 'Žebra BBQ');
-      expect(await repository.dirtyCount(), 1);
-    });
-
-    test('novější úprava ze serveru vyhrává', () async {
-      final local = await repository.create(sampleRecipe());
-      final remote = local.copyWith(
-        title: 'Novější ze serveru',
+        title: 'Upraveno v ChatGPT',
         updatedAt: env.now.add(const Duration(hours: 1)),
       );
-      expect(await repository.applyRemote(remote), isTrue);
+      expect(await repository.applyRemote(remote), RemoteApply.applied);
       expect(
         (await repository.getById('recipe-1'))!.title,
-        'Novější ze serveru',
+        'Upraveno v ChatGPT',
       );
       expect(await repository.dirtyCount(), 0);
     });
+
+    test(
+      'ozvěna vlastního odeslání ani nezměněný server konflikt nedělá',
+      () async {
+        final local = await repository.create(sampleRecipe());
+        await repository.markClean('recipe-1', local.updatedAt);
+        env.advance(const Duration(minutes: 1));
+        await repository.setFavorite('recipe-1', true);
+        // Server vrátí podobu, kterou už známe (základ).
+        expect(await repository.applyRemote(local), RemoteApply.skipped);
+        expect((await repository.getById('recipe-1'))!.isFavorite, isTrue);
+        expect(await repository.conflicts(), isEmpty);
+      },
+    );
+
+    for (final (label, offset) in [
+      ('novější', const Duration(hours: 1)),
+      ('starší', -const Duration(hours: 1)),
+    ]) {
+      test(
+        'souběžná $label úprava ze serveru nic nepřepíše – vznikne konflikt',
+        () async {
+          final local = await repository.create(sampleRecipe());
+          await repository.markClean('recipe-1', local.updatedAt);
+          env.advance(const Duration(minutes: 5));
+          final mine = await repository.update(
+            local.copyWith(title: 'Moje úprava'),
+            changeSummary: 'telefon',
+          );
+          final remote = local.copyWith(
+            title: 'Úprava z ChatGPT',
+            currentVersion: 2,
+            updatedAt: env.now.add(offset),
+          );
+          expect(await repository.applyRemote(remote), RemoteApply.conflict);
+          expect((await repository.getById('recipe-1'))!.title, 'Moje úprava');
+          expect(await repository.dirtyCount(), 1);
+          final conflicts = await repository.conflicts();
+          expect(conflicts['recipe-1']!.recipe.title, 'Úprava z ChatGPT');
+          expect(mine.currentVersion, 2);
+        },
+      );
+    }
+
+    test(
+      'konflikt: ponechat moji úpravu – serverová zůstane v historii',
+      () async {
+        final local = await repository.create(sampleRecipe());
+        await repository.markClean('recipe-1', local.updatedAt);
+        env.advance(const Duration(minutes: 5));
+        await repository.update(local.copyWith(title: 'Moje úprava'));
+        final remote = local.copyWith(
+          title: 'Úprava z ChatGPT',
+          currentVersion: 2,
+          updatedAt: env.now.add(const Duration(minutes: 1)),
+        );
+        await repository.applyRemote(
+          remote,
+          versions: [
+            RecipeVersion(
+              id: 'srv-v2',
+              recipeId: 'recipe-1',
+              versionNumber: 2,
+              snapshot: remote.toJson(),
+              changeSummary: 'Úprava přes ChatGPT',
+              createdAt: env.now,
+            ),
+          ],
+        );
+        env.advance(const Duration(minutes: 1));
+        final kept = await repository.resolveConflict(
+          'recipe-1',
+          keepLocal: true,
+        );
+        expect(kept!.title, 'Moje úprava');
+        expect(await repository.conflicts(), isEmpty);
+        expect(await repository.dirtyCount(), 1);
+
+        final history = await repository.versions('recipe-1');
+        final numbers = [for (final v in history) v.versionNumber];
+        expect(
+          numbers.toSet().length,
+          numbers.length,
+          reason: 'čísla verzí se neopakují',
+        );
+        expect(
+          history.map((v) => v.changeSummary),
+          contains('Úprava přes ChatGPT'),
+        );
+        expect(
+          history.map((v) => v.snapshot['title']),
+          containsAll(['Moje úprava', 'Úprava z ChatGPT']),
+        );
+        expect(kept.currentVersion, history.first.versionNumber);
+      },
+    );
+
+    test(
+      'konflikt: použít verzi ze serveru – moje úprava zůstane v historii',
+      () async {
+        final local = await repository.create(
+          sampleRecipe().copyWith(
+            photos: const [
+              RecipePhoto(id: 'p1', localPath: 'photos/recipe-1/p1.jpg'),
+            ],
+          ),
+        );
+        await repository.markClean('recipe-1', local.updatedAt);
+        env.advance(const Duration(minutes: 5));
+        await repository.update(local.copyWith(title: 'Moje úprava'));
+        final remote = local.copyWith(
+          title: 'Úprava z ChatGPT',
+          updatedAt: env.now.add(const Duration(minutes: 1)),
+          photos: const [
+            RecipePhoto(id: 'p1', remotePath: 'u/recipe-1/p1.jpg'),
+          ],
+        );
+        await repository.applyRemote(remote);
+        final used = await repository.resolveConflict(
+          'recipe-1',
+          keepLocal: false,
+        );
+        expect(used!.title, 'Úprava z ChatGPT');
+        expect(used.photos.single.localPath, 'photos/recipe-1/p1.jpg');
+        final history = await repository.versions('recipe-1');
+        expect(
+          history.map((v) => v.snapshot['title']),
+          contains('Moje úprava'),
+        );
+      },
+    );
+
+    test('náhrobek ze serveru smaže recept i mimo koš', () async {
+      await repository.create(
+        sampleRecipe().copyWith(
+          photos: const [
+            RecipePhoto(id: 'p1', localPath: 'photos/recipe-1/p1.jpg'),
+          ],
+        ),
+      );
+      final result = await repository.applyTombstone('recipe-1');
+      expect(result.recipes.single.id, 'recipe-1');
+      expect(result.orphanPhotoPaths, ['photos/recipe-1/p1.jpg']);
+      expect(await repository.getById('recipe-1'), isNull);
+      expect(await repository.pendingPurges(), isEmpty, reason: 'server už ví');
+    });
+
+    test(
+      'fotka stažená do mezipaměti nezmění recept ani nečeká na odeslání',
+      () async {
+        final local = await repository.create(
+          sampleRecipe().copyWith(
+            photos: const [
+              RecipePhoto(id: 'p1', remotePath: 'u/recipe-1/p1.jpg'),
+            ],
+          ),
+        );
+        await repository.markClean('recipe-1', local.updatedAt);
+        await repository.saveCachedPhoto(
+          'recipe-1',
+          'p1',
+          'photos/recipe-1/p1.jpg',
+        );
+        final cached = (await repository.getById('recipe-1'))!;
+        expect(cached.photos.single.localPath, 'photos/recipe-1/p1.jpg');
+        expect(cached.updatedAt, local.updatedAt);
+        expect(await repository.dirtyCount(), 0);
+      },
+    );
 
     test('server nepřepíše cestu k fotce v telefonu', () async {
       final local = await repository.create(

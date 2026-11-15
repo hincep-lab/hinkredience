@@ -77,18 +77,38 @@ void main() {
   });
 
   group('vejce a kusové suroviny', () {
-    test('vejce vycházejí na celé kusy, nejméně jedno', () {
+    test('vejce po polovinách, polovina se nezaokrouhlí bez vysvětlení', () {
       expect(formatAmount(2, 'ks', factor: 2, name: 'vejce'), '4 ks');
       expect(
+        formatAmount(3, 'ks', factor: 1.5, name: 'Vejce'),
+        '4 ½ ks (4 celá + ½ rozšlehaného)',
+      );
+      expect(
+        formatAmount(3, 'vejce', factor: 1.5),
+        '4 ½ vejce (4 celá + ½ rozšlehaného)',
+      );
+      expect(
         formatAmount(3, 'ks', factor: 0.5, name: 'Vejce'),
-        '2 ks (přesně 1,5)',
+        '1 ½ ks (1 celé + ½ rozšlehaného)',
+      );
+      expect(
+        formatAmount(4, 'ks', factor: 1.375, name: 'Vejce'),
+        '5 ½ ks (5 celých + ½ rozšlehaného)',
       );
       expect(
         formatAmount(1, 'ks', factor: 0.25, name: 'Vejce'),
-        '1 ks (přesně 0,3)',
+        '½ ks (rozšlehejte 1 a použijte polovinu, přesně 0,3)',
+      );
+      expect(
+        formatAmount(3, 'ks', factor: 4 / 3, name: 'Vejce'),
+        '4 ks',
+        reason: '4,0 je celé číslo',
+      );
+      expect(
+        formatAmount(2, 'ks', factor: 1.3, name: 'žloutky'),
+        '2 ½ ks (2 celé + ½ rozšlehaného)',
       );
       expect(formatAmount(4, '', factor: 1.5, name: 'žloutky'), '6');
-      expect(formatAmount(3, 'vejce', factor: 1.5), '5 vejce (přesně 4,5)');
     });
 
     test('ostatní kusy jdou po polovinách a nikdy na nulu', () {
@@ -130,7 +150,7 @@ void main() {
         scaleRangesInText('2–3 větší', 2, fallbackUnit: 'ks'),
         '4–6 větší',
       );
-      expect(scaleRangesInText('1–2 ks', 0.5, name: 'vejce'), '1 ks');
+      expect(scaleRangesInText('1–2 ks', 0.5, name: 'vejce'), '½–1 ks');
     });
 
     test('čas, teplota a rozměry se nemění', () {

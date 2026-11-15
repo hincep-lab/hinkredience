@@ -6,13 +6,14 @@ import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
+import '../sync/sync_status.dart';
 
 const _buildNumber = String.fromEnvironment('BUILD_NUMBER');
 
 /// Verze aplikace včetně čísla sestavení z GitHub Actions, je-li známé.
 const appVersionLabel = _buildNumber == ''
-    ? 'Verze 1.3.0 · Etapa 3 – ChatGPT'
-    : 'Verze 1.3.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
+    ? 'Verze 1.4.0 · Etapa 3 – ChatGPT'
+    : 'Verze 1.4.0 · sestavení $_buildNumber · Etapa 3 – ChatGPT';
 
 /// Záložka „Více“: účet, synchronizace, koš, nastavení.
 class MoreScreen extends ConsumerWidget {
@@ -102,23 +103,17 @@ class MoreScreen extends ConsumerWidget {
     final hasBackend = ref.watch(supabaseClientProvider) != null;
     final trashCount = ref.watch(trashProvider).value?.length ?? 0;
 
+    final phase = sync.phaseFor(enabled: ref.watch(syncEnabledProvider));
+    final look = syncPhaseLook(phase, sync);
     final String syncText;
     if (!hasBackend) {
       syncText = 'Vypnuto – připojení k Supabase není nastavené.';
     } else if (!session.isSignedIn) {
       syncText = 'Vypnuto – přihlaste se.';
-    } else if (sync.running) {
-      syncText = 'Probíhá…';
-    } else if (sync.lastError != null) {
-      syncText = sync.lastError!;
-    } else if (sync.lastSuccess != null) {
-      syncText = sync.pending > 0
-          ? 'Čeká na odeslání: ${sync.pending}'
-          : 'Naposledy ${_time(sync.lastSuccess!)}';
+    } else if (phase == SyncPhase.synced && sync.lastSuccess != null) {
+      syncText = 'Synchronizováno ${_time(sync.lastSuccess!)} · automaticky';
     } else {
-      syncText = sync.pending > 0
-          ? 'Čeká na odeslání: ${sync.pending}'
-          : 'Zatím neproběhla.';
+      syncText = '${look.label} · podrobnosti';
     }
 
     return Scaffold(
@@ -169,22 +164,11 @@ class MoreScreen extends ConsumerWidget {
             child: Column(
               children: [
                 ListTile(
-                  leading: sync.running
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                        )
-                      : Icon(
-                          sync.lastError != null
-                              ? Icons.cloud_off_rounded
-                              : Icons.cloud_sync_outlined,
-                          color: sync.lastError != null
-                              ? AppColors.danger
-                              : null,
-                        ),
+                  leading: Icon(look.icon, color: look.color),
                   title: const Text('Stav'),
                   subtitle: Text(syncText),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => showSyncDetails(context),
                 ),
                 if (hasBackend && session.isSignedIn) ...[
                   const Divider(indent: 16, endIndent: 16),
@@ -237,6 +221,22 @@ class MoreScreen extends ConsumerWidget {
                       ref.read(settingsProvider.notifier).setAiEnabled(value),
                 ),
               ],
+            ),
+          ),
+
+          const SectionTitle('Nastavení'),
+          HkCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: SwitchListTile(
+              secondary: const Icon(Icons.light_mode_outlined),
+              title: const Text('Nevypínat obrazovku při vaření'),
+              subtitle: const Text(
+                'Při otevřeném receptu displej nezhasne. Mimo recept se '
+                'telefon uspává normálně.',
+              ),
+              value: settings.keepScreenOn,
+              onChanged: (value) =>
+                  ref.read(settingsProvider.notifier).setKeepScreenOn(value),
             ),
           ),
 

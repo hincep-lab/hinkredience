@@ -274,13 +274,7 @@ String formatAmount(
     case UnitKind.measure:
       return _withUnit(formatFraction(value), unit);
     case UnitKind.count:
-      if (isEggLike(name, unit)) {
-        final whole = value.round() < 1 ? 1 : value.round();
-        final exact = (value - whole).abs() / value > 0.1
-            ? ' (přesně ${formatNumber(value, decimals: 1)})'
-            : '';
-        return '${_withUnit(whole.toString(), unit)}$exact';
-      }
+      if (isEggLike(name, unit)) return _formatEggs(value, unit, name);
       return _withUnit(formatFraction(value, halvesOnly: true), unit);
     case UnitKind.other:
       final rounded = value < 10
@@ -288,6 +282,36 @@ String formatAmount(
           : value.roundToDouble();
       return _withUnit(formatNumber(rounded <= 0 ? value : rounded), unit);
   }
+}
+
+/// Vejce se přepočítávají po polovinách: 3 vejce × 1,5 = „4 ½ ks (4 celá
+/// + ½ rozšlehaného)“. Polovina se nikdy potichu nezaokrouhlí na celé vejce.
+String _formatEggs(double value, String unit, String name) {
+  final halves = (value * 2).round() / 2;
+  final shown = halves < 0.5 ? 0.5 : halves;
+  final whole = shown.floor();
+  final hasHalf = shown - whole > 0.25;
+  final notes = <String>[
+    if (hasHalf && whole == 0) 'rozšlehejte 1 a použijte polovinu',
+    if (hasHalf && whole > 0)
+      '$whole ${_wholeWord(whole, '$name $unit')} + ½ rozšlehaného',
+    if ((value - shown).abs() / value > 0.1)
+      'přesně ${formatNumber(value, decimals: 1)}',
+  ];
+  final label = _withUnit(formatFraction(shown), unit);
+  return notes.isEmpty ? label : '$label (${notes.join(', ')})';
+}
+
+/// „celé / celá / celých“ podle počtu a toho, jestli jde o vejce, nebo
+/// o žloutky a bílky.
+String _wholeWord(int count, String text) {
+  final folded = foldText(text);
+  final neuter =
+      RegExp(r'vejc|vajec|vajic|vejce').hasMatch(folded) ||
+      !RegExp(r'zloutk|zloutek|bilk|bilek').hasMatch(folded);
+  if (count == 1) return neuter ? 'celé' : 'celý';
+  if (count >= 2 && count <= 4) return neuter ? 'celá' : 'celé';
+  return 'celých';
 }
 
 String _formatMetric(
@@ -367,7 +391,7 @@ String scaleRangesInText(
       // formatAmount vrací i jednotku; z dolní a horní meze chceme jen číslo.
       final trimmedUnit = unit.trim();
       var number = label;
-      final exactIndex = number.indexOf(' (přesně');
+      final exactIndex = number.indexOf(' (');
       if (exactIndex >= 0) number = number.substring(0, exactIndex);
       if (trimmedUnit.isNotEmpty && number.endsWith(' $trimmedUnit')) {
         number = number.substring(0, number.length - trimmedUnit.length - 1);

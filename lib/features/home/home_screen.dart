@@ -7,6 +7,7 @@ import '../../core/app_colors.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
+import '../sync/sync_status.dart';
 
 /// Doporučené recepty pro hlavní obrazovku: oblíbené a nejlépe hodnocené
 /// napřed, potom naposledy upravené. (Doporučení podle historie vaření
@@ -99,7 +100,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   const Row(
                     children: [
                       Expanded(child: Wordmark(fontSize: 26)),
-                      _SyncIndicator(),
+                      SyncStatusButton(),
                     ],
                   ),
                   const SizedBox(height: 22),
@@ -251,50 +252,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _SyncIndicator extends ConsumerWidget {
-  const _SyncIndicator();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sync = ref.watch(syncProvider);
-    final signedIn = ref.watch(sessionProvider).isSignedIn;
-
-    final (IconData icon, String tooltip, Color color) = switch (sync) {
-      _ when !signedIn => (
-        Icons.phone_android_rounded,
-        'Recepty jsou uložené jen v telefonu',
-        AppColors.textSecondary,
-      ),
-      SyncState(running: true) => (
-        Icons.sync_rounded,
-        'Synchronizuji…',
-        AppColors.copperGold,
-      ),
-      SyncState(lastError: final String _) => (
-        Icons.cloud_off_rounded,
-        'Synchronizace se nepodařila',
-        AppColors.danger,
-      ),
-      SyncState(pending: > 0) => (
-        Icons.cloud_upload_outlined,
-        'Čeká na odeslání: ${sync.pending}',
-        AppColors.copperGold,
-      ),
-      _ => (
-        Icons.cloud_done_outlined,
-        'Synchronizováno',
-        AppColors.textSecondary,
-      ),
-    };
-
-    return IconButton(
-      tooltip: tooltip,
-      icon: Icon(icon, color: color),
-      onPressed: () => context.go(Routes.more),
     );
   }
 }

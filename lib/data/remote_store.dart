@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -26,6 +27,24 @@ class RemoteChange {
   final bool legacySchema;
 }
 
+/// Záznam o natrvalo smazaném receptu.
+class Tombstone {
+  const Tombstone(this.recipeId, this.purgedAt);
+
+  final String recipeId;
+  final DateTime purgedAt;
+}
+
+/// Server odmítl recept, protože byl na jiném zařízení natrvalo smazán.
+class RecipePurgedException implements Exception {
+  const RecipePurgedException(this.recipeId);
+
+  final String recipeId;
+
+  @override
+  String toString() => 'Recept byl natrvalo smazán na jiném zařízení.';
+}
+
 /// Vzdálené úložiště receptů. Rozhraní existuje proto, aby šla synchronizace
 /// testovat bez skutečného serveru.
 abstract interface class RemoteStore {
@@ -39,12 +58,21 @@ abstract interface class RemoteStore {
   /// Recepty změněné po [since] (včetně smazaných), od nejstarší změny.
   Future<List<RemoteChange>> pullRecipes({DateTime? since});
 
-  /// Nahraje fotografii a vrátí její cestu v úložišti.
+  /// Nahraje fotografii (nebo její náhled, když [thumbnail]) a vrátí cestu
+  /// v úložišti. Opakované nahrání téže fotky soubor jen přepíše.
   Future<String> uploadPhoto({
     required String recipeId,
     required String photoId,
     required File file,
+    bool thumbnail = false,
   });
+
+  /// Stáhne fotografii z úložiště (pro mezipaměť v telefonu).
+  Future<Uint8List> downloadPhoto(String remotePath);
+
+  /// Recepty natrvalo smazané po [since] (náhrobky), od nejstaršího.
+  /// Server bez migrace 08 vrací prázdný seznam.
+  Future<List<Tombstone>> pullTombstones({DateTime? since});
 
   /// Dočasná adresa pro zobrazení fotografie.
   Future<String?> signedPhotoUrl(String remotePath);
@@ -122,6 +150,7 @@ class SupabaseRemoteStore implements RemoteStore {
     try {
       await writeRow();
     } on PostgrestException catch (error) {
+      if (isPurgedError(error)) throw RecipePurgedException(recipe.id);
       if (legacy || !isMissingColumnError(error)) rethrow;
       legacy = _legacySchema = true;
       row
@@ -223,10 +252,11 @@ class SupabaseRemoteStore implements RemoteStore {
     required String recipeId,
     required String photoId,
     required File file,
+    bool thumbnail = false,
   }) async {
     final uid = userId;
     if (uid == null) throw StateError('Nepřihlášený uživatel.');
-    final path = '$uid/$recipeId/$photoId.jpg';
+    final path = '$uid/$recipeId/$photoId${thumbnail ? '_t' : ''}.jpg';
     await _client.storage
         .from(photoBucket)
         .upload(
@@ -241,6 +271,37 @@ class SupabaseRemoteStore implements RemoteStore {
   }
 
   @override
+  Future<Uint8List> downloadPhoto(String remotePath) =>
+      _client.storage.from(photoBucket).download(remotePath);
+
+  @override
+  Future<List<Tombstone>> pullTombstones({DateTime? since}) async {
+    try {
+      final base = _client
+          .from('recipe_tombstones')
+          .select('recipe_id, purged_at');
+      final filtered = since == null
+          ? base
+          : base.gt('purged_at', since.toUtc().toIso8601String());
+      final List<Map<String, dynamic>> rows = await filtered.order(
+        'purged_at',
+        ascending: true,
+      );
+      return [
+        for (final row in rows)
+          Tombstone(
+            row['recipe_id'] as String,
+            DateTime.parse(row['purged_at'] as String).toUtc(),
+          ),
+      ];
+    } on PostgrestException catch (error) {
+      // Server ještě nemá migraci 08 – náhrobky zatím neexistují.
+      if (isMissingTableError(error)) return const [];
+      rethrow;
+    }
+  }
+
+  @override
   Future<String?> signedPhotoUrl(String remotePath) async {
     try {
       return await _client.storage
@@ -250,6 +311,20 @@ class SupabaseRemoteStore implements RemoteStore {
       return null;
     }
   }
+}
+
+/// Odmítl server recept jako natrvalo smazaný (migrace 08)?
+bool isPurgedError(PostgrestException error) =>
+    '${error.hint} ${error.message}'.contains('hink_recipe_purged') ||
+    error.message.contains('natrvalo smazán');
+
+/// Chybí na serveru tabulka (starší databáze bez migrace)?
+bool isMissingTableError(PostgrestException error) {
+  final text = '${error.code} ${error.message}'.toLowerCase();
+  return text.contains('pgrst205') ||
+      text.contains('42p01') ||
+      (text.contains('could not find the table')) ||
+      (text.contains('relation') && text.contains('does not exist'));
 }
 
 /// Hlásí server, že tabulka nemá některý z odesílaných sloupců?
@@ -281,7 +356,11 @@ RemoteChange remoteChangeFromRow(Map<String, dynamic> row) {
     ...row,
     'photos': [
       for (final photo in (row['photos'] as List?) ?? const [])
-        {'id': (photo as Map)['id'], 'remote_path': photo['remote_path']},
+        {
+          'id': (photo as Map)['id'],
+          'remote_path': photo['remote_path'],
+          'thumb_path': ?photo['thumb_path'],
+        },
     ],
     'ingredients': nested('recipe_ingredients'),
     'steps': nested('recipe_steps'),
