@@ -227,10 +227,10 @@ class ShoppingScreen extends ConsumerWidget {
                       if (byStore) ...[
                         // Varianta „více obchodů“: položky podle prodejen.
                         for (final entry
-                            in best!.combinationByStore.entries) ...[
+                            in best.combinationByStore.entries) ...[
                           _StoreHeader(
                             title: entry.key.label,
-                            subtotal: entry.value.fold(
+                            subtotal: entry.value.fold<double>(
                               0.0,
                               (sum, p) => sum + p.cost,
                             ),
@@ -242,9 +242,9 @@ class ShoppingScreen extends ConsumerWidget {
                                 case final item?)
                               tile(item),
                         ],
-                        if (best!.combinationMissing.isNotEmpty) ...[
+                        if (best.combinationMissing.isNotEmpty) ...[
                           const _StoreHeader(title: 'Bez známé ceny'),
-                          for (final m in best!.combinationMissing)
+                          for (final m in best.combinationMissing)
                             if (items.where((i) => i.id == m.id).firstOrNull
                                 case final item?)
                               tile(item),
