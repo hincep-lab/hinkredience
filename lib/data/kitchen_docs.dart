@@ -362,6 +362,8 @@ class MealWish {
 
   bool get isPlanned => plannedDay != null;
 
+  static const _keep = Object();
+
   /// Zobrazovat: čekající přání a naplánovaná, jejichž den ještě nebyl.
   bool isActive(DateTime today) =>
       plannedDay == null || plannedDay!.compareTo(dayKey(today)) >= 0;
