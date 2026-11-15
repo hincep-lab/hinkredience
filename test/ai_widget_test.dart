@@ -308,7 +308,8 @@ void main() {
     tester,
   ) async {
     await pumpAiApp(tester, location: Routes.home, aiEnabled: false);
-    expect(find.text('Vypnuto'), findsNWidgets(3));
+    // Import receptu funguje i bez AI, označené jsou jen AI kuchař a hledání.
+    expect(find.text('Vypnuto'), findsNWidgets(2));
     expect(find.text('Recepty'), findsWidgets);
   });
 

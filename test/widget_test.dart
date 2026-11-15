@@ -158,8 +158,8 @@ void main() {
   ) async {
     await pumpApp(tester, location: Routes.home);
     expect(find.text('Brzy'), findsNothing);
-    // AI je placená a ve výchozím stavu vypnutá.
-    expect(find.text('Vypnuto'), findsNWidgets(3));
+    // AI je placená a ve výchozím stavu vypnutá (import funguje i bez ní).
+    expect(find.text('Vypnuto'), findsNWidgets(2));
 
     await tester.tap(find.text('Plán vaření'));
     await tester.pumpAndSettle();
