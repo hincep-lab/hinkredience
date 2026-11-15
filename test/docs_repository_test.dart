@@ -117,8 +117,10 @@ void main() {
     ]);
     expect(merge.merged, 1);
     var items = await docs.shopping();
-    expect(items.first.quantity, 750);
-    await docs.saveShoppingItem(items.first.copyWith(checked: true));
+    final flour = items.firstWhere((i) => i.name == 'Mouka');
+    expect(flour.quantity, 750);
+    expect(flour.sources, ['Buchty', 'Lívance']);
+    await docs.saveShoppingItem(flour.copyWith(checked: true));
     items = await docs.shopping();
     expect(items.map((i) => i.name), ['Mléko', 'Mouka']);
     await docs.deleteShoppingItems([items.last.id]);
