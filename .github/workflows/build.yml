@@ -248,6 +248,7 @@ jobs:
             adb logcat -d > logcat.txt || true
             echo "===== RELEASE (R8) =====" && grep -E "HINK_OCR" logcat.txt | head -60
             echo "===== NATIVNI ZASOBNIK =====" && grep -A40 "E MethodChannel#google_mlkit_text_recognizer" logcat.txt | head -60 | tee stack.txt
+            echo "===== TRIDY ZE ZASOBNIKU PODLE MAPY R8 =====" && for c in $(grep -oE "at [a-z0-9]+\.[<a-z>]+" stack.txt | awk '{print $2}' | cut -d. -f1 | sort -u); do grep -E " -> $c:$" ocr-mapping.txt | head -1; done || true
             echo "===== PO ODSIFROVANI (retrace) =====" && (R=$(ls $ANDROID_HOME/cmdline-tools/*/bin/retrace 2>/dev/null | head -1); if [ -n "$R" ] && [ -f ocr-mapping.txt ]; then sed 's/^.*E MethodChannel#google_mlkit_text_recognizer: //' stack.txt | $R ocr-mapping.txt | head -60; else echo "retrace neni k dispozici"; fi)
             grep -q "HINK_OCR PASS" logcat.txt
       - uses: actions/upload-artifact@v4
