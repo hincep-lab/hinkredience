@@ -585,6 +585,38 @@ void main() {
       expect(butter.style?.decoration, TextDecoration.lineThrough);
     });
 
+    testWidgets('nejvýhodnější nákup: kompaktní panel jde skrýt', (
+      tester,
+    ) async {
+      await pumpApp(
+        tester,
+        location: Routes.shoppingList('l1'),
+        shoppingLists: [kure],
+        shoppingItems: items,
+      );
+      expect(
+        find.text('Nejvýhodnější nákup – ceny zatím neznám'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('Skrýt nejvýhodnější nákup'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Nejvýhodnější nákup – ceny zatím neznám'),
+        findsNothing,
+      );
+      expect(
+        find.text('Maso a ryby'),
+        findsOneWidget,
+        reason: 'seznam zůstává',
+      );
+      await tester.tap(find.byTooltip('Zobrazit nejvýhodnější nákup'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Nejvýhodnější nákup – ceny zatím neznám'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('formulář položky odhadne kategorii podle názvu', (
       tester,
     ) async {

@@ -122,6 +122,52 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
     if (!prefs.enabled || result == null || result.items.isEmpty) {
       return const SizedBox.shrink();
     }
+    if (!result.hasPrices) {
+      // Ceny zatím neznáme: jen jeden nenápadný řádek, ať seznam zůstane
+      // hlavní věcí obrazovky.
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+        child: HkCard(
+          padding: const EdgeInsets.fromLTRB(14, 2, 4, 2),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.savings_outlined,
+                color: AppColors.copperGold,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Nejvýhodnější nákup – ceny zatím neznám',
+                  maxLines: 2,
+                  style: TextStyle(fontSize: 13),
+                ),
+              ),
+              if (_busy)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                TextButton(
+                  onPressed: _refresh,
+                  child: const Text('Najít akce'),
+                ),
+              IconButton(
+                tooltip: 'Ceny z účtenky',
+                icon: const Icon(Icons.receipt_long_outlined),
+                onPressed: () => showReceiptSheet(context, ref),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final multi = prefs.multiStore;
     final total = multi
         ? result.combinationTotal
@@ -203,9 +249,7 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
                       notifier.update(prefs.copyWith(multiStore: v.first)),
                 ),
               ),
-              if (!result.hasPrices)
-                _NoPrices(onRefresh: _refresh, busy: _busy)
-              else if (multi)
+              if (multi)
                 _MultiSummary(
                   result: result,
                   total: total,
@@ -239,36 +283,6 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _NoPrices extends StatelessWidget {
-  const _NoPrices({required this.onRefresh, required this.busy});
-
-  final VoidCallback onRefresh;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Zatím neznám ceny položek v sušických obchodech. Najděte '
-            'aktuální akce (zdarma) nebo přidejte ceny z účtenky.',
-            style: TextStyle(color: AppColors.textSecondary, height: 1.35),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: busy ? null : onRefresh,
-            icon: const Icon(Icons.local_offer_outlined),
-            label: const Text('Najít akce'),
-          ),
-        ],
       ),
     );
   }

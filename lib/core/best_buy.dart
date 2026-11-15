@@ -436,7 +436,11 @@ bool productMatches(String itemName, String product) {
   final need = _stems(itemName);
   if (need.isEmpty) return false;
   final have = _stems(product);
-  return need.every((s) => have.any((h) => h.startsWith(s) || s.startsWith(h)));
+  return need.every(
+    (s) => have.any(
+      (h) => h.startsWith(s) || s.startsWith(h) || _common(s, h) >= 4,
+    ),
+  );
 }
 
 /// Klíč produktu pro mezipaměť a odstranění duplicit.
@@ -465,6 +469,15 @@ Set<String> _stems(String text) => {
     if (w.group(0)!.length >= 3 && !_ignore.contains(w.group(0)))
       w.group(0)!.substring(0, math.min(5, w.group(0)!.length)),
 };
+
+/// Délka společného začátku („stehn“ × „stehe“ = 4 – stehna/stehenní).
+int _common(String a, String b) {
+  var i = 0;
+  while (i < a.length && i < b.length && a[i] == b[i]) {
+    i++;
+  }
+  return i;
+}
 
 double _round(double v) => (v * 100).round() / 100;
 
