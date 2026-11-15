@@ -111,7 +111,7 @@ jobs:
 
   web:
     name: Web – verze do prohlížeče (Android i iPhone)
-    needs: app
+    needs: android
     runs-on: ubuntu-latest
     permissions:
       contents: write
