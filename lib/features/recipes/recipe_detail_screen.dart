@@ -24,6 +24,7 @@ import '../../data/recipe.dart';
 import '../kitchen/diary_screen.dart' show diaryDate;
 import '../kitchen/add_to_shopping_sheet.dart';
 import 'personal_cards.dart';
+import '../cooking/actual_amount.dart';
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -536,6 +537,17 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                           if (!_checked.remove(id)) _checked.add(id);
                         }),
                         onShopping: () => _toShopping(shown),
+                        onActual: (item) async {
+                          final value = await askActualAmount(
+                            context,
+                            ingredient: item,
+                            recipeServings: shown.servings,
+                            currentServings: servings,
+                          );
+                          if (value != null && mounted) {
+                            setState(() => _servings = value);
+                          }
+                        },
                       ),
                       _Tab.steps => _StepsTab(
                         recipe: recipe,
@@ -832,6 +844,7 @@ class _IngredientsTab extends StatelessWidget {
     required this.onServings,
     required this.onToggle,
     required this.onShopping,
+    required this.onActual,
   });
 
   final Recipe recipe;
@@ -840,6 +853,9 @@ class _IngredientsTab extends StatelessWidget {
   final ValueChanged<double> onServings;
   final ValueChanged<String> onToggle;
   final VoidCallback onShopping;
+
+  /// Klepnutí na množství: „mám jí jinak“ → přepočet celého receptu.
+  final ValueChanged<Ingredient> onActual;
 
   @override
   Widget build(BuildContext context) {
@@ -965,14 +981,26 @@ class _IngredientsTab extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(
-                    item.amountLabel(
-                      fromServings: recipe.servings,
-                      toServings: servings,
-                    ),
-                    style: const TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w600,
+                  InkWell(
+                    onTap: item.quantity == null ? null : () => onActual(item),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 6,
+                      ),
+                      child: Text(
+                        item.amountLabel(
+                          fromServings: recipe.servings,
+                          toServings: servings,
+                        ),
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.underline,
+                          decorationStyle: TextDecorationStyle.dotted,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -980,6 +1008,20 @@ class _IngredientsTab extends StatelessWidget {
             ),
           ),
         if (recipe.ingredients.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          const Text(
+            'Nevážíte předem? Klepněte na množství a zadejte, kolik suroviny '
+            'máte – zbytek se přepočítá.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+          ),
+          Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Poměry surovin'),
+              children: [RatioList(recipe: recipe)],
+            ),
+          ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(

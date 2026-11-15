@@ -12,6 +12,7 @@ import '../../core/cooking_services.dart';
 import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/ratios.dart';
 import '../../core/recipe_time.dart';
 import '../../core/screen_wake.dart';
 import '../../core/voice_commands.dart';
@@ -19,6 +20,7 @@ import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
 import '../../data/recipe.dart';
 import '../recipes/personal_cards.dart';
+import 'actual_amount.dart';
 
 /// mm:ss nebo h:mm:ss.
 String formatCountdown(int seconds) {
@@ -162,9 +164,53 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
         if (_readAloud) {
           ref.read(speakerProvider).say('Časovač doběhl. ${timer.label}');
         }
+        _autoAdvance(timer);
       }
     }
     setState(() {});
+  }
+
+  /// Po doběhnutí časovače aktuálního kroku přejde aplikace sama na další.
+  Future<void> _autoAdvance(CookTimer timer) async {
+    final session = _session;
+    final recipe = await _recipe();
+    if (session == null || recipe == null || !mounted) return;
+    if (timer.stepIndex == null || timer.stepIndex != session.stepIndex) return;
+    if (session.stepIndex >= recipe.steps.length - 1) return;
+    _goTo(session.stepIndex + 1, recipe);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Časovač doběhl – krok ${session.stepIndex + 2}'),
+            action: SnackBarAction(
+              label: 'Zpět',
+              onPressed: () => _goTo(session.stepIndex, recipe),
+            ),
+          ),
+        );
+    }
+  }
+
+  /// Nevážilo se předem: skutečné množství jedné suroviny přepočítá ostatní.
+  Future<void> _adjustTo(Recipe recipe, Ingredient item) async {
+    final session = _session;
+    if (session == null) return;
+    final servings = await askActualAmount(
+      context,
+      ingredient: item,
+      recipeServings: recipe.servings,
+      currentServings: session.servings ?? recipe.servings,
+    );
+    if (servings == null || !mounted) return;
+    await _update((s) => s.copyWith(servings: servings));
+    if (mounted) {
+      showMessage(
+        context,
+        'Přepočítáno na ${yieldLabel(servings, recipe.yieldUnit)}.',
+      );
+    }
   }
 
   // -------------------------------------------------------------- kroky
@@ -430,36 +476,51 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
                 'Suroviny (${yieldLabel(servings, recipe.yieldUnit)})',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
+              const Text(
+                'Nevážíte předem? Klepněte na surovinu a zadejte, kolik jí '
+                'máte – ostatní se přepočítá.',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
               const SizedBox(height: 8),
               for (final item in recipe.ingredients)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          item.nameLabel(
+                InkWell(
+                  onTap: item.quantity == null
+                      ? null
+                      : () {
+                          Navigator.of(context).pop();
+                          _adjustTo(recipe, item);
+                        },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.nameLabel(
+                              fromServings: recipe.servings,
+                              toServings: servings,
+                            ),
+                            style: const TextStyle(fontSize: 19),
+                          ),
+                        ),
+                        Text(
+                          item.amountLabel(
                             fromServings: recipe.servings,
                             toServings: servings,
                           ),
-                          style: const TextStyle(fontSize: 19),
+                          style: const TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.copperGold,
+                          ),
                         ),
-                      ),
-                      Text(
-                        item.amountLabel(
-                          fromServings: recipe.servings,
-                          toServings: servings,
-                        ),
-                        style: const TextStyle(
-                          fontSize: 19,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.copperGold,
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
+              const SizedBox(height: 12),
+              RatioList(recipe: recipe),
             ],
           ),
         ),
@@ -625,6 +686,34 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              if (step != null)
+                if (ingredientsInStep(step, recipe.ingredients) case final used
+                    when used.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final item in used)
+                        ActionChip(
+                          avatar: const Icon(Icons.scale_outlined, size: 18),
+                          label: Text(
+                            [
+                              item.name,
+                              item.amountLabel(
+                                fromServings: recipe.servings,
+                                toServings: session.servings ?? recipe.servings,
+                              ),
+                            ].where((t) => t.isNotEmpty).join(' · '),
+                            style: const TextStyle(fontSize: 17),
+                          ),
+                          onPressed: item.quantity == null
+                              ? null
+                              : () => _adjustTo(recipe, item),
+                        ),
+                    ],
+                  ),
+                ],
               const SizedBox(height: 16),
               Wrap(
                 spacing: 10,
