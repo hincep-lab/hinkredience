@@ -12,6 +12,7 @@ import '../../core/receipt_text.dart';
 import '../../core/stores.dart';
 import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
+import '../../data/price_service.dart';
 
 // „Nejvýhodnější nákup“ přímo v nákupním seznamu: kompaktní panel nahoře,
 // štítky akcí u položek, detail akce a ceny z účtenky. Počítá se jen
@@ -62,7 +63,7 @@ class BestBuyPanel extends ConsumerStatefulWidget {
 class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
   var _busy = false;
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool force = false}) async {
     final service = ref.read(priceServiceProvider);
     final items = ref.read(shoppingItemsProvider(widget.listId)).value ?? [];
     final names = [
@@ -79,29 +80,24 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
     }
     setState(() => _busy = true);
     try {
-      final r = await service.refresh(names);
+      final r = await service.refresh(names, force: force);
       await ref.read(priceOffersProvider.notifier).reload();
       if (!mounted) return;
-      if (r.noProvider) {
-        showMessage(
-          context,
-          'Hledání akcí zatím není zapnuté – na serveru chybí bezplatný '
-          'klíč Google Gemini. Akce zatím může uložit ChatGPT a ceny '
-          'můžete přidat z účtenky.',
+      final messenger = ScaffoldMessenger.of(context);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(refreshMessage(r)),
+            duration: const Duration(seconds: 8),
+            action: r.diag.isEmpty
+                ? null
+                : SnackBarAction(
+                    label: 'Podrobnosti',
+                    onPressed: () => _showDiagnostics(r),
+                  ),
+          ),
         );
-      } else if (r.scanned == 0 && r.cached > 0) {
-        showMessage(
-          context,
-          'Dnes už prohledáno – zobrazuji uložené akce (nic se znovu '
-          'neplatilo ani nečerpalo).',
-        );
-      } else {
-        showMessage(
-          context,
-          'Nalezeno akcí: ${r.found} (ověřených ${r.verified}). '
-          '${r.provider == 'gemini' ? 'Zdarma přes Google Gemini.' : ''}',
-        );
-      }
     } catch (_) {
       if (mounted) {
         showMessage(
@@ -112,6 +108,27 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  void _showDiagnostics(PriceRefresh r) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheet) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.75,
+        maxChildSize: 0.95,
+        builder: (context, controller) => PriceDiagnostics(
+          result: r,
+          controller: controller,
+          onRetry: () {
+            Navigator.of(sheet).pop();
+            _refresh(force: true);
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -887,4 +904,143 @@ class _ReceiptLineRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Krátká zpráva po hledání akcí (s konkrétní příčinou, když nic není).
+String refreshMessage(PriceRefresh r) {
+  if (r.noProvider) {
+    return 'Hledání akcí zatím není zapnuté – na serveru chybí bezplatný '
+        'klíč Google Gemini. Akce zatím může uložit ChatGPT a ceny můžete '
+        'přidat z účtenky.';
+  }
+  if (r.scanned == 0 && r.cached > 0) {
+    return 'Dnes už prohledáno – zobrazuji uložené akce (nic se znovu '
+        'nečerpalo). V Podrobnostech lze hledat znovu.';
+  }
+  final counts =
+      'Nalezeno ${r.found} · uloženo ${r.saved}'
+      '${r.duplicates > 0 ? ' · už uložené ${r.duplicates}' : ''}'
+      ' · ověřených ${r.verified}'
+      '${r.rejected > 0 ? ' · odmítnuto ${r.rejected}' : ''}.';
+  if (r.found > 0) return counts;
+  final why = r.chainErrors.isNotEmpty
+      ? 'Problém: ${r.chainErrors.first}'
+      : 'Hledané zboží teď na stránkách akcí obchodů není.';
+  return '$counts $why';
+}
+
+String _searchProblemText(String code) => switch (code) {
+  'model_unavailable' =>
+    'Vyhledávání Google: model Gemini 2.5 Google pro nové klíče už '
+        'nepouští, novější modely ho zdarma nemají. Hledá se proto '
+        'přímo na stránkách obchodů.',
+  'search_not_free' || 'quota' =>
+    'Vyhledávání Google není pro tento klíč zdarma (nebo je vyčerpaný '
+        'denní limit). Hledá se přímo na stránkách obchodů.',
+  'bad_key' => 'Klíč Gemini je neplatný – zkontrolujte GEMINI_API_KEY.',
+  'forbidden' => 'Klíč Gemini nemá k modelu přístup.',
+  _ => 'Vyhledávání Google teď nefunguje ($code).',
+};
+
+/// Diagnostika hledání akcí: po obchodech, co se stáhlo, co vrátila AI,
+/// co bylo odmítnuto (a proč) a co se uložilo.
+class PriceDiagnostics extends StatelessWidget {
+  const PriceDiagnostics({
+    super.key,
+    required this.result,
+    required this.onRetry,
+    this.controller,
+  });
+
+  final PriceRefresh result;
+  final VoidCallback onRetry;
+  final ScrollController? controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final r = result;
+    final small = theme.textTheme.bodySmall;
+    final problem = r.searchProblem;
+    return ListView(
+      controller: controller,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      children: [
+        Text('Diagnostika hledání akcí', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Text(
+          'Nalezeno ${r.found} · uloženo ${r.saved} · už uložené '
+          '${r.duplicates} · ověřených ${r.verified} · neověřených '
+          '${r.unverified} · odmítnuto ${r.rejected} · z mezipaměti '
+          '${r.cached}',
+          style: small,
+        ),
+        if (problem != null) ...[
+          const SizedBox(height: 8),
+          Text(_searchProblemText(problem), style: small),
+        ],
+        for (final d in r.diag) _chain(context, d),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Hledat znovu (bez dnešní mezipaměti)'),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Do porovnání se počítají jen ověřené ceny – cena musí stát na '
+          'oficiálním webu obchodu přímo u produktu.',
+          style: small,
+        ),
+      ],
+    );
+  }
+
+  Widget _chain(BuildContext context, Map<String, dynamic> d) {
+    final theme = Theme.of(context);
+    final small = theme.textTheme.bodySmall;
+    List<Map<String, dynamic>> list(String k) => [
+      for (final x in (d[k] as List?) ?? const [])
+        if (x is Map) Map<String, dynamic>.from(x),
+    ];
+    final pages = list('pages');
+    final ai = list('ai');
+    final offers = list('offers');
+    final rejected = list('rejected');
+    final errors = [for (final e in (d['errors'] as List?) ?? const []) '$e'];
+    final lines = <String>[
+      if (d['cached'] == true) 'Dnes už prohledáno (mezipaměť).',
+      for (final p in pages)
+        'Stránka ${_host('${p['url']}')}: '
+            '${(p['status'] as num?)?.toInt() == 200 ? '${p['chars']} znaků' : 'nestaženo'}'
+            '${'${p['note'] ?? ''}'.isEmpty ? '' : ' (${p['note']})'}'
+            '${(p['matched'] as List?)?.isNotEmpty == true ? ' – zmínky: ${(p['matched'] as List).join(', ')}' : ''}',
+      for (final a in ai)
+        'AI ${a['mode']} (${a['model']}): '
+            '${a['status'] == 'ok' ? 'nabídek ${a['offers'] ?? 0}${a['queries'] != null ? ', dotazů Google ${a['queries']}' : ''}${(a['sources'] as List?)?.isNotEmpty == true ? ', zdroje ${(a['sources'] as List).join(', ')}' : ''}${'${a['note'] ?? ''}'.isEmpty ? '' : ' – ${a['note']}'}' : '${a['error']}'}',
+      for (final o in offers)
+        '${o['verified'] == true ? '✓' : '?'} ${o['product']} '
+            '${kc((o['price'] as num).toDouble())} do ${o['valid_to']} – '
+            '${o['reason']} (${o['saved']})',
+      for (final x in rejected) '✗ ${x['product']}: ${x['reason']}',
+      for (final e in errors) '! $e',
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${d['name']}', style: theme.textTheme.labelLarge),
+          if (lines.isEmpty) Text('Nic nenalezeno.', style: small),
+          for (final l in lines)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(l, style: small),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _host(String url) => Uri.tryParse(url)?.host ?? url;
 }

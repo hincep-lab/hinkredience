@@ -5,7 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/best_buy.dart';
 
-/// Výsledek hledání akcí na serveru.
+/// Výsledek hledání akcí na serveru včetně diagnostiky (co se stáhlo, co
+/// vrátila AI, co a proč bylo odmítnuto a co se uložilo).
 class PriceRefresh {
   const PriceRefresh({
     this.provider,
@@ -14,7 +15,11 @@ class PriceRefresh {
     this.found = 0,
     this.verified = 0,
     this.unverified = 0,
+    this.saved = 0,
+    this.duplicates = 0,
+    this.rejected = 0,
     this.errors = const [],
+    this.diag = const [],
   });
 
   final String? provider;
@@ -23,19 +28,49 @@ class PriceRefresh {
   final int found;
   final int verified;
   final int unverified;
+  final int saved;
+  final int duplicates;
+  final int rejected;
   final List<String> errors;
+
+  /// Diagnostika po řetězcích (mapy z JSON serveru).
+  final List<Map<String, dynamic>> diag;
 
   bool get noProvider => errors.contains('no_provider');
 
-  factory PriceRefresh.fromJson(Map<String, dynamic> j) => PriceRefresh(
-    provider: j['provider'] as String?,
-    scanned: (j['scanned'] as num?)?.toInt() ?? 0,
-    cached: (j['cached'] as num?)?.toInt() ?? 0,
-    found: (j['found'] as num?)?.toInt() ?? 0,
-    verified: (j['verified'] as num?)?.toInt() ?? 0,
-    unverified: (j['unverified'] as num?)?.toInt() ?? 0,
-    errors: [for (final e in (j['errors'] as List?) ?? const []) '$e'],
-  );
+  /// Kód problému s vyhledáváním Google (model_unavailable, search_not_free…).
+  String? get searchProblem {
+    for (final e in errors) {
+      if (e.startsWith('search:')) return e.substring(7);
+    }
+    return null;
+  }
+
+  /// Chyby jednotlivých řetězců („penny: …“).
+  List<String> get chainErrors => [
+    for (final e in errors)
+      if (e != 'no_provider' && !e.startsWith('search:')) e,
+  ];
+
+  factory PriceRefresh.fromJson(Map<String, dynamic> j) {
+    int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    return PriceRefresh(
+      provider: j['provider'] as String?,
+      scanned: n('scanned'),
+      cached: n('cached'),
+      found: n('found'),
+      verified: n('verified'),
+      unverified: n('unverified'),
+      saved: n('saved'),
+      duplicates: n('duplicates'),
+      rejected: n('rejected'),
+      errors: [for (final e in (j['errors'] as List?) ?? const []) '$e'],
+      diag: [
+        for (final d in (j['diag'] as List?) ?? const [])
+          if (d is Map) Map<String, dynamic>.from(d),
+      ],
+    );
+  }
 }
 
 /// Akce z letáků (čtení z tabulky price_offers) a hledání nových přes
@@ -81,10 +116,18 @@ class PriceService {
 
   /// Najde akce pro [products] ve všech sušických řetězcích (zdarma přes
   /// Google Gemini; stejný produkt se v jednom dni hledá jen jednou).
-  Future<PriceRefresh> refresh(List<String> products) async {
+  /// [force] obejde dnešní mezipaměť (pro opakovaný test).
+  Future<PriceRefresh> refresh(
+    List<String> products, {
+    bool force = false,
+  }) async {
     final response = await _client.functions.invoke(
       'prices',
-      body: {'action': 'refresh', 'products': products},
+      body: {
+        'action': 'refresh',
+        'products': products,
+        if (force) 'force': true,
+      },
     );
     final data = response.data;
     return data is Map<String, dynamic>

@@ -429,18 +429,50 @@ int packsNeeded(BuyItem item, double? packQty, String packUnit) {
   return math.max(1, (a.quantity / b.quantity - 1e-9).ceil());
 }
 
-/// Odpovídá produkt z letáku / účtenky položce seznamu? Porovnává kmeny
-/// slov (české koncovky), takže „Máslo“ ~ „Máslo Tatra 250 g“ i „MASLO
-/// TRAD.“. Všechna podstatná slova položky musí být v produktu.
+/// Odpovídá produkt z letáku / účtenky položce seznamu? Porovnává české
+/// kmeny slov (bez koncovek), takže „Máslo“ ~ „Máslo Tatra 250 g“ i „MASLO
+/// TRAD.“ a „Kuřecí prsní řízky“ ~ „Kuřecí prsní řízek“. Všechna podstatná
+/// slova položky musí být v produktu („maso“ ale není „máslo“).
 bool productMatches(String itemName, String product) {
-  final need = _stems(itemName);
+  final need = matchStems(itemName);
   if (need.isEmpty) return false;
-  final have = _stems(product);
-  return need.every(
-    (s) => have.any(
-      (h) => h.startsWith(s) || s.startsWith(h) || _common(s, h) >= 4,
-    ),
-  );
+  final have = matchStems(product);
+  return need.every((s) => have.any((h) => stemsMatch(s, h)));
+}
+
+const _endings = [
+  'ovych', 'ovymi', 'ovou', 'ovy', 'ova', 'ove', 'ych', 'ymi', 'ami', 'emi',
+  'ech', 'ich', 'ou', 'em', 'om', 'y', 'a', 'e', 'i', 'o', 'u',
+];
+
+/// Jednoduchý český kmen (stejně jako na serveru): „řízek“ i „řízky“ → „rizk“.
+String czStem(String word) {
+  var w = word;
+  if (w.length <= 3) return w;
+  for (final e in _endings) {
+    if (w.endsWith(e) && w.length - e.length >= 3) {
+      w = w.substring(0, w.length - e.length);
+      break;
+    }
+  }
+  if (w.length >= 4 && RegExp(r'e[kc]$').hasMatch(w)) {
+    w = w.substring(0, w.length - 2) + w.substring(w.length - 1);
+  }
+  return w;
+}
+
+Set<String> matchStems(String text) => {
+  for (final w in RegExp(r'[a-z]+').allMatches(foldText(text)))
+    if (w.group(0)!.length >= 3 && !_ignore.contains(w.group(0)))
+      czStem(w.group(0)!),
+};
+
+bool stemsMatch(String a, String b) {
+  if (a == b) return true;
+  final short = a.length <= b.length ? a : b;
+  final long = identical(short, a) ? b : a;
+  if (short.length >= 4 && long.startsWith(short)) return true;
+  return _common(a, b) >= 4;
 }
 
 /// Klíč produktu pro mezipaměť a odstranění duplicit.

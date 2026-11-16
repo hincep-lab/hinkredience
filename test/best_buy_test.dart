@@ -136,6 +136,11 @@ void main() {
     expect(productMatches('Kuřecí stehna', 'Kuřecí stehenní řízky'), isTrue);
     expect(productMatches('Mléko', 'Máslo'), isFalse);
     expect(productMatches('', 'Máslo'), isFalse);
+    expect(productMatches('Kuřecí prsní řízky – 1 kg', 'Kuřecí prsní řízek 1 kg'), isTrue);
+    expect(productMatches('Vepřová pečeně bez kosti – 1 kg', 'Vepřové pečeně bez kosti'), isTrue);
+    expect(productMatches('Máslo – 250 g', 'Máslo 250 g'), isTrue);
+    expect(productMatches('Maso', 'Máslo'), isFalse);
+    expect(czStem('rizky'), czStem('rizek'));
     expect(productKey('Máslo Tatra 250 g'), productKey('tatra MÁSLO'));
     expect(chainById('lidl')!.isOfficial('https://www.lidl.cz/c/akce'), isTrue);
     expect(chainById('lidl')!.isOfficial('https://lidl.cz.evil.com/'), isFalse);
