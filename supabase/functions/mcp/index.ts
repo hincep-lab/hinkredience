@@ -832,7 +832,22 @@ async function applyShoppingMerge(db: Supabase, list: any, drafts: ShoppingDraft
     }
   }
   await touchList(db, list.id);
+  if (plan.inserts.length && list.household_id) {
+    // Oznámení rodině (web push). Chyba oznámení nesmí zastavit nákup.
+    await announce(db, plan.inserts.map((i: any) => ({ kind: "shopping", title: String(i.name ?? "") })));
+  }
   return { added: plan.inserts.length, merged: plan.merged };
+}
+
+/** Dá vědět ostatním v rodině (serverová funkce push); chyby ignoruje. */
+async function announce(db: Supabase, items: { kind: string; title: string }[]): Promise<void> {
+  const clean = items.filter((i) => i.title.trim()).slice(0, 50);
+  if (!clean.length) return;
+  try {
+    await db.callFunction("push", { action: "notify", items: clean });
+  } catch {
+    // oznámení jsou bonus
+  }
 }
 
 async function presentList(db: Supabase, list: any) {
@@ -2456,6 +2471,62 @@ export const tools: Tool[] = [
         version: saved.version,
         message: `Recept „${recipe.title}“ je uložený v HINKredience.`,
       };
+    },
+  },
+  {
+    name: "add_meal_wish",
+    title: "Mám chuť na…",
+    description:
+      "Přidá do rodinného jídelníčku přání „mám chuť na…“ (recept z kuchařky podle recipe_id, nebo jen " +
+      "název jídla). Ostatní v rodině ho uvidí v plánu vaření a dostanou oznámení.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title"],
+      properties: {
+        title: { type: "string", description: "Na co má chuť, např. „Svíčková“." },
+        recipe_id: { type: "string", description: "Recept z kuchařky, když existuje." },
+        note: { type: "string", description: "Např. „ideálně v sobotu“." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args, userId) => {
+      const title = text(args?.title, 160);
+      if (!title) throw new ToolError("Napište, na co máte chuť.");
+      const household = await db.rpc("my_household", {}).catch(() => null);
+      const profile = (await db.select(`profiles?select=greeting_name,display_name&id=eq.${userId}&limit=1`))[0] ?? {};
+      const recipeId = typeof args?.recipe_id === "string" && /^[0-9a-f-]{36}$/i.test(args.recipe_id)
+        ? args.recipe_id
+        : null;
+      const row = await db.insert("meal_wishes", {
+        household_id: typeof household === "string" ? household : null,
+        recipe_id: recipeId,
+        title,
+        note: text(args?.note, 300),
+        author_name: String(profile.greeting_name || profile.display_name || ""),
+      });
+      if (typeof household === "string") await announce(db, [{ kind: "wish", title }]);
+      return {
+        saved: true,
+        wish_id: row?.id ?? null,
+        message: `Přání „${title}“ je v plánu vaření${typeof household === "string" ? " a rodina dostane oznámení" : ""}.`,
+      };
+    },
+  },
+  {
+    name: "get_meal_wishes",
+    title: "Na co má rodina chuť",
+    description: "Vrátí čekající i naplánovaná přání „mám chuť na…“ celé rodiny (kdo, co, poznámka, naplánovaný den).",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    readOnly: true,
+    run: async (db) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = await db.select(
+        "meal_wishes?select=id,title,recipe_id,note,author_name,planned_day,created_at" +
+          "&deleted_at=is.null&order=created_at.desc&limit=100",
+      );
+      const wishes = rows.filter((w: any) => !w.planned_day || w.planned_day >= today);
+      return { count: wishes.length, wishes };
     },
   },
   {

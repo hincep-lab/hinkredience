@@ -189,7 +189,7 @@ Deno.test("nové nástroje mají správné příznaky", () => {
   const byName = (n: string) => tools.find((t) => t.name === n)!;
   for (const n of ["get_meal_plan", "get_trash", "get_family"]) assert(byName(n).readOnly, n);
   for (const n of ["remove_meal_plan_entry"]) assert(byName(n).destructive, n);
-  assertEquals(tools.length, 46);
+  assertEquals(tools.length, 48);
 });
 
 Deno.test("ceny: akci ověřuje serverová funkce prices s tokenem uživatele", async () => {
@@ -209,4 +209,35 @@ Deno.test("ceny: akci ověřuje serverová funkce prices s tokenem uživatele", 
   assertEquals(calls[0].body.offer.price, 39.9);
   assertEquals((r as any).verified, false);
   assert(String((r as any).message).includes("NEOVĚŘENÉ"));
+});
+
+Deno.test("přání z ChatGPT: uloží se s autorem a rodina dostane oznámení", async () => {
+  const inserted: any[] = [];
+  const notified: any[] = [];
+  const db = {
+    rpc: async () => "h1",
+    select: async () => [{ greeting_name: "Pájo" }],
+    insert: async (table: string, row: any) => {
+      inserted.push({ table, row });
+      return { id: "w1" };
+    },
+    callFunction: async (name: string, body: any) => {
+      notified.push({ name, body });
+      return { sent: 1 };
+    },
+  };
+  const tool = tools.find((t) => t.name === "add_meal_wish")!;
+  const r: any = await tool.run(db as any, { title: " Svíčková ", note: "v sobotu" }, "u1", fetch);
+  assertEquals(inserted[0].table, "meal_wishes");
+  assertEquals(inserted[0].row.title, "Svíčková");
+  assertEquals(inserted[0].row.author_name, "Pájo");
+  assertEquals(inserted[0].row.household_id, "h1");
+  assertEquals(notified[0].name, "push");
+  assertEquals(notified[0].body.items, [{ kind: "wish", title: "Svíčková" }]);
+  assert(r.saved);
+  // Bez rodiny se nic neoznamuje a selhání oznámení nevadí.
+  const solo = { ...db, rpc: async () => null, callFunction: async () => { throw new Error("x"); } };
+  const r2: any = await tool.run(solo as any, { title: "Guláš" }, "u1", fetch);
+  assert(r2.saved);
+  assert((await tool.run(db as any, { title: "  " }, "u1", fetch).catch((e) => e)) instanceof Error);
 });

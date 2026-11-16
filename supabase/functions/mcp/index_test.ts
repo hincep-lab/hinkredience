@@ -233,6 +233,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
   const list = (await response.json()).result.tools as any[];
   assertEquals(list.map((t) => t.name).sort(), [
     "add_cooking_note",
+    "add_meal_wish",
     "add_recipe_to_shopping_list",
     "add_shopping_items",
     "clear_checked_items",
@@ -245,6 +246,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_family",
     "get_kitchen_equipment",
     "get_meal_plan",
+    "get_meal_wishes",
     "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
@@ -285,6 +287,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_family",
     "get_kitchen_equipment",
     "get_meal_plan",
+    "get_meal_wishes",
     "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
@@ -302,7 +305,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 46);
+  assertEquals(tools.length, 48);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");
