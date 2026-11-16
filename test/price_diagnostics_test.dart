@@ -69,7 +69,9 @@ void main() {
     final r = PriceRefresh.fromJson({
       'provider': 'gemini',
       'scanned': 3,
-      'errors': ['penny: model gemini-2.5-flash-lite není pro tento klíč dostupný'],
+      'errors': [
+        'penny: model gemini-2.5-flash-lite není pro tento klíč dostupný',
+      ],
     });
     expect(refreshMessage(r), contains('Problém: penny: model'));
     expect(
@@ -93,11 +95,19 @@ void main() {
       ),
     );
     expect(find.text('Penny'), findsOneWidget);
-    expect(find.textContaining('Stránka www.penny.cz: 5400 znaků'), findsOneWidget);
+    expect(
+      find.textContaining('Stránka www.penny.cz: 5400 znaků'),
+      findsOneWidget,
+    );
     expect(find.textContaining('✓ Máslo 250 g 39,90 Kč'), findsOneWidget);
-    expect(find.textContaining('✗ Máslo 250 g: chybí platnost'), findsOneWidget);
+    expect(
+      find.textContaining('✗ Máslo 250 g: chybí platnost'),
+      findsOneWidget,
+    );
     expect(find.textContaining('nové klíče'), findsOneWidget);
-    await tester.ensureVisible(find.text('Hledat znovu (bez dnešní mezipaměti)'));
+    await tester.ensureVisible(
+      find.text('Hledat znovu (bez dnešní mezipaměti)'),
+    );
     await tester.tap(find.text('Hledat znovu (bez dnešní mezipaměti)'));
     expect(retried, isTrue);
   });

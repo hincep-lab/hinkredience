@@ -441,8 +441,27 @@ bool productMatches(String itemName, String product) {
 }
 
 const _endings = [
-  'ovych', 'ovymi', 'ovou', 'ovy', 'ova', 'ove', 'ych', 'ymi', 'ami', 'emi',
-  'ech', 'ich', 'ou', 'em', 'om', 'y', 'a', 'e', 'i', 'o', 'u',
+  'ovych',
+  'ovymi',
+  'ovou',
+  'ovy',
+  'ova',
+  'ove',
+  'ych',
+  'ymi',
+  'ami',
+  'emi',
+  'ech',
+  'ich',
+  'ou',
+  'em',
+  'om',
+  'y',
+  'a',
+  'e',
+  'i',
+  'o',
+  'u',
 ];
 
 /// Jednoduchý český kmen (stejně jako na serveru): „řízek“ i „řízky“ → „rizk“.
