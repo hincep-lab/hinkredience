@@ -73,6 +73,31 @@ Deno.test("odkaz na akci jen na skutečnou akci, recept bez akce se zahodí", ()
   assertEquals(idea.temperature_c, 170);
   assertEquals(idea.category, "Maso");
   assertEquals(rejected, ["Palačinky: nevyužívá žádnou akci"]);
+  assertEquals(idea.chain, "tesco");
+});
+
+Deno.test("recept používá akce jen z jednoho obchodu", () => {
+  const offers = pickOffers(rows);
+  const text = JSON.stringify({
+    recipes: [{
+      title: "Kuře s cibulí",
+      ingredients: [
+        { name: "Kuřecí řízky", offer: "A2" },
+        { name: "Cibule", offer: "A3" },
+        { name: "Vepřové", offer: "A1" },
+        { name: "Sůl" },
+      ],
+      steps: ["a", "b"],
+    }],
+  });
+  const idea = parseIdeas(text, offers).ideas[0];
+  assertEquals(idea.chain, "tesco");
+  assertEquals(idea.ingredients[0].offer, null); // JIP vyřazen
+  assertEquals(idea.ingredients[1].offer?.chain, "tesco");
+});
+
+Deno.test("prompt žádá jeden obchod na recept", () => {
+  assert(buildPrompt(pickOffers(rows), 3, "", []).includes("JEDNOHO obchodu"));
 });
 
 Deno.test("neplatný JSON se nezobrazí", () => {

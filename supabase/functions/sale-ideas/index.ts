@@ -6,7 +6,7 @@
 // Zdarma: jen bezplatný Gemini, sdílený denní limit s hledáním v letácích
 // (price_ai_usage, provider "gemini"). Placené API se nepoužívá.
 
-export const VERSION = "napady-1";
+export const VERSION = "napady-2";
 
 export interface Env {
   supabaseUrl: string;
@@ -90,6 +90,8 @@ export function buildPrompt(offers: Offer[], count: number, wish: string, avoid:
     "",
     `Navrhni ${count} různé recepty. Pravidla:`,
     "- Každý recept musí stavět hlavně na surovinách z akcí (ideálně maso nebo hlavní surovina z akce).",
+    "- Nakupuje se v jednom obchodě: jeden recept smí použít jen akce z JEDNOHO obchodu. Ostatní suroviny se koupí tamtéž za běžnou cenu.",
+    "- Jedno vaření se dělá na víc jídel po sobě (např. 6 porcí na oběd, večeři a další oběd), takže volte jídla, která se dají ohřát.",
     "- U suroviny, která odpovídá akci, vyplň offer jejím kódem (např. A3). U ostatních surovin offer nech prázdné.",
     "- Nevymýšlej ceny ani obchody, ty doplní aplikace.",
     "- Běžná česká domácí kuchyně, suroviny dostupné v Sušici, realistická množství v g, ml, ks, lžíce, lžička.",
@@ -144,6 +146,7 @@ export interface IdeaIngredient {
 
 export interface Idea {
   title: string;
+  chain: string;
   description: string;
   category: string;
   servings: number;
@@ -195,11 +198,17 @@ export function parseIdeas(text: string, offers: Offer[]): { ideas: Idea[]; reje
       rejected.push(`${title}: nevyužívá žádnou akci`);
       continue;
     }
+    // Jeden obchod: platí akce obchodu, který jich má v receptu nejvíc.
+    const counts = new Map<string, number>();
+    for (const i of ingredients) if (i.offer) counts.set(i.offer.chain, (counts.get(i.offer.chain) ?? 0) + 1);
+    const chain = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    for (const i of ingredients) if (i.offer && i.offer.chain !== chain) i.offer = null;
     const category = str(r?.category, 30);
     const minutes = num(r?.minutes);
     const temp = num(r?.temperature_c);
     ideas.push({
       title,
+      chain,
       description: str(r?.description, 300),
       category: CATEGORIES.includes(category) ? category : "",
       servings: 4,

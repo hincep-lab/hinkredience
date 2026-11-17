@@ -14,6 +14,8 @@ import '../../core/widgets.dart';
 import '../../data/price_service.dart';
 import 'best_buy_panel.dart' show PriceDiagnostics, kc, refreshMessage;
 import 'sale_dish_screen.dart';
+import 'sale_plan.dart';
+import 'week_menu_screen.dart';
 
 /// „Recepty z akcí“: co je teď v Sušici v akci (maso, smetana, brambory…),
 /// co z toho uvařit a které recepty z kuchařky teď vyjdou levně.
@@ -211,6 +213,42 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
               ),
               const SizedBox(height: 8),
             ],
+            HkCard(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => WeekMenuScreen(
+                    candidates: [..._ideas, ...dishes]..sort(compareDishes),
+                  ),
+                ),
+              ),
+              child: const Row(
+                children: [
+                  Icon(
+                    Icons.calendar_month_rounded,
+                    color: AppColors.copperGold,
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sestavit jídelníček na týden',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          'Oběd i večeře, jedno vaření na víc jídel, '
+                          'každé jídlo ze svého obchodu.',
+                          style: muted,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
             const SectionTitle('Vymyslet recept z akcí'),
             HkCard(
               child: Column(
@@ -271,11 +309,30 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
                 style: muted,
               )
             else
-              for (final d in dishes.take(12))
+              for (final MapEntry(key: chain, value: items) in _byChain(
+                dishes,
+              ).entries) ...[
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _DishCard(item: d),
+                  padding: const EdgeInsets.only(top: 4, bottom: 6),
+                  child: Text(
+                    '${chainName(chain)} – ${items.length} '
+                    '${items.length == 1
+                        ? 'jídlo'
+                        : items.length < 5
+                        ? 'jídla'
+                        : 'jídel'}',
+                    style: const TextStyle(
+                      color: AppColors.copperGold,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
+                for (final d in items.take(5))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _DishCard(item: d),
+                  ),
+              ],
             const SizedBox(height: 8),
             const SectionTitle('Z vaší kuchařky'),
             if (list.isEmpty)
@@ -332,7 +389,12 @@ class _DishCard extends StatelessWidget {
             ],
           ),
           Text(
-            '${dish.minutes > 0 ? '${dish.minutes} min · ' : ''}${Dish.servings} porce',
+            [
+              if (item.chain != null) chainName(item.chain),
+              if (item.validTo case final validTo?)
+                validityLabel(validTo, DateTime.now()),
+              if (dish.minutes > 0) '${dish.minutes} min',
+            ].join(' · '),
             style: muted,
           ),
           const SizedBox(height: 4),
@@ -350,10 +412,29 @@ class _DishCard extends StatelessWidget {
                 fontSize: 12.5,
               ),
             ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Consumer(
+              builder: (context, ref, _) => TextButton.icon(
+                onPressed: () => showAddDishToMenu(context, ref, item),
+                icon: const Icon(Icons.event_available_rounded, size: 18),
+                label: const Text('Do jídelníčku'),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// Jídla po obchodech; obchody seřazené podle nejlepšího jídla.
+Map<String, List<DishOnSale>> _byChain(List<DishOnSale> dishes) {
+  final out = <String, List<DishOnSale>>{};
+  for (final d in dishes) {
+    (out[d.chain ?? ''] ??= []).add(d);
+  }
+  return out;
 }
 
 class _RecipeCard extends StatelessWidget {

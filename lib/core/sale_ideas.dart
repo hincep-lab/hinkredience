@@ -74,6 +74,27 @@ DishOnSale? ideaToDish(Map<String, dynamic> j, int index) {
     );
   }
   if (onSale.isEmpty) return null;
+  // Nákup v jednom obchodě: platí akce obchodu, který jich má v receptu
+  // nejvíc; akce z jiných obchodů se u suroviny nezobrazí.
+  final counts = <String, int>{};
+  for (final o in onSale.values) {
+    counts[o.chain] = (counts[o.chain] ?? 0) + 1;
+  }
+  final chain =
+      (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+          .first
+          .key;
+  for (final (i, ingredient) in ingredients.indexed) {
+    final group = ingredient.group;
+    if (group != null && onSale[group]!.chain != chain) {
+      onSale.remove(group);
+      ingredients[i] = DishIngredient(
+        ingredient.name,
+        ingredient.quantity,
+        ingredient.unit,
+      );
+    }
+  }
   final temp = (j['temperature_c'] as num?)?.toInt();
   final dish = Dish(
     id: 'napad-$index-${title.hashCode}',
@@ -85,5 +106,5 @@ DishOnSale? ideaToDish(Map<String, dynamic> j, int index) {
     ingredients: ingredients,
     steps: steps,
   );
-  return DishOnSale(dish, onSale);
+  return DishOnSale(dish, onSale, chain: chain);
 }

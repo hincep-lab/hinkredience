@@ -10,6 +10,7 @@ import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import 'add_to_shopping_sheet.dart';
 import 'best_buy_panel.dart' show kc;
+import 'sale_plan.dart';
 import 'sale_recipes_screen.dart' show offerLine;
 
 /// Jídlo navržené z akcí: suroviny (co je v akci a za kolik), postup,
@@ -84,6 +85,16 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
             ' · v akci ${onSale.length} z ${widget.item.total} surovin',
             style: const TextStyle(color: AppColors.copperGold),
           ),
+          if (widget.item.chain != null || widget.item.validTo != null)
+            Text(
+              [
+                if (widget.item.chain != null)
+                  'Vše koupíte v obchodě ${chainName(widget.item.chain)}',
+                if (widget.item.validTo case final validTo?)
+                  validityLabel(validTo, DateTime.now()),
+              ].join(' · '),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           if (widget.item.savings > 0)
             Text(
               'Ušetříte asi ${kc(widget.item.savings)} proti běžné ceně',
@@ -120,6 +131,12 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => showAddDishToMenu(context, ref, widget.item),
+            icon: const Icon(Icons.event_available_rounded),
+            label: const Text('Přidat do jídelníčku'),
           ),
           const SizedBox(height: 8),
           const SectionTitle('Suroviny'),

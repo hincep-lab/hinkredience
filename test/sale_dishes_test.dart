@@ -48,13 +48,15 @@ void main() {
   test('z vepřového, smetany a brambor v akci navrhne zapečené maso', () {
     final dishes = dishesFromSales([
       offer('penny', 'Vepřová plec', 119.9, regular: 159.9),
-      offer('lidl', 'Smetana ke šlehání 31 %', 24.9, regular: 34.9),
-      offer('albert', 'Brambory konzumní 2 kg', 29.9),
-      offer('tesco', 'Eidam 30 %', 99.9),
+      offer('penny', 'Smetana ke šlehání 31 %', 24.9, regular: 34.9),
+      offer('penny', 'Brambory konzumní 2 kg', 29.9),
+      offer('penny', 'Eidam 30 %', 99.9),
     ], today);
     expect(dishes, isNotEmpty);
     final first = dishes.first;
     expect(first.dish.id, 'zapecene-veprove');
+    expect(first.chain, 'penny');
+    expect(first.validTo, DateTime(2026, 11, 22));
     expect(
       first.onSale.keys,
       containsAll(['veprove', 'brambory', 'smetana', 'syr']),
@@ -67,6 +69,31 @@ void main() {
       ),
       isEmpty,
     );
+  });
+
+  test('akce z různých obchodů se v jednom jídle nemíchají', () {
+    final dishes = dishesFromSales([
+      offer('tesco', 'Vepřová pečeně bez kosti', 79.9, regular: 198.9),
+      offer('albert', 'Smetana ke šlehání', 24.9),
+      offer('albert', 'Brambory 2 kg', 29.9),
+    ], today);
+    final zapecene = dishes.where((d) => d.dish.id == 'zapecene-veprove');
+    expect(zapecene.length, 1);
+    expect(zapecene.first.chain, 'tesco');
+    expect(zapecene.first.onSale.keys, ['veprove']);
+    // V Albertu není hlavní surovina (maso), takže se tam nenabízí.
+    expect(
+      dishes.where(
+        (d) => d.chain == 'albert' && d.dish.main.contains('veprove'),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('popisek platnosti akce', () {
+    expect(validityLabel(DateTime(2026, 11, 17), today), 'akce končí dnes');
+    expect(validityLabel(DateTime(2026, 11, 18), today), 'akce končí zítra');
+    expect(validityLabel(DateTime(2026, 11, 20), today), 'akce do čt 20. 11.');
   });
 
   test('neověřené a prošlé akce se nepočítají', () {

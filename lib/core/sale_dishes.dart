@@ -307,14 +307,18 @@ class Dish {
   static const servings = 4;
 }
 
-/// Jídlo s tím, co z něj je teď v akci.
+/// Jídlo s tím, co z něj je teď v akci – vždy v jednom obchodě, aby se
+/// nemuselo přejíždět (ostatní suroviny se koupí tamtéž za běžnou cenu).
 class DishOnSale {
-  const DishOnSale(this.dish, this.onSale);
+  const DishOnSale(this.dish, this.onSale, {this.chain});
 
   final Dish dish;
 
   /// Skupina → nejlevnější ověřená akce.
   final Map<String, PriceOffer> onSale;
+
+  /// Obchod, ve kterém se nakoupí (null = nezjištěno).
+  final String? chain;
 
   int get total => dish.groups.length;
 
@@ -326,41 +330,82 @@ class DishOnSale {
     }
     return sum;
   }
+
+  /// Do kdy platí nejdřív končící akce, na které jídlo stojí.
+  DateTime? get validTo {
+    DateTime? first;
+    for (final o in onSale.values) {
+      if (first == null || o.validTo.isBefore(first)) first = o.validTo;
+    }
+    return first;
+  }
+
+  /// Hlavní surovina v akci (podle ní se hlídá pestrost jídelníčku).
+  String get mainGroup {
+    for (final m in dish.main) {
+      if (onSale.containsKey(m)) return m;
+    }
+    return onSale.keys.isEmpty ? '' : onSale.keys.first;
+  }
 }
 
-/// Jídla, ke kterým je teď v akci hlavní surovina; nejdřív ta s nejvíc
-/// surovinami v akci, pak s větší úsporou.
+/// Jídla, ke kterým je v některém obchodě v akci hlavní surovina. Akce se
+/// berou vždy jen z jednoho obchodu; stejné jídlo může být nabídnuto
+/// ve více obchodech. Nejdřív ta s nejvíc surovinami v akci, pak s větší
+/// úsporou.
 List<DishOnSale> dishesFromSales(
   List<PriceOffer> offers,
   DateTime today, {
   List<Dish> dishes = saleDishes,
 }) {
-  final groups = offersByGroup(offers, today);
-  if (groups.isEmpty) return const [];
-  final out = <DishOnSale>[];
-  for (final dish in dishes) {
-    final onSale = <String, PriceOffer>{
-      for (final g in dish.groups)
-        if (groups[g] case final list? when list.isNotEmpty) g: list.first,
-    };
-    final mainOnSale = dish.main.isEmpty
-        ? onSale.isNotEmpty
-        : dish.main.any(onSale.containsKey);
-    if (!mainOnSale) continue;
-    out.add(DishOnSale(dish, onSale));
+  final byChain = <String, List<PriceOffer>>{};
+  for (final o in usableOffers(offers, today)) {
+    (byChain[o.chain] ??= []).add(o);
   }
-  out.sort((a, b) {
-    final byCount = b.onSale.length.compareTo(a.onSale.length);
-    if (byCount != 0) return byCount;
-    final byShare = (b.onSale.length / b.total).compareTo(
-      a.onSale.length / a.total,
-    );
-    if (byShare != 0) return byShare;
-    final bySavings = b.savings.compareTo(a.savings);
-    if (bySavings != 0) return bySavings;
-    return a.dish.title.compareTo(b.dish.title);
-  });
+  final out = <DishOnSale>[];
+  for (final MapEntry(key: chain, value: chainOffers) in byChain.entries) {
+    final groups = offersByGroup(chainOffers, today);
+    if (groups.isEmpty) continue;
+    for (final dish in dishes) {
+      final onSale = <String, PriceOffer>{
+        for (final g in dish.groups)
+          if (groups[g] case final list? when list.isNotEmpty) g: list.first,
+      };
+      final mainOnSale = dish.main.isEmpty
+          ? onSale.isNotEmpty
+          : dish.main.any(onSale.containsKey);
+      if (!mainOnSale) continue;
+      out.add(DishOnSale(dish, onSale, chain: chain));
+    }
+  }
+  out.sort(compareDishes);
   return out;
+}
+
+int compareDishes(DishOnSale a, DishOnSale b) {
+  final byCount = b.onSale.length.compareTo(a.onSale.length);
+  if (byCount != 0) return byCount;
+  final byShare = (b.onSale.length / (b.total == 0 ? 1 : b.total)).compareTo(
+    a.onSale.length / (a.total == 0 ? 1 : a.total),
+  );
+  if (byShare != 0) return byShare;
+  final bySavings = b.savings.compareTo(a.savings);
+  if (bySavings != 0) return bySavings;
+  final byTitle = a.dish.title.compareTo(b.dish.title);
+  if (byTitle != 0) return byTitle;
+  return (a.chain ?? '').compareTo(b.chain ?? '');
+}
+
+const _weekdays = ['po', 'út', 'st', 'čt', 'pá', 'so', 'ne'];
+
+/// „končí dnes“, „končí zítra“, nebo „akce do čt 20. 11.“.
+String validityLabel(DateTime validTo, DateTime today) {
+  final end = DateTime(validTo.year, validTo.month, validTo.day);
+  final day = DateTime(today.year, today.month, today.day);
+  final left = end.difference(day).inDays;
+  if (left <= 0) return 'akce končí dnes';
+  if (left == 1) return 'akce končí zítra';
+  return 'akce do ${_weekdays[end.weekday - 1]} ${end.day}. ${end.month}.';
 }
 
 /// Jídlo jako recept do kuchařky (nové id pro recept, suroviny i kroky).
