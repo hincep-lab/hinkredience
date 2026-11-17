@@ -18,6 +18,9 @@ class RecipeGroup {
 
   /// Záložní fotografie, když ve skupině není recept s fotkou.
   final String asset;
+
+  /// Obrysová ikona podle předlohy (bílá, průhledné pozadí).
+  String get iconAsset => 'assets/images/icons/$id.png';
 }
 
 const recipeGroups = <RecipeGroup>[
@@ -276,16 +279,20 @@ String? _firstMeat(String text) {
 // ------------------------------------------------------------- příprava
 
 enum PrepMethod {
-  oven('Trouba', Icons.kitchen_rounded),
-  pan('Pánev', Icons.egg_rounded),
-  sousVide('Sous-vide', Icons.hot_tub_rounded),
-  grill('Gril', Icons.outdoor_grill_rounded),
-  slow('Pomalé vaření', Icons.soup_kitchen_outlined);
+  oven('Trouba', Icons.kitchen_rounded, 'trouba'),
+  pan('Pánev', Icons.egg_rounded, 'panev'),
+  sousVide('Sous-vide', Icons.hot_tub_rounded, 'sousvide'),
+  grill('Gril', Icons.outdoor_grill_rounded, 'gril'),
+  slow('Pomalé vaření', Icons.soup_kitchen_outlined, 'pomale');
 
-  const PrepMethod(this.label, this.icon);
+  const PrepMethod(this.label, this.icon, this._asset);
 
   final String label;
   final IconData icon;
+  final String _asset;
+
+  /// Obrysová ikona podle předlohy.
+  String get iconAsset => 'assets/images/icons/$_asset.png';
 }
 
 String _recipeText(Recipe r) => foldText(

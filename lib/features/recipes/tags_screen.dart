@@ -78,7 +78,7 @@ class TagsScreen extends ConsumerWidget {
               children: [
                 for (final p in PrepMethod.values)
                   FilterPill(
-                    icon: p.icon,
+                    iconAsset: p.iconAsset,
                     label: '${p.label} · ${prepCounts[p]}',
                     selected: false,
                     onTap: () =>

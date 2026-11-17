@@ -116,9 +116,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 _setFilters(_filters.copyWith(query: ''));
               },
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             _PrepRow(selected: _filters.prep, onToggle: _togglePrep),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             _TimeOccasionRow(
               time: _filters.time,
               occasions: _filters.occasions,
@@ -298,7 +298,7 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(4, 6, 12, 6),
+      padding: const EdgeInsets.fromLTRB(2, 4, 10, 4),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: Color(0xFF232325))),
       ),
@@ -307,10 +307,10 @@ class _Header extends StatelessWidget {
           IconButton(
             tooltip: 'Nabídka',
             onPressed: onMenu,
-            icon: const Icon(Icons.menu_rounded, size: 30),
+            icon: const Icon(Icons.menu_rounded, size: 28),
           ),
           const SizedBox(width: 2),
-          Image.asset('assets/images/chef_hat.png', width: 42, height: 42),
+          Image.asset('assets/images/chef_hat.png', width: 38, height: 38),
           const SizedBox(width: 10),
           const Expanded(
             child: Column(
@@ -324,7 +324,7 @@ class _Header extends StatelessWidget {
                     'HINKredience°',
                     maxLines: 1,
                     style: TextStyle(
-                      fontSize: 23,
+                      fontSize: 21,
                       fontWeight: FontWeight.w800,
                       color: AppColors.text,
                       letterSpacing: -0.3,
@@ -335,7 +335,7 @@ class _Header extends StatelessWidget {
                   'Moje kuchařka',
                   style: TextStyle(
                     color: AppColors.textSecondary,
-                    fontSize: 15,
+                    fontSize: 13.5,
                   ),
                 ),
               ],
@@ -391,12 +391,12 @@ class _RoundButton extends StatelessWidget {
           customBorder: const CircleBorder(),
           onTap: onTap,
           child: SizedBox(
-            width: 48,
-            height: 48,
+            width: 44,
+            height: 44,
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Icon(icon, size: 26, color: Colors.white),
+                Icon(icon, size: 24, color: Colors.white),
                 if (dot)
                   Positioned(
                     top: 10,
@@ -437,14 +437,14 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 196,
+      height: 158,
       child: Stack(
         children: [
           Positioned(
             top: 0,
             right: 0,
-            bottom: 26,
-            width: MediaQuery.sizeOf(context).width * 0.72,
+            bottom: 22,
+            width: MediaQuery.sizeOf(context).width * 0.7,
             child: ShaderMask(
               shaderCallback: (rect) => const LinearGradient(
                 begin: Alignment.centerLeft,
@@ -463,7 +463,7 @@ class _Hero extends StatelessWidget {
           Positioned(
             left: 18,
             right: 18,
-            top: 24,
+            top: 16,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -474,7 +474,7 @@ class _Hero extends StatelessWidget {
                     'Ahoj $name 👋',
                     maxLines: 1,
                     style: const TextStyle(
-                      fontSize: 31,
+                      fontSize: 27,
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
                       shadows: [Shadow(blurRadius: 12, color: Colors.black)],
@@ -485,7 +485,7 @@ class _Hero extends StatelessWidget {
                 const Text(
                   'Co dobrého dnes uvaříme?',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 16.5,
                     color: Colors.white,
                     shadows: [Shadow(blurRadius: 10, color: Colors.black)],
                   ),
@@ -505,16 +505,16 @@ class _Hero extends StatelessWidget {
                 textInputAction: TextInputAction.search,
                 onChanged: onChanged,
                 onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                style: const TextStyle(fontSize: 16),
+                style: const TextStyle(fontSize: 15),
                 decoration: InputDecoration(
                   hintText: 'Hledat recept, surovinu nebo štítek…',
                   hintStyle: const TextStyle(color: Color(0xFFB0B0B4)),
                   filled: true,
                   fillColor: const Color(0xE61E1E21),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
                   prefixIcon: const Padding(
                     padding: EdgeInsets.only(left: 14, right: 8),
-                    child: Icon(Icons.search_rounded, size: 28),
+                    child: Icon(Icons.search_rounded, size: 25),
                   ),
                   prefixIconConstraints: const BoxConstraints(minWidth: 50),
                   suffixIcon: value.text.isEmpty
@@ -557,16 +557,16 @@ class _PrepRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 46,
+      height: 40,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: PrepMethod.values.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 10),
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final p = PrepMethod.values[index];
           return FilterPill(
-            icon: p.icon,
+            iconAsset: p.iconAsset,
             label: p.label,
             selected: selected.contains(p),
             onTap: () => onToggle(p),
@@ -591,13 +591,13 @@ class _TimeOccasionRow extends StatelessWidget {
   final ValueChanged<String> onOccasion;
 
   Widget _label(IconData icon, String text) => Padding(
-    padding: const EdgeInsets.only(left: 4, bottom: 8),
+    padding: const EdgeInsets.only(left: 4, bottom: 6),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 22, color: AppColors.copper),
+        Icon(icon, size: 20, color: AppColors.copper),
         const SizedBox(width: 8),
-        Text(text, style: const TextStyle(fontSize: 15.5, color: Colors.white)),
+        Text(text, style: const TextStyle(fontSize: 14.5, color: Colors.white)),
       ],
     ),
   );

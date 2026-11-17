@@ -33,10 +33,10 @@ class HomeSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 8, 10),
+      padding: const EdgeInsets.fromLTRB(16, 14, 6, 8),
       child: Row(
         children: [
-          Icon(icon, color: AppColors.copper, size: 26),
+          Icon(icon, color: AppColors.copper, size: 24),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -44,7 +44,7 @@ class HomeSectionHeader extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 21,
+                fontSize: 19,
                 fontWeight: FontWeight.w800,
                 color: AppColors.text,
               ),
@@ -87,10 +87,14 @@ class FilterPill extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.icon,
+    this.iconAsset,
   });
 
   final String label;
   final IconData? icon;
+
+  /// Obrysová ikona z předlohy (má přednost před [icon]).
+  final String? iconAsset;
   final bool selected;
   final VoidCallback onTap;
 
@@ -111,21 +115,30 @@ class FilterPill extends StatelessWidget {
           customBorder: const StadiumBorder(),
           onTap: onTap,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44),
+            constraints: const BoxConstraints(minHeight: 40),
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: icon == null ? 16 : 14),
+              padding: EdgeInsets.symmetric(
+                horizontal: icon == null && iconAsset == null ? 14 : 12,
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (icon != null) ...[
-                    Icon(icon, size: 20, color: selected ? fg : Colors.white),
-                    const SizedBox(width: 8),
+                  if (iconAsset != null) ...[
+                    ImageIcon(
+                      AssetImage(iconAsset!),
+                      size: 22,
+                      color: selected ? fg : Colors.white,
+                    ),
+                    const SizedBox(width: 7),
+                  ] else if (icon != null) ...[
+                    Icon(icon, size: 19, color: selected ? fg : Colors.white),
+                    const SizedBox(width: 7),
                   ],
                   Text(
                     label,
                     style: TextStyle(
                       color: fg,
-                      fontSize: 14,
+                      fontSize: 13.5,
                       fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
@@ -204,7 +217,11 @@ class GroupCard extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Icon(group.icon, color: Colors.white, size: 26),
+                    ImageIcon(
+                      AssetImage(group.iconAsset),
+                      color: Colors.white,
+                      size: 30,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -218,7 +235,7 @@ class GroupCard extends StatelessWidget {
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800,
-                              fontSize: 15.5,
+                              fontSize: 15,
                               height: 1.15,
                               shadows: [
                                 Shadow(blurRadius: 6, color: Colors.black),
@@ -433,14 +450,14 @@ class FavoritesStrip extends StatelessWidget {
       );
     }
     return SizedBox(
-      height: 210,
+      height: 196,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: recipes.length,
         separatorBuilder: (context, index) => const SizedBox(width: 12),
         itemBuilder: (context, index) => SizedBox(
-          width: 160,
+          width: 150,
           child: RecipePhotoCard(recipe: recipes[index], showMeta: false),
         ),
       ),
