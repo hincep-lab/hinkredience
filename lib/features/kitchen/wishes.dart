@@ -380,3 +380,26 @@ class WishesSection extends ConsumerWidget {
     );
   }
 }
+
+/// Samostatná obrazovka „Mám chuť“: na co má rodina chuť, přidání přání
+/// a jeho naplánování jedním klepnutím.
+class WishesScreen extends ConsumerWidget {
+  const WishesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Mám chuť')),
+      floatingActionButton: FloatingActionButton.extended(
+        key: const Key('add-wish'),
+        onPressed: () => addWish(context, ref),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Mám chuť na…'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+        children: const [WishesSection()],
+      ),
+    );
+  }
+}

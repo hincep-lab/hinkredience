@@ -26,6 +26,7 @@ import '../features/cooking/cooking_screen.dart';
 import '../features/kitchen/diary_entry_screen.dart';
 import '../features/kitchen/diary_screen.dart';
 import '../features/kitchen/plan_screen.dart';
+import '../features/kitchen/wishes.dart' show WishesScreen;
 import '../features/kitchen/shopping_lists_screen.dart';
 import '../features/kitchen/shopping_screen.dart';
 import '../features/more/family_screen.dart';
@@ -62,6 +63,7 @@ abstract final class Routes {
   static const converter = '/more/convert';
   static const pantry = '/more/pantry';
   static const saleRecipes = '/more/sales';
+  static const wishes = '/more/wishes';
 
   static String diaryFor(String recipeId) =>
       Uri(path: diary, queryParameters: {'recipe': recipeId}).toString();
@@ -188,16 +190,6 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                 path: Routes.shopping,
                 pageBuilder: (context, state) =>
                     tab(state, const ShoppingListsScreen()),
-                routes: [
-                  GoRoute(
-                    path: ':id',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) => page(
-                      state,
-                      ShoppingScreen(listId: state.pathParameters['id']!),
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
@@ -228,6 +220,13 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
           ),
         ],
       ),
+      // Detail seznamu je mimo spodní lištu: otevírá se i z receptu nebo
+      // plánu (tedy zvenku) a nesmí tím vzniknout druhá kopie hlavní obrazovky.
+      GoRoute(
+        path: '${Routes.shopping}/:id',
+        pageBuilder: (context, state) =>
+            page(state, ShoppingScreen(listId: state.pathParameters['id']!)),
+      ),
       GoRoute(
         path: Routes.more,
         parentNavigatorKey: rootKey,
@@ -248,6 +247,11 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
             path: 'chatgpt',
             parentNavigatorKey: rootKey,
             pageBuilder: (context, state) => page(state, const ChatGptScreen()),
+          ),
+          GoRoute(
+            path: 'wishes',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const WishesScreen()),
           ),
           GoRoute(
             path: 'family',

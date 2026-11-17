@@ -95,7 +95,7 @@ class _WeekMenuScreenState extends ConsumerState<WeekMenuScreen> {
             ),
             action: SnackBarAction(
               label: 'Otevřít',
-              onPressed: () => context.push(Routes.plan),
+              onPressed: () => context.go(Routes.plan),
             ),
           ),
         );

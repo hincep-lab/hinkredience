@@ -206,7 +206,12 @@ class MoreScreen extends ConsumerWidget {
               _MenuTile(
                 icon: Icons.calendar_month_rounded,
                 label: 'Plán vaření',
-                onTap: () => context.push(Routes.plan),
+                onTap: () => context.go(Routes.plan),
+              ),
+              _MenuTile(
+                icon: Icons.favorite_border_rounded,
+                label: 'Mám chuť',
+                onTap: () => context.push(Routes.wishes),
               ),
               _MenuTile(
                 icon: Icons.thermostat_rounded,

@@ -248,6 +248,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         onTap: () => context.push(Routes.webSearch),
                       ),
                       _FeatureTile(
+                        icon: Icons.favorite_border_rounded,
+                        title: 'Mám chuť',
+                        subtitle: wishCount > 0
+                            ? 'Přání: $wishCount'
+                            : 'Na co má rodina chuť',
+                        onTap: () => context.push(Routes.wishes),
+                      ),
+                      _FeatureTile(
                         icon: Icons.add_rounded,
                         title: 'Nový recept',
                         subtitle: 'Napsat vlastní',

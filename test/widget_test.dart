@@ -981,4 +981,31 @@ void main() {
     );
     expect(find.textContaining('2 ks'), findsNothing);
   });
+
+  testWidgets('Nabídka → Plán vaření otevře plán, ne černou obrazovku', (
+    tester,
+  ) async {
+    final router = await pumpApp(tester, location: Routes.home);
+    router.push(Routes.more);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Plán vaření'));
+    await tester.tap(find.text('Plán vaření'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Na co mám chuť'), findsOneWidget);
+    expect(find.text('Plánování'), findsOneWidget);
+  });
+
+  testWidgets('Mám chuť má vlastní obrazovku v nabídce i na hlavní', (
+    tester,
+  ) async {
+    final router = await pumpApp(tester, location: Routes.home);
+    router.push(Routes.more);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Mám chuť'));
+    await tester.tap(find.text('Mám chuť'));
+    await tester.pumpAndSettle();
+    expect(find.text('Na co mám chuť'), findsOneWidget);
+    expect(find.byKey(const Key('add-wish')), findsOneWidget);
+  });
 }
