@@ -663,15 +663,21 @@ class _FilterRow extends StatelessWidget {
             children: [
               Icon(icon, size: 20, color: AppColors.copper),
               const SizedBox(width: 7),
-              Flexible(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 14.5, color: Colors.white),
-                ),
+              Text(
+                title,
+                maxLines: 1,
+                style: const TextStyle(fontSize: 14.5, color: Colors.white),
               ),
-              if (trailing != null) ...[const Spacer(), trailing!],
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                // Na úzkém telefonu se přepínač zmenší, nepřeteče.
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: FittedBox(fit: BoxFit.scaleDown, child: trailing),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -748,7 +754,7 @@ class _TimeModeSwitch extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Text(
-                    m == TimeMode.total ? 'Celkový' : 'Aktivní práce',
+                    m.label,
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
@@ -775,37 +781,62 @@ class _ActiveFilters extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final (label, onRemove) in chips)
-                  Semantics(
-                    button: true,
-                    label: 'Odebrat filtr $label',
-                    excludeSemantics: true,
-                    child: Material(
-                      color: AppColors.copper,
-                      shape: const StadiumBorder(),
-                      child: InkWell(
-                        key: Key('remove-filter-$label'),
-                        customBorder: const StadiumBorder(),
-                        onTap: onRemove,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Aktivní filtry: ${chips.length}',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                key: const Key('clear-all-filters'),
+                onPressed: onClearAll,
+                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                label: const Text('Vymazat vše'),
+                style: TextButton.styleFrom(foregroundColor: AppColors.copper),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final (label, onRemove) in chips)
+                Semantics(
+                  button: true,
+                  label: 'Odebrat filtr $label',
+                  excludeSemantics: true,
+                  child: Material(
+                    color: AppColors.copper,
+                    shape: const StadiumBorder(),
+                    child: InkWell(
+                      key: Key('remove-filter-$label'),
+                      customBorder: const StadiumBorder(),
+                      onTap: onRemove,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 36),
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                label,
-                                style: const TextStyle(
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
+                              Flexible(
+                                child: Text(
+                                  label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.black,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 4),
@@ -820,15 +851,8 @@ class _ActiveFilters extends StatelessWidget {
                       ),
                     ),
                   ),
-              ],
-            ),
-          ),
-          TextButton.icon(
-            key: const Key('clear-all-filters'),
-            onPressed: onClearAll,
-            icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-            label: const Text('Vymazat vše'),
-            style: TextButton.styleFrom(foregroundColor: AppColors.copper),
+                ),
+            ],
           ),
         ],
       ),

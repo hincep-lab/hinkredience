@@ -34,6 +34,14 @@ class FakeScreenWake implements ScreenWake {
 
 var screenWake = FakeScreenWake();
 
+/// Klepne na tlačítko filtru; vodorovnou řadu nejdřív posune, aby bylo vidět.
+Future<void> tapPill(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
 Future<GoRouter> pumpApp(
   WidgetTester tester, {
   required String location,
@@ -215,17 +223,14 @@ void main() {
 
     await tester.tap(find.byTooltip('Vymazat hledání'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pánev'));
-    await tester.pumpAndSettle();
+    await tapPill(tester, find.text('Pánev'));
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
     // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
-    await tester.tap(find.text('Trouba').first);
-    await tester.pumpAndSettle();
+    await tapPill(tester, find.text('Trouba').first);
     expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('time-upTo30')));
-    await tester.pumpAndSettle();
+    await tapPill(tester, find.byKey(const Key('time-upTo30')));
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
@@ -275,18 +280,15 @@ void main() {
         location: Routes.home,
         recipes: [losos, sampleRecipe()],
       );
-      await tester.tap(find.text('Sous-vide'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('time-upTo60')));
-      await tester.pumpAndSettle();
+      await tapPill(tester, find.text('Sous-vide'));
+      await tapPill(tester, find.byKey(const Key('time-upTo60')));
       expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
       expect(find.text('Losos sous-vide 43 °C'), findsOneWidget);
       expect(find.text('Ryby · 42 min'), findsOneWidget);
 
       // Do 15 minut už losos nesplní – aplikace řekne proč.
-      await tester.tap(find.byKey(const Key('time-upTo60')));
-      await tester.tap(find.byKey(const Key('time-upTo15')));
-      await tester.pumpAndSettle();
+      await tapPill(tester, find.byKey(const Key('time-upTo60')));
+      await tapPill(tester, find.byKey(const Key('time-upTo15')));
       expect(find.text('Nalezeno: 0 receptů'), findsOneWidget);
       await tester.ensureVisible(find.text('Téměř vyhovují'));
       expect(find.text('Nevyhovuje: celkový čas 42 min'), findsOneWidget);
@@ -334,10 +336,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
     await tester.ensureVisible(find.text('Pro děti').first);
-    await tester.tap(find.text('Pro děti').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('time-upTo60')));
-    await tester.pumpAndSettle();
+    await tapPill(tester, find.text('Pro děti').first);
+    await tapPill(tester, find.byKey(const Key('time-upTo60')));
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Kuřecí karbanátky'), findsOneWidget);
     expect(find.text('Kuřecí kari'), findsNothing);
@@ -358,8 +358,7 @@ void main() {
         ),
       ],
     );
-    await tester.tap(find.text('Rychlá večeře'));
-    await tester.pumpAndSettle();
+    await tapPill(tester, find.text('Rychlá večeře'));
     expect(find.text('Přílohy · Čas neuveden'), findsOneWidget);
   });
 
