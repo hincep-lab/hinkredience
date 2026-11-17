@@ -243,7 +243,7 @@ void main() {
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
     // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
-    await tapPill(tester, find.text('Trouba').first, prepRow);
+    await tapPill(tester, find.text('Trouba'), prepRow);
     expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
     await tapPill(tester, find.byKey(const Key('time-upTo30')), timeRow);
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
@@ -358,7 +358,7 @@ void main() {
     expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
     await tester.drag(home, const Offset(0, 3000));
     await tester.pumpAndSettle();
-    await tapPill(tester, find.text('Pro děti').first, occasionRow);
+    await tapPill(tester, find.text('Pro děti'), occasionRow);
     await tapPill(tester, find.byKey(const Key('time-upTo60')), timeRow);
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Kuřecí karbanátky'), findsOneWidget);
