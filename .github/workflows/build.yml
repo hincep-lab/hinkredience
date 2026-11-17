@@ -76,7 +76,7 @@ jobs:
             echo "::error::Chybí GitHub secret SUPABASE_ACCESS_TOKEN."
             exit 1
           fi
-          supabase functions deploy mcp --project-ref wjqpzoeheonjwdyyezhb --no-verify-jwt --use-api
+          supabase functions deploy mcp --project-ref wjqpzoeheonjwdyyezhb --no-verify-jwt --use-api --yes
 
   android:
     name: Aplikace – analýza, testy, APK
