@@ -3,7 +3,12 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Časovače vaření: upozornění i v pozadí a po restartu telefonu. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Přesný čas konce časovače. Na Androidu 13+ je USE_EXACT_ALARM
+         povolené rovnou (kuchyňská minutka je budík); SCHEDULE_EXACT_ALARM
+         pro starší Android. Bez nich by oznámení mohlo přijít o minuty
+         později. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- Hlasové ovládání při vaření (jen po stisknutí mikrofonu). -->

@@ -48,6 +48,14 @@ class CookTimer {
 
   bool isDone(DateTime now) => endsAt != null && !now.isBefore(endsAt!);
 
+  /// Doběhl právě teď (ne před delší dobou)? Jen tehdy má aplikace zazvonit
+  /// sama – starší konec už ohlásilo naplánované oznámení a po znovuotevření
+  /// aplikace by se zvonilo zbytečně podruhé.
+  bool justFinished(
+    DateTime now, {
+    Duration window = const Duration(minutes: 2),
+  }) => isDone(now) && now.difference(endsAt!) <= window;
+
   /// Číslo oznámení v systému (stabilní pro daný časovač).
   int get notificationId => id.hashCode & 0x3fffffff;
 

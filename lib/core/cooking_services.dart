@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +10,7 @@ import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import 'cook_timer.dart';
+import 'web_timer_alarm.dart';
 import 'material.dart';
 
 // Služby pro režim Vaříme spolu. Každá je za rozhraním, aby šla v testech
@@ -22,6 +25,10 @@ abstract interface class CookAlerts {
   Future<void> schedule(CookTimer timer);
 
   Future<void> cancel(CookTimer timer);
+
+  /// Ohlásí doběhnutý časovač hned teď: zvuk + oznámení. Volá se, když je
+  /// aplikace otevřená a časovač právě doběhl.
+  Future<void> ring(CookTimer timer);
 }
 
 class LocalNotificationAlerts implements CookAlerts {
@@ -30,15 +37,33 @@ class LocalNotificationAlerts implements CookAlerts {
   final _plugin = FlutterLocalNotificationsPlugin();
   Future<void>? _ready;
 
-  static const _channel = AndroidNotificationDetails(
-    'cook_timers',
-    'Časovače vaření',
-    channelDescription: 'Upozornění, když doběhne časovač při vaření.',
+  // Kanál se zvukem budíku: zazní i při ztlumeném vyzvánění (v kuchyni se
+  // telefon často nechává potichu). Nastavení kanálu Android po vytvoření
+  // nemění, proto má kanál nový název (starý „cook_timers“ zvonil
+  // jako běžná zpráva).
+  static final _channel = AndroidNotificationDetails(
+    'cook_timer_done',
+    'Doběhnutý časovač vaření',
+    channelDescription: 'Zvuk a upozornění, když doběhne časovač při vaření.',
     importance: Importance.max,
-    priority: Priority.high,
+    priority: Priority.max,
     category: AndroidNotificationCategory.alarm,
+    audioAttributesUsage: AudioAttributesUsage.alarm,
     playSound: true,
     enableVibration: true,
+    vibrationPattern: Int64List.fromList([0, 600, 300, 600, 300, 600]),
+    visibility: NotificationVisibility.public,
+    ticker: 'Časovač doběhl',
+  );
+
+  NotificationDetails get _details => NotificationDetails(
+    android: _channel,
+    iOS: const DarwinNotificationDetails(
+      presentAlert: true,
+      presentSound: true,
+      presentBanner: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    ),
   );
 
   /// Nejdéle takto se čeká na systém oznámení; pak se pokračuje bez něj.
@@ -139,6 +164,47 @@ class LocalNotificationAlerts implements CookAlerts {
       debugPrint('Oznámení časovače nejde zrušit: $error');
     }
   }
+
+  @override
+  Future<void> ring(CookTimer timer) async {
+    if (kIsWeb) return;
+    try {
+      await _init();
+      // Naplánované oznámení (může přijít o chvilku později) nahradit
+      // okamžitým se zvukem – v otevřené aplikaci zazní hned.
+      await _plugin.cancel(id: timer.notificationId).timeout(_patience);
+      await _plugin
+          .show(
+            id: timer.notificationId,
+            title: 'Časovač doběhl',
+            body: timer.label,
+            notificationDetails: _details,
+          )
+          .timeout(_patience);
+    } catch (error) {
+      debugPrint('Časovač nejde ohlásit: $error');
+    }
+  }
+}
+
+/// Webová verze: pípání v prohlížeči + oznámení prohlížeče (web/push.js).
+class WebCookAlerts implements CookAlerts {
+  const WebCookAlerts();
+
+  @override
+  Future<bool> requestPermission() => webTimerPrepare();
+
+  // Konec časovače hlídá otevřená aplikace (ring); prohlížeč neumí
+  // oznámení naplánovat dopředu.
+  @override
+  Future<void> schedule(CookTimer timer) async {}
+
+  @override
+  Future<void> cancel(CookTimer timer) => webTimerClose(timer.notificationId);
+
+  @override
+  Future<void> ring(CookTimer timer) =>
+      webTimerRing('Časovač doběhl', timer.label, timer.notificationId);
 }
 
 /// Předčítání kroků postupu.
@@ -221,7 +287,7 @@ class SpeechVoiceInput implements VoiceInput {
 }
 
 final cookAlertsProvider = Provider<CookAlerts>(
-  (ref) => LocalNotificationAlerts(),
+  (ref) => kIsWeb ? const WebCookAlerts() : LocalNotificationAlerts(),
 );
 final speakerProvider = Provider<Speaker>((ref) => TtsSpeaker());
 final voiceInputProvider = Provider<VoiceInput>((ref) => SpeechVoiceInput());

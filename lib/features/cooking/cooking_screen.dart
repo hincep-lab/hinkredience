@@ -160,7 +160,9 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
     for (final timer in session.timers) {
       if (timer.isDone(now) && !timer.acknowledged && _rung.add(timer.id)) {
         HapticFeedback.heavyImpact();
-        SystemSound.play(SystemSoundType.alert);
+        // Zvuk + oznámení hned; starší konec (aplikace byla zavřená) už
+        // ohlásilo naplánované oznámení.
+        if (timer.justFinished(now)) unawaited(_alerts.ring(timer));
         if (_readAloud) {
           ref.read(speakerProvider).say('Časovač doběhl. ${timer.label}');
         }
