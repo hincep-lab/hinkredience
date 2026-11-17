@@ -437,7 +437,7 @@ int packsNeeded(double? qty, String unit, PriceOffer offer) {
   final need = _base(qty, unit);
   final pack = _base(offer.packQty, offer.packUnit);
   if (need == null || pack == null || need.$2 != pack.$2) return 1;
-  final packs = (need.$1 / pack.$1 - 0.05).ceil();
+  final packs = (need.$1 / pack.$1 - 0.001).ceil();
   return packs < 1 ? 1 : packs;
 }
 
