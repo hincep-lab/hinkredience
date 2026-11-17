@@ -149,8 +149,6 @@ Future<void> _shot(
   });
   await tester.pumpAndSettle();
   for (final finder in taps) {
-    await tester.ensureVisible(finder);
-    await tester.pumpAndSettle();
     await tester.tap(finder);
     await tester.pumpAndSettle();
   }

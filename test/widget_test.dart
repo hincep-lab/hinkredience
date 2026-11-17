@@ -36,8 +36,17 @@ var screenWake = FakeScreenWake();
 
 /// Klepne na tlačítko filtru; vodorovnou řadu nejdřív posune, aby bylo vidět.
 Future<void> tapPill(WidgetTester tester, Finder finder) async {
-  await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
+  final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
+  final rect = tester.getRect(finder);
+  // Posouvat jen když tlačítko není celé vidět – jinak by se řada zbytečně
+  // posunula a sousední tlačítka by zmizela.
+  if (rect.left < 0 ||
+      rect.right > screen.width ||
+      rect.top < 0 ||
+      rect.bottom > screen.height) {
+    await Scrollable.ensureVisible(tester.element(finder), alignment: 0.5);
+    await tester.pumpAndSettle();
+  }
   await tester.tap(finder);
   await tester.pumpAndSettle();
 }
@@ -331,11 +340,22 @@ void main() {
         ),
       ],
     );
-    await tester.ensureVisible(find.text('Drůbež a králík').first);
-    await tester.tap(find.text('Drůbež a králík').first);
+    final home = find.byKey(const Key('home-scroll'));
+    await tester.dragUntilVisible(
+      find.text('Drůbež a králík'),
+      home,
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Drůbež a králík'));
     await tester.pumpAndSettle();
     expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
-    await tester.ensureVisible(find.text('Pro děti').first);
+    await tester.dragUntilVisible(
+      find.byKey(const Key('time-upTo60')),
+      home,
+      const Offset(0, 200),
+    );
+    await tester.pumpAndSettle();
     await tapPill(tester, find.text('Pro děti').first);
     await tapPill(tester, find.byKey(const Key('time-upTo60')));
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
