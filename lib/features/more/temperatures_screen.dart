@@ -3,45 +3,12 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/app_colors.dart';
-import '../../core/cook_timer.dart';
-import '../../core/cooking_services.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/quick_timers.dart';
 import '../../core/temperatures.dart';
 import '../../core/widgets.dart';
 import '../cooking/cooking_screen.dart' show formatCountdown;
-
-/// Běžící časovače spuštěné z tabulky teplot (mimo režim vaření).
-class QuickTimers extends Notifier<List<CookTimer>> {
-  @override
-  List<CookTimer> build() => const [];
-
-  Future<void> start(String label, int minutes) async {
-    final now = DateTime.now().toUtc();
-    final timer = CookTimer(
-      id: 'quick-${now.microsecondsSinceEpoch}',
-      label: label,
-      durationSeconds: minutes * 60,
-      endsAt: now.add(Duration(minutes: minutes)),
-    );
-    state = [...state, timer];
-    final alerts = ref.read(cookAlertsProvider);
-    await alerts.requestPermission();
-    await alerts.schedule(timer);
-  }
-
-  Future<void> stop(CookTimer timer) async {
-    state = [
-      for (final t in state)
-        if (t.id != timer.id) t,
-    ];
-    await ref.read(cookAlertsProvider).cancel(timer);
-  }
-}
-
-final quickTimersProvider = NotifierProvider<QuickTimers, List<CookTimer>>(
-  QuickTimers.new,
-);
 
 /// Tabulka teplot jádra a sous-vide časů s časovačem.
 class TemperaturesScreen extends ConsumerStatefulWidget {
@@ -102,11 +69,13 @@ class _TemperaturesScreenState extends ConsumerState<TemperaturesScreen> {
   }
 
   Future<void> _start(String label, int minutes) async {
-    await ref.read(quickTimersProvider.notifier).start(label, minutes);
+    await ref
+        .read(quickTimersProvider.notifier)
+        .start(label, Duration(minutes: minutes));
     if (mounted) {
       showMessage(
         context,
-        'Časovač běží: ${formatGuideMinutes(minutes)}. Ozve se oznámením.',
+        'Časovač běží: ${formatGuideMinutes(minutes)}. Zazvoní, až doběhne.',
       );
     }
   }

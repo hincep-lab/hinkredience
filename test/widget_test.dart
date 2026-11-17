@@ -344,6 +344,45 @@ void main() {
     expect(find.text('Koš'), findsOneWidget);
   });
 
+  testWidgets('menu Více: nástroje do kuchyně a minutka', (tester) async {
+    await pumpApp(tester, location: Routes.more);
+    for (final label in [
+      'Minutka',
+      'Co mám doma',
+      'Plán vaření',
+      'Teploty',
+      'Převody',
+      'Deník',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+    await tester.tap(find.text('Minutka'));
+    await tester.pumpAndSettle();
+    expect(find.text('Rychlý start'), findsOneWidget);
+    expect(find.text('Vejce natvrdo'), findsOneWidget);
+  });
+
+  testWidgets('převody: hrnek mouky na gramy', (tester) async {
+    await pumpApp(tester, location: Routes.converter);
+    expect(find.text('≈ 140 g'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextField, 'Kolik').first, '2');
+    await tester.pump();
+    expect(find.text('≈ 280 g'), findsOneWidget);
+  });
+
+  testWidgets('co mám doma: najde recept a řekne, co chybí', (tester) async {
+    await pumpApp(tester, location: Routes.pantry, recipes: [sampleRecipe()]);
+    await tester.enterText(find.byType(TextField).first, 'žebra');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(
+      find.text('Chybí: BBQ omáčka, Hořčice plnotučná'),
+      findsOneWidget,
+      reason: 'sůl je základ',
+    );
+  });
+
   testWidgets(
     'otevřený recept nevypíná obrazovku, po odchodu se uspávání vrátí',
     (tester) async {

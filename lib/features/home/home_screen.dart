@@ -231,6 +231,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     subtitle: 'Časy, fotky, co zlepšit',
                     onTap: () => context.push(Routes.diary),
                   ),
+                  _FeatureTile(
+                    icon: Icons.kitchen_outlined,
+                    title: 'Co mám doma',
+                    subtitle: 'Recepty z toho, co máte',
+                    onTap: () => context.push(Routes.pantry),
+                  ),
                 ],
               ),
             ),

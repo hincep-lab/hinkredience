@@ -3,7 +3,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../app/router.dart';
+import '../../core/app_colors.dart';
 import '../../core/material.dart';
+import '../../core/quick_timers.dart';
 import '../../core/widgets.dart';
 import '../sync/sync_status.dart';
 
@@ -115,96 +117,168 @@ class MoreScreen extends ConsumerWidget {
       syncText = '${look.label} · podrobnosti';
     }
 
+    final running = ref.watch(quickTimersProvider).length;
+    Widget arrow() => const Icon(Icons.chevron_right_rounded);
+    const divider = Divider(indent: 16, endIndent: 16);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Více')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
-          const SectionTitle('Účet'),
+          // ---------------------------------------------- profil a stav
           HkCard(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
-                if (session.isSignedIn) ...[
-                  ListTile(
-                    leading: const Icon(Icons.account_circle_outlined),
-                    title: Text(session.email ?? 'Přihlášený uživatel'),
-                    subtitle: const Text('Přihlášeno'),
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: AppColors.backgroundSecondary,
+                    child: Icon(
+                      Icons.person_rounded,
+                      color: AppColors.copperGold,
+                    ),
                   ),
-                  const Divider(indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.logout_rounded),
-                    title: const Text('Odhlásit se'),
-                    onTap: () => _signOut(context, ref),
+                  title: Text(
+                    'Ahoj ${settings.greetingName}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                ] else if (hasBackend)
+                  subtitle: Text(
+                    session.isSignedIn
+                        ? session.email ?? 'Přihlášený uživatel'
+                        : hasBackend
+                        ? 'Nepřihlášeno'
+                        : 'Bez účtu',
+                  ),
+                  trailing: const Icon(Icons.edit_outlined, size: 20),
+                  onTap: () => _editGreeting(context, ref),
+                ),
+                divider,
+                ListTile(
+                  leading: Icon(look.icon, color: look.color),
+                  title: const Text('Synchronizace'),
+                  subtitle: Text(syncText),
+                  trailing: arrow(),
+                  onTap: () => showSyncDetails(context),
+                ),
+                if (!session.isSignedIn && hasBackend) ...[
+                  divider,
                   ListTile(
                     leading: const Icon(Icons.login_rounded),
                     title: const Text('Přihlásit se'),
                     subtitle: const Text(
                       'Zapne zálohu a synchronizaci mezi zařízeními',
                     ),
-                    trailing: const Icon(Icons.chevron_right_rounded),
+                    trailing: arrow(),
                     onTap: () => context.go(Routes.auth),
-                  )
-                else
-                  const ListTile(
-                    leading: Icon(Icons.phone_android_rounded),
-                    title: Text('Bez účtu'),
-                    subtitle: Text('Recepty jsou uložené jen v tomto telefonu'),
-                  ),
-              ],
-            ),
-          ),
-
-          const SectionTitle('Synchronizace'),
-          HkCard(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              children: [
-                ListTile(
-                  leading: Icon(look.icon, color: look.color),
-                  title: const Text('Stav'),
-                  subtitle: Text(syncText),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => showSyncDetails(context),
-                ),
-                if (hasBackend && session.isSignedIn) ...[
-                  const Divider(indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.sync_rounded),
-                    title: const Text('Synchronizovat nyní'),
-                    enabled: !sync.running,
-                    onTap: () => _syncNow(context, ref),
                   ),
                 ],
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.dns_outlined),
-                  title: const Text('Připojení k Supabase'),
-                  subtitle: Text(hasBackend ? 'Nastaveno' : 'Nenastaveno'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Routes.connection),
-                ),
               ],
             ),
           ),
 
-          const SectionTitle('ChatGPT a AI'),
+          // ---------------------------------------------- nástroje
+          const SectionTitle('Do kuchyně'),
+          GridView.count(
+            crossAxisCount: 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 1.05,
+            children: [
+              _MenuTile(
+                icon: Icons.timer_outlined,
+                label: 'Minutka',
+                badge: running > 0 ? '$running' : null,
+                onTap: () => context.push(Routes.timer),
+              ),
+              _MenuTile(
+                icon: Icons.kitchen_outlined,
+                label: 'Co mám doma',
+                onTap: () => context.push(Routes.pantry),
+              ),
+              _MenuTile(
+                icon: Icons.calendar_month_rounded,
+                label: 'Plán vaření',
+                onTap: () => context.push(Routes.plan),
+              ),
+              _MenuTile(
+                icon: Icons.thermostat_rounded,
+                label: 'Teploty',
+                onTap: () => context.push(Routes.temperatures),
+              ),
+              _MenuTile(
+                icon: Icons.scale_outlined,
+                label: 'Převody',
+                onTap: () => context.push(Routes.converter),
+              ),
+              _MenuTile(
+                icon: Icons.edit_note_rounded,
+                label: 'Deník',
+                onTap: () => context.push(Routes.diary),
+              ),
+            ],
+          ),
+
+          // ---------------------------------------------- rodina a AI
+          const SectionTitle('Rodina a ChatGPT'),
           HkCard(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
+                ListTile(
+                  leading: const Icon(Icons.group_outlined),
+                  title: const Text('Rodina'),
+                  subtitle: const Text(
+                    'Společné recepty, plán vaření a nákupní seznam',
+                  ),
+                  trailing: arrow(),
+                  onTap: () => context.push(Routes.family),
+                ),
+                divider,
                 ListTile(
                   leading: const Icon(Icons.hub_outlined),
                   title: const Text('Propojení s ChatGPT'),
                   subtitle: const Text(
                     'Recepty z ChatGPT rovnou do kuchařky, bez placeného API',
                   ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: arrow(),
                   onTap: () => context.push(Routes.chatGpt),
                 ),
-                const Divider(indent: 16, endIndent: 16),
+              ],
+            ),
+          ),
+
+          // ---------------------------------------------- nastavení
+          const SectionTitle('Nastavení'),
+          HkCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.restaurant_menu_rounded),
+                  title: const Text('Kuchyně a chutě'),
+                  subtitle: const Text(
+                    'Vybavení a preference pro ChatGPT a AI kuchaře',
+                  ),
+                  trailing: arrow(),
+                  onTap: () => context.push(Routes.kitchen),
+                ),
+                divider,
+                SwitchListTile(
+                  secondary: const Icon(Icons.light_mode_outlined),
+                  title: const Text('Nevypínat obrazovku při vaření'),
+                  subtitle: const Text(
+                    'Při otevřeném receptu displej nezhasne. Mimo recept se '
+                    'telefon uspává normálně.',
+                  ),
+                  value: settings.keepScreenOn,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setKeepScreenOn(value),
+                ),
+                divider,
                 SwitchListTile(
                   secondary: const Icon(Icons.auto_awesome_rounded),
                   title: const Text('AI funkce v aplikaci'),
@@ -223,70 +297,21 @@ class MoreScreen extends ConsumerWidget {
             ),
           ),
 
-          const SectionTitle('Nastavení'),
-          HkCard(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: SwitchListTile(
-              secondary: const Icon(Icons.light_mode_outlined),
-              title: const Text('Nevypínat obrazovku při vaření'),
-              subtitle: const Text(
-                'Při otevřeném receptu displej nezhasne. Mimo recept se '
-                'telefon uspává normálně.',
-              ),
-              value: settings.keepScreenOn,
-              onChanged: (value) =>
-                  ref.read(settingsProvider.notifier).setKeepScreenOn(value),
-            ),
-          ),
-
-          const SectionTitle('Kuchařka'),
+          // ---------------------------------------------- účet a data
+          const SectionTitle('Účet a data'),
           HkCard(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
-                ListTile(
-                  leading: const Icon(Icons.group_outlined),
-                  title: const Text('Rodina'),
-                  subtitle: const Text(
-                    'Společné recepty, plán vaření a nákupní seznam',
+                if (hasBackend && session.isSignedIn) ...[
+                  ListTile(
+                    leading: const Icon(Icons.sync_rounded),
+                    title: const Text('Synchronizovat nyní'),
+                    enabled: !sync.running,
+                    onTap: () => _syncNow(context, ref),
                   ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Routes.family),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.edit_note_rounded),
-                  title: const Text('Kuchařský deník'),
-                  subtitle: const Text('Historie vaření, výsledky, fotky'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Routes.diary),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.waving_hand_outlined),
-                  title: const Text('Oslovení'),
-                  subtitle: Text('Ahoj ${settings.greetingName}'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _editGreeting(context, ref),
-                ),
-                const Divider(indent: 16, endIndent: 16),
-                ListTile(
-                  leading: const Icon(Icons.thermostat_rounded),
-                  title: const Text('Teploty a sous-vide'),
-                  subtitle: const Text('Teploty jádra, časy a časovač'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Routes.temperatures),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.kitchen_outlined),
-                  title: const Text('Kuchyně a chutě'),
-                  subtitle: const Text(
-                    'Vybavení a preference pro ChatGPT a AI kuchaře',
-                  ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Routes.kitchen),
-                ),
-                const Divider(indent: 16, endIndent: 16),
+                  divider,
+                ],
                 ListTile(
                   leading: const Icon(Icons.delete_outline_rounded),
                   title: const Text('Koš'),
@@ -295,9 +320,25 @@ class MoreScreen extends ConsumerWidget {
                         ? 'Prázdný'
                         : 'Smazané recepty k obnovení: $trashCount',
                   ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: arrow(),
                   onTap: () => context.push(Routes.trash),
                 ),
+                divider,
+                ListTile(
+                  leading: const Icon(Icons.dns_outlined),
+                  title: const Text('Připojení k Supabase'),
+                  subtitle: Text(hasBackend ? 'Nastaveno' : 'Nenastaveno'),
+                  trailing: arrow(),
+                  onTap: () => context.push(Routes.connection),
+                ),
+                if (session.isSignedIn) ...[
+                  divider,
+                  ListTile(
+                    leading: const Icon(Icons.logout_rounded),
+                    title: const Text('Odhlásit se'),
+                    onTap: () => _signOut(context, ref),
+                  ),
+                ],
               ],
             ),
           ),
@@ -310,6 +351,66 @@ class MoreScreen extends ConsumerWidget {
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Dlaždice nástroje v menu Více.
+class _MenuTile extends StatelessWidget {
+  const _MenuTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.badge,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  /// Číslo v rohu (např. počet běžících minutek).
+  final String? badge;
+
+  @override
+  Widget build(BuildContext context) {
+    return HkCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(8),
+      child: Stack(
+        children: [
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: AppColors.copperGold, size: 30),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (badge != null)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: CircleAvatar(
+                radius: 10,
+                backgroundColor: AppColors.copper,
+                child: Text(
+                  badge!,
+                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                ),
+              ),
+            ),
         ],
       ),
     );
