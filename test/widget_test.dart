@@ -349,6 +349,7 @@ void main() {
     for (final label in [
       'Minutka',
       'Co mám doma',
+      'Recepty z akcí',
       'Plán vaření',
       'Teploty',
       'Převody',
@@ -360,6 +361,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Rychlý start'), findsOneWidget);
     expect(find.text('Vejce natvrdo'), findsOneWidget);
+  });
+
+  testWidgets('recepty z akcí bez uložených akcí poradí, co dělat', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.saleRecipes,
+      recipes: [sampleRecipe()],
+    );
+    expect(
+      find.text('Zatím nejsou uložené žádné ověřené akce.'),
+      findsOneWidget,
+    );
+    expect(find.text('Klepněte na Najít akce'), findsOneWidget);
+    expect(find.text('Najít akce'), findsOneWidget);
   });
 
   testWidgets('převody: hrnek mouky na gramy', (tester) async {

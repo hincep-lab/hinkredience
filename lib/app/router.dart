@@ -12,6 +12,7 @@ import '../features/more/temperatures_screen.dart';
 import '../features/more/timer_screen.dart';
 import '../features/more/converter_screen.dart';
 import '../features/recipes/pantry_screen.dart';
+import '../features/kitchen/sale_recipes_screen.dart';
 import '../features/more/chatgpt_screen.dart';
 import '../features/more/connection_screen.dart';
 import '../features/more/kitchen_screen.dart';
@@ -58,6 +59,7 @@ abstract final class Routes {
   static const timer = '/more/timer';
   static const converter = '/more/convert';
   static const pantry = '/more/pantry';
+  static const saleRecipes = '/more/sales';
 
   static String diaryFor(String recipeId) =>
       Uri(path: diary, queryParameters: {'recipe': recipeId}).toString();
@@ -256,6 +258,12 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                     parentNavigatorKey: rootKey,
                     pageBuilder: (context, state) =>
                         page(state, const PantryScreen()),
+                  ),
+                  GoRoute(
+                    path: 'sales',
+                    parentNavigatorKey: rootKey,
+                    pageBuilder: (context, state) =>
+                        page(state, const SaleRecipesScreen()),
                   ),
                 ],
               ),

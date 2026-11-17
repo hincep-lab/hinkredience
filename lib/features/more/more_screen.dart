@@ -199,6 +199,11 @@ class MoreScreen extends ConsumerWidget {
                 onTap: () => context.push(Routes.pantry),
               ),
               _MenuTile(
+                icon: Icons.local_offer_outlined,
+                label: 'Recepty z akcí',
+                onTap: () => context.push(Routes.saleRecipes),
+              ),
+              _MenuTile(
                 icon: Icons.calendar_month_rounded,
                 label: 'Plán vaření',
                 onTap: () => context.push(Routes.plan),
