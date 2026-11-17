@@ -242,29 +242,48 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
   Future<void> _startTimer(Recipe recipe, {int? minutes}) async {
     final session = _session;
     if (session == null) return;
-    final index = session.stepIndex;
-    final step = recipe.steps.isEmpty ? null : recipe.steps[index];
-    var length = minutes ?? (step == null ? null : suggestedTimerMinutes(step));
-    length ??= await _askMinutes();
-    if (length == null || length <= 0 || !mounted) return;
+    try {
+      // Krok mimo rozsah (recept se mezitím zkrátil) nesmí časovač shodit.
+      final index = recipe.steps.isEmpty
+          ? 0
+          : session.stepIndex.clamp(0, recipe.steps.length - 1);
+      final step = recipe.steps.isEmpty ? null : recipe.steps[index];
+      var length =
+          minutes ?? (step == null ? null : suggestedTimerMinutes(step));
+      length ??= await _askMinutes();
+      if (length == null || length <= 0 || !mounted) return;
+      final now = DateTime.now().toUtc();
+      final label = step == null
+          ? recipe.title
+          : 'Krok ${index + 1}: ${_short(step.instruction)}';
+      final timers = CookTimers(session.timers).start(
+        id: 'k$index-${now.millisecondsSinceEpoch}',
+        label: label,
+        duration: Duration(minutes: length),
+        now: now,
+        stepIndex: step == null ? null : index,
+      );
+      final started = timers.timers.last;
+      // Nejdřív časovač spustit a ukázat; oznámení (povolení, naplánování)
+      // až potom a bez čekání – jeho potíže nesmí odpočet zdržet ani zrušit.
+      await _update((s) => s.copyWith(timers: timers.timers));
+      unawaited(_notify(started));
+    } catch (error) {
+      debugPrint('Časovač nejde spustit: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Časovač se nepodařilo spustit: $error')),
+      );
+    }
+  }
+
+  /// Oznámení na konec časovače (pro zhasnutý displej a jinou aplikaci).
+  Future<void> _notify(CookTimer timer) async {
     if (!_askedPermission) {
       _askedPermission = true;
       await _alerts.requestPermission();
     }
-    final now = DateTime.now().toUtc();
-    final label = step == null
-        ? recipe.title
-        : 'Krok ${index + 1}: ${_short(step.instruction)}';
-    final timers = CookTimers(session.timers).start(
-      id: 'k$index-${now.millisecondsSinceEpoch}',
-      label: label,
-      duration: Duration(minutes: length),
-      now: now,
-      stepIndex: step == null ? null : index,
-    );
-    final started = timers.timers.last;
-    await _update((s) => s.copyWith(timers: timers.timers));
-    await _alerts.schedule(started);
+    await _alerts.schedule(timer);
   }
 
   static String _short(String text) =>
@@ -305,24 +324,24 @@ class _CookingScreenState extends ConsumerState<CookingScreen> {
     final timers = CookTimers(session.timers);
     switch (action) {
       case 'pause':
-        await _alerts.cancel(timer);
         await _update(
           (s) => s.copyWith(
             timers: timers.update(timer.id, (t) => t.pause(now)).timers,
           ),
         );
+        unawaited(_alerts.cancel(timer));
       case 'resume':
         final updated = timers.update(timer.id, (t) => t.resume(now));
         await _update((s) => s.copyWith(timers: updated.timers));
-        await _alerts.schedule(
-          updated.timers.firstWhere((t) => t.id == timer.id),
+        unawaited(
+          _alerts.schedule(updated.timers.firstWhere((t) => t.id == timer.id)),
         );
       case 'ok':
       case 'remove':
-        await _alerts.cancel(timer);
         await _update(
           (s) => s.copyWith(timers: timers.remove(timer.id).timers),
         );
+        unawaited(_alerts.cancel(timer));
     }
   }
 

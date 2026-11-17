@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -40,22 +41,30 @@ class LocalNotificationAlerts implements CookAlerts {
     enableVibration: true,
   );
 
+  /// Nejdéle takto se čeká na systém oznámení; pak se pokračuje bez něj.
+  static const _patience = Duration(seconds: 8);
+
   Future<void> _init() => _ready ??= () async {
+    // V prohlížeči systémová oznámení nejsou – zvoní jen otevřená aplikace.
+    if (kIsWeb) throw UnsupportedError('oznámení nejsou ve webové verzi');
     tzdata.initializeTimeZones();
-    await _plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        iOS: DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
-        ),
-      ),
-    );
+    await _plugin
+        .initialize(
+          settings: const InitializationSettings(
+            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+            iOS: DarwinInitializationSettings(
+              requestAlertPermission: false,
+              requestBadgePermission: false,
+              requestSoundPermission: false,
+            ),
+          ),
+        )
+        .timeout(_patience);
   }();
 
   @override
   Future<bool> requestPermission() async {
+    if (kIsWeb) return false;
     try {
       await _init();
       final android = _plugin
@@ -86,7 +95,7 @@ class LocalNotificationAlerts implements CookAlerts {
   @override
   Future<void> schedule(CookTimer timer) async {
     final endsAt = timer.endsAt;
-    if (endsAt == null) return;
+    if (endsAt == null || kIsWeb) return;
     try {
       await _init();
       var mode = AndroidScheduleMode.inexactAllowWhileIdle;
@@ -98,21 +107,23 @@ class LocalNotificationAlerts implements CookAlerts {
           (await android.canScheduleExactNotifications() ?? false)) {
         mode = AndroidScheduleMode.exactAllowWhileIdle;
       }
-      await _plugin.zonedSchedule(
-        id: timer.notificationId,
-        title: 'Časovač doběhl',
-        body: timer.label,
-        scheduledDate: tz.TZDateTime.from(endsAt.toUtc(), tz.UTC),
-        notificationDetails: const NotificationDetails(
-          android: _channel,
-          iOS: DarwinNotificationDetails(
-            presentAlert: true,
-            presentSound: true,
-            interruptionLevel: InterruptionLevel.timeSensitive,
-          ),
-        ),
-        androidScheduleMode: mode,
-      );
+      await _plugin
+          .zonedSchedule(
+            id: timer.notificationId,
+            title: 'Časovač doběhl',
+            body: timer.label,
+            scheduledDate: tz.TZDateTime.from(endsAt.toUtc(), tz.UTC),
+            notificationDetails: const NotificationDetails(
+              android: _channel,
+              iOS: DarwinNotificationDetails(
+                presentAlert: true,
+                presentSound: true,
+                interruptionLevel: InterruptionLevel.timeSensitive,
+              ),
+            ),
+            androidScheduleMode: mode,
+          )
+          .timeout(_patience);
     } catch (error) {
       debugPrint('Oznámení časovače nejde naplánovat: $error');
     }
@@ -120,9 +131,10 @@ class LocalNotificationAlerts implements CookAlerts {
 
   @override
   Future<void> cancel(CookTimer timer) async {
+    if (kIsWeb) return;
     try {
       await _init();
-      await _plugin.cancel(id: timer.notificationId);
+      await _plugin.cancel(id: timer.notificationId).timeout(_patience);
     } catch (error) {
       debugPrint('Oznámení časovače nejde zrušit: $error');
     }
