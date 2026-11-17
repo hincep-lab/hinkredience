@@ -184,4 +184,29 @@ void main() {
     expect(formatDuration(2940), '2 dny 1 h');
     expect(formatDuration(7200), '5 dní');
   });
+
+  test('vodní lázeň a krok s teplotou jsou vaření, ne ruční práce', () {
+    expect(
+      inferKind('Připravujte ve vodní lázni při 43 °C po dobu 30 minut.'),
+      StepKind.cook,
+    );
+    expect(inferKind('Nechte vychladnout na 4 °C.'), StepKind.passive);
+    final time = computeRecipeTime(
+      prepMinutes: 10,
+      cookMinutes: 32,
+      steps: const [
+        TimedStep(
+          instruction: 'Připravujte ve vodní lázni při 43 °C po dobu 30 minut.',
+          durationMinutes: 30,
+        ),
+        TimedStep(
+          instruction: 'Krátce opečte na rozpálené pánvi.',
+          durationMinutes: 2,
+        ),
+      ],
+    );
+    expect(time.active, 10);
+    expect(time.cook, 32);
+    expect(time.total, 42);
+  });
 }

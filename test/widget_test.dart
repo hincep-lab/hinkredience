@@ -221,17 +221,146 @@ void main() {
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
     // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
-    await tester.tap(find.text('Trouba'));
+    await tester.tap(find.text('Trouba').first);
     await tester.pumpAndSettle();
     expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
-    await tester.tap(find.text('Do 30 min'));
+    await tester.tap(find.byKey(const Key('time-upTo30')));
     await tester.pumpAndSettle();
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
-    await tester.tap(find.text('Zrušit'));
+    // Jednotlivý filtr jde odebrat jedním klepnutím.
+    await tester.ensureVisible(
+      find.byKey(const Key('remove-filter-Do 30 min')),
+    );
+    await tester.tap(find.byKey(const Key('remove-filter-Do 30 min')));
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const Key('clear-all-filters')));
+    await tester.tap(find.byKey(const Key('clear-all-filters')));
     await tester.pumpAndSettle();
     expect(find.text('Kategorie receptů'), findsOneWidget);
+  });
+
+  testWidgets(
+    'Sous-vide + Do 60 minut najde lososa; prázdný výsledek vysvětlí',
+    (tester) async {
+      final losos = Recipe(
+        id: 'losos',
+        title: 'Losos sous-vide 43 °C',
+        category: 'Ryby',
+        prepMinutes: 10,
+        cookMinutes: 32,
+        tags: const ['Sous-vide', 'Pánev'],
+        createdAt: DateTime.utc(2026),
+        updatedAt: DateTime.utc(2026),
+        ingredients: const [Ingredient(id: 'i', name: 'Losos')],
+        steps: const [
+          RecipeStep(
+            id: 's1',
+            instruction:
+                'Připravujte ve vodní lázni při 43 °C po dobu 30 minut.',
+            durationMinutes: 30,
+          ),
+          RecipeStep(
+            id: 's2',
+            instruction: 'Krátce opečte na rozpálené pánvi.',
+            durationMinutes: 2,
+          ),
+        ],
+      );
+      await pumpApp(
+        tester,
+        location: Routes.home,
+        recipes: [losos, sampleRecipe()],
+      );
+      await tester.tap(find.text('Sous-vide'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('time-upTo60')));
+      await tester.pumpAndSettle();
+      expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+      expect(find.text('Losos sous-vide 43 °C'), findsOneWidget);
+      expect(find.text('Ryby · 42 min'), findsOneWidget);
+
+      // Do 15 minut už losos nesplní – aplikace řekne proč.
+      await tester.tap(find.byKey(const Key('time-upTo60')));
+      await tester.tap(find.byKey(const Key('time-upTo15')));
+      await tester.pumpAndSettle();
+      expect(find.text('Nalezeno: 0 receptů'), findsOneWidget);
+      await tester.ensureVisible(find.text('Téměř vyhovují'));
+      expect(find.text('Nevyhovuje: celkový čas 42 min'), findsOneWidget);
+
+      // Aktivní práce lososa je 10 minut → vyhoví.
+      await tester.ensureVisible(find.byKey(const Key('time-mode-active')));
+      await tester.tap(find.byKey(const Key('time-mode-active')));
+      await tester.pumpAndSettle();
+      expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+      expect(find.text('Ryby · aktivně 10 min'), findsOneWidget);
+    },
+  );
+
+  testWidgets('kategorie na hlavní obrazovce se kombinuje s příležitostí', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.home,
+      recipes: [
+        sampleRecipe(),
+        Recipe(
+          id: 'k',
+          title: 'Kuřecí karbanátky',
+          category: 'Drůbež a králík',
+          prepMinutes: 25,
+          cookMinutes: 30,
+          tags: const ['Pro děti'],
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        ),
+        Recipe(
+          id: 'c',
+          title: 'Kuřecí kari',
+          category: 'Drůbež a králík',
+          prepMinutes: 15,
+          cookMinutes: 25,
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        ),
+      ],
+    );
+    await tester.ensureVisible(find.text('Drůbež a králík').first);
+    await tester.tap(find.text('Drůbež a králík').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
+    await tester.ensureVisible(find.text('Pro děti').first);
+    await tester.tap(find.text('Pro děti').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('time-upTo60')));
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+    expect(find.text('Kuřecí karbanátky'), findsOneWidget);
+    expect(find.text('Kuřecí kari'), findsNothing);
+  });
+
+  testWidgets('recept bez času ukazuje „Čas neuveden“', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.home,
+      recipes: [
+        Recipe(
+          id: 'x',
+          title: 'Salát bez času',
+          category: 'Přílohy',
+          tags: const ['Rychlá večeře'],
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        ),
+      ],
+    );
+    await tester.tap(find.text('Rychlá večeře'));
+    await tester.pumpAndSettle();
+    expect(find.text('Přílohy · Čas neuveden'), findsOneWidget);
   });
 
   testWidgets('plán, nákup a deník jsou funkční, AI je poctivě vypnutá', (

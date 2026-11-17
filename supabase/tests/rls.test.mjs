@@ -748,3 +748,53 @@ test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async
   await db.exec(sql);
   await db.exec(sql);
 });
+
+test('štítky: ChatGPT je uloží, bez pole je nechá, migrace 17 je jen přidává', async () => {
+  const draft = {
+    title: 'Losos sous-vide 43 °C',
+    category: 'Ryby',
+    prep_minutes: 10,
+    cook_minutes: 32,
+    ingredients: [{ name: 'Losos' }],
+    steps: [
+      { instruction: 'Připravujte ve vodní lázni při 43 °C po dobu 30 minut.', duration_minutes: 30 },
+      { instruction: 'Krátce opečte na rozpálené pánvi.', duration_minutes: 2 },
+    ],
+  };
+  const created = (await as(PAVEL, `select public.api_save_recipe($1::jsonb) as r`, [
+    JSON.stringify({ ...draft, tags: ['Pro děti', ' pro děti ', '', 'Vlastní'] }),
+  ])).rows[0].r;
+  const tagsOf = async () =>
+    (await as(PAVEL, `select tags from public.recipes where id = $1`, [created.id])).rows[0].tags;
+  assert.deepEqual(await tagsOf(), ['Pro děti', 'Vlastní']);
+
+  // Úprava bez pole tags štítky nezmění.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [JSON.stringify(draft), created.id]);
+  assert.deepEqual(await tagsOf(), ['Pro děti', 'Vlastní']);
+  // Úprava s polem tags je nahradí.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ ...draft, tags: ['Pro děti'] }),
+    created.id,
+  ]);
+  assert.deepEqual(await tagsOf(), ['Pro děti']);
+  // Štítky jsou i v historii verzí.
+  const snap = (await as(PAVEL, `select snapshot from public.recipe_versions
+    where recipe_id = $1 order by version_number desc limit 1`, [created.id])).rows[0].snapshot;
+  assert.deepEqual(snap.tags, ['Pro děti']);
+
+  // Migrace 17 doplní způsob přípravy z postupu, zachová ruční štítky
+  // a opakované spuštění nic nezdvojí.
+  const sql = readFileSync(join(migrationsDir, '20261117000017_recipe_filter_tags.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+  const tags = await tagsOf();
+  assert.equal(tags[0], 'Pro děti');
+  assert.ok(tags.includes('Sous-vide'), JSON.stringify(tags));
+  assert.ok(tags.includes('Pánev'), JSON.stringify(tags));
+  assert.equal(tags.filter((t) => t === 'Sous-vide').length, 1);
+  assert.ok(!tags.includes('Trouba'), JSON.stringify(tags));
+
+  // Cizí uživatel štítky nezmění.
+  await as(CIZI, `update public.recipes set tags = '["Hack"]' where id = $1`, [created.id]);
+  assert.ok(!(await tagsOf()).includes('Hack'));
+});

@@ -42,12 +42,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _setFilters(RecipeFilters filters) => setState(() => _filters = filters);
 
-  void _clearFilters() {
-    _search.clear();
-    FocusScope.of(context).unfocus();
-    _setFilters(const RecipeFilters());
-  }
-
   void _focusSearch() {
     _scroll.animateTo(
       0,
@@ -63,13 +57,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _setFilters(_filters.copyWith(prep: next));
   }
 
-  void _toggleTime(TimeFilter t) =>
-      _setFilters(_filters.copyWith(time: _filters.time == t ? null : t));
+  void _toggleTime(TimeFilter t) {
+    final next = {..._filters.times};
+    if (!next.remove(t)) next.add(t);
+    _setFilters(_filters.copyWith(times: next));
+  }
+
+  void _setTimeMode(TimeMode mode) =>
+      _setFilters(_filters.copyWith(timeMode: mode));
 
   void _toggleOccasion(String o) {
     final next = {..._filters.occasions};
     if (!next.remove(o)) next.add(o);
     _setFilters(_filters.copyWith(occasions: next));
+  }
+
+  void _toggleGroup(String id) {
+    final next = {..._filters.groups};
+    if (!next.remove(id)) next.add(id);
+    _setFilters(_filters.copyWith(groups: next));
+  }
+
+  /// Vymaže všechny filtry i hledaný text.
+  void _clearAll() {
+    _search.clear();
+    FocusScope.of(context).unfocus();
+    _setFilters(RecipeFilters(timeMode: _filters.timeMode));
   }
 
   @override
@@ -118,15 +131,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             const SizedBox(height: 12),
             _PrepRow(selected: _filters.prep, onToggle: _togglePrep),
-            const SizedBox(height: 12),
-            _TimeOccasionRow(
-              time: _filters.time,
-              occasions: _filters.occasions,
-              onTime: _toggleTime,
-              onOccasion: _toggleOccasion,
+            const SizedBox(height: 10),
+            _FilterRow(
+              icon: Icons.schedule_rounded,
+              title: 'Podle času',
+              trailing: _TimeModeSwitch(
+                mode: _filters.timeMode,
+                onChanged: _setTimeMode,
+              ),
+              children: [
+                for (final t in TimeFilter.values)
+                  FilterPill(
+                    key: Key('time-${t.name}'),
+                    label: t.label,
+                    selected: _filters.times.contains(t),
+                    onTap: () => _toggleTime(t),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _FilterRow(
+              icon: Icons.star_outline_rounded,
+              title: 'Podle příležitosti',
+              children: [
+                for (final o in occasionTags)
+                  FilterPill(
+                    label: o,
+                    selected: _filters.occasions.contains(o),
+                    onTap: () => _toggleOccasion(o),
+                  ),
+              ],
             ),
             if (results != null)
-              ..._results(results)
+              ..._results(recipes, results)
             else ...[
               const SizedBox(height: 6),
               Padding(
@@ -163,8 +200,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               else
                 GroupGrid(
                   recipes: recipes,
-                  onSelected: (group) =>
-                      context.go(Routes.recipesWith(group: group.id)),
+                  // Kategorie se kombinuje s ostatními filtry.
+                  onSelected: (group) => _toggleGroup(group.id),
                 ),
               HomeSectionHeader(
                 icon: Icons.local_fire_department_rounded,
@@ -260,26 +297,47 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  List<Widget> _results(List<Recipe> results) => [
-    HomeSectionHeader(
-      icon: Icons.manage_search_rounded,
-      title: 'Nalezeno: ${receptyCount(results.length)}',
-      actionLabel: 'Zrušit',
-      onAction: _clearFilters,
-    ),
-    if (results.isEmpty)
-      const Padding(
-        padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
-        child: Text(
-          'Tomuto výběru neodpovídá žádný recept. Recepty bez uvedeného času '
-          'se do časových filtrů nezapočítávají a příležitost se bere jen ze '
-          'štítků receptu.',
-          style: TextStyle(color: AppColors.textSecondary),
+  List<Widget> _results(List<Recipe> all, List<Recipe> results) {
+    final f = _filters;
+    final chips = <(String, VoidCallback)>[
+      if (f.query.trim().isNotEmpty)
+        (
+          '„${f.query.trim()}“',
+          () {
+            _search.clear();
+            _setFilters(f.copyWith(query: ''));
+          },
         ),
-      )
-    else
-      RecipeResultsGrid(recipes: results),
-  ];
+      for (final g in recipeGroups)
+        if (f.groups.contains(g.id)) (g.label, () => _toggleGroup(g.id)),
+      for (final p in PrepMethod.values)
+        if (f.prep.contains(p)) (p.label, () => _togglePrep(p)),
+      for (final t in TimeFilter.values)
+        if (f.times.contains(t))
+          (
+            f.timeMode == TimeMode.active ? '${t.label} práce' : t.label,
+            () => _toggleTime(t),
+          ),
+      for (final o in occasionTags)
+        if (f.occasions.contains(o)) (o, () => _toggleOccasion(o)),
+    ];
+    final misses = results.isEmpty
+        ? f.nearMisses(all)
+        : const <(Recipe, String)>[];
+    return [
+      const SizedBox(height: 14),
+      _ActiveFilters(chips: chips, onClearAll: _clearAll),
+      _GroupPills(selected: f.groups, onToggle: _toggleGroup),
+      HomeSectionHeader(
+        icon: Icons.manage_search_rounded,
+        title: 'Nalezeno: ${receptyCount(results.length)}',
+      ),
+      if (results.isEmpty)
+        _NoResults(misses: misses, timeMode: f.timeMode)
+      else
+        RecipeResultsGrid(recipes: results, timeMode: f.timeMode),
+    ];
+  }
 }
 
 class _Header extends StatelessWidget {
@@ -579,84 +637,279 @@ class _PrepRow extends StatelessWidget {
   }
 }
 
-class _TimeOccasionRow extends StatelessWidget {
-  const _TimeOccasionRow({
-    required this.time,
-    required this.occasions,
-    required this.onTime,
-    required this.onOccasion,
+/// Řada filtrů s nadpisem. Tlačítka se posouvají vodorovně; pravý okraj
+/// mizí do ztracena, aby bylo vidět, že řada pokračuje.
+class _FilterRow extends StatelessWidget {
+  const _FilterRow({
+    required this.icon,
+    required this.title,
+    required this.children,
+    this.trailing,
   });
 
-  final TimeFilter? time;
-  final Set<String> occasions;
-  final ValueChanged<TimeFilter> onTime;
-  final ValueChanged<String> onOccasion;
-
-  Widget _label(IconData icon, String text) => Padding(
-    padding: const EdgeInsets.only(left: 4, bottom: 6),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 20, color: AppColors.copper),
-        const SizedBox(width: 8),
-        Text(text, style: const TextStyle(fontSize: 14.5, color: Colors.white)),
-      ],
-    ),
-  );
+  final IconData icon;
+  final String title;
+  final List<Widget> children;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _label(Icons.schedule_rounded, 'Podle času'),
-                Row(
-                  children: [
-                    for (final t in TimeFilter.values)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: FilterPill(
-                          label: t.label,
-                          selected: time == t,
-                          onTap: () => onTime(t),
-                        ),
-                      ),
-                  ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 16, 6),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: AppColors.copper),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14.5, color: Colors.white),
                 ),
-              ],
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              child: VerticalDivider(width: 1, color: Color(0xFF3A3A3C)),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _label(Icons.star_outline_rounded, 'Podle příležitosti'),
-                Row(
-                  children: [
-                    for (final o in occasionTags)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: FilterPill(
-                          label: o,
-                          selected: occasions.contains(o),
-                          onTap: () => onOccasion(o),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ],
+              ),
+              if (trailing != null) ...[const Spacer(), trailing!],
+            ],
+          ),
         ),
+        _EdgeFade(
+          child: SizedBox(
+            height: 40,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 16, right: 28),
+              itemCount: children.length,
+              separatorBuilder: (context, index) => const SizedBox(width: 8),
+              itemBuilder: (context, index) => children[index],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Jemné ztmavení pravého okraje vodorovné řady.
+class _EdgeFade extends StatelessWidget {
+  const _EdgeFade({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (rect) => const LinearGradient(
+        colors: [Colors.white, Colors.white, Colors.transparent],
+        stops: [0, 0.93, 1],
+      ).createShader(rect),
+      child: child,
+    );
+  }
+}
+
+/// Přepínač „Celkový čas | Aktivní práce“.
+class _TimeModeSwitch extends StatelessWidget {
+  const _TimeModeSwitch({required this.mode, required this.onChanged});
+
+  final TimeMode mode;
+  final ValueChanged<TimeMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 32,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundSecondary,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.outline),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final m in TimeMode.values)
+            Semantics(
+              button: true,
+              selected: m == mode,
+              child: InkWell(
+                key: Key('time-mode-${m.name}'),
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => onChanged(m),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: m == mode ? AppColors.copper : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    m == TimeMode.total ? 'Celkový' : 'Aktivní práce',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: m == mode ? Colors.black : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Zvolené filtry – každý jde jedním klepnutím odebrat – a „Vymazat vše“.
+class _ActiveFilters extends StatelessWidget {
+  const _ActiveFilters({required this.chips, required this.onClearAll});
+
+  final List<(String, VoidCallback)> chips;
+  final VoidCallback onClearAll;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final (label, onRemove) in chips)
+                  Semantics(
+                    button: true,
+                    label: 'Odebrat filtr $label',
+                    excludeSemantics: true,
+                    child: Material(
+                      color: AppColors.copper,
+                      shape: const StadiumBorder(),
+                      child: InkWell(
+                        key: Key('remove-filter-$label'),
+                        customBorder: const StadiumBorder(),
+                        onTap: onRemove,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                label,
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(
+                                Icons.close_rounded,
+                                size: 16,
+                                color: Colors.black,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            key: const Key('clear-all-filters'),
+            onPressed: onClearAll,
+            icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+            label: const Text('Vymazat vše'),
+            style: TextButton.styleFrom(foregroundColor: AppColors.copper),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Kategorie jako filtr (při aktivním filtrování místo mřížky karet).
+class _GroupPills extends StatelessWidget {
+  const _GroupPills({required this.selected, required this.onToggle});
+
+  final Set<String> selected;
+  final ValueChanged<String> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: _FilterRow(
+        icon: Icons.grid_view_rounded,
+        title: 'Kategorie',
+        children: [
+          for (final g in recipeGroups)
+            FilterPill(
+              key: Key('group-${g.id}'),
+              iconAsset: g.iconAsset,
+              label: g.label,
+              selected: selected.contains(g.id),
+              onTap: () => onToggle(g.id),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Prázdný výsledek: vysvětlí, proč nic nevyhovuje, a ukáže recepty, kterým
+/// chybí splnit jen jedna podmínka.
+class _NoResults extends StatelessWidget {
+  const _NoResults({required this.misses, required this.timeMode});
+
+  final List<(Recipe, String)> misses;
+  final TimeMode timeMode;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Všem zvoleným podmínkám neodpovídá žádný recept. Recept bez '
+            'uvedeného času se do časových filtrů nezapočítá.',
+            style: TextStyle(color: AppColors.textSecondary),
+          ),
+          if (misses.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Téměř vyhovují',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+            ),
+            const SizedBox(height: 6),
+            for (final (recipe, reason) in misses)
+              ListTile(
+                key: Key('near-miss-${recipe.id}'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(
+                  Icons.info_outline_rounded,
+                  color: AppColors.copper,
+                ),
+                title: Text(recipe.title),
+                subtitle: Text(
+                  'Nevyhovuje: $reason',
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
+                onTap: () => context.push(Routes.recipe(recipe.id)),
+              ),
+          ],
+        ],
       ),
     );
   }

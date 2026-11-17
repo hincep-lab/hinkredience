@@ -140,7 +140,39 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
   if (typeof rest === "number" && Number.isFinite(rest) && rest >= 0) {
     result.rest_minutes = Math.round(rest);
   }
+  // Štítky se posílají jen tehdy, když je klient uvedl – jinak je databáze
+  // ponechá beze změny (starší klienti o nich nevědí).
+  if (Array.isArray(raw?.tags)) result.tags = cleanTags(raw.tags);
   return result;
+}
+
+/** Způsoby přípravy, podle kterých filtruje aplikace. */
+export const PREP_TAGS = ["Trouba", "Pánev", "Sous-vide", "Gril", "Pomalé vaření"];
+
+/** Příležitosti, podle kterých filtruje aplikace. */
+export const OCCASION_TAGS = [
+  "Rychlá večeře",
+  "Rodinný oběd",
+  "Pro děti",
+  "Nedělní oběd",
+  "Slavnostní jídlo",
+  "Na více dní",
+  "Sladká snídaně",
+];
+
+/** Štítky: oříznuté, bez duplicit, nejvýš 30. Známé štítky v přesném tvaru. */
+export function cleanTags(value: unknown): string[] {
+  const known = [...PREP_TAGS, ...OCCASION_TAGS];
+  const out: string[] = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    let tag = text(item, 40);
+    if (!tag) continue;
+    const canonical = known.find((k) => fold(k) === fold(tag));
+    if (canonical) tag = canonical;
+    if (!out.some((t) => fold(t) === fold(tag))) out.push(tag);
+    if (out.length >= 30) break;
+  }
+  return out;
 }
 
 const STEP_KINDS = ["active", "cook", "passive"];
@@ -167,6 +199,7 @@ export function presentRecipe(row: any, full: boolean): Record<string, unknown> 
     prep_minutes: row.prep_minutes ?? 0,
     cook_minutes: row.cook_minutes ?? 0,
     rest_minutes: row.rest_minutes ?? 0,
+    tags: Array.isArray(row.tags) ? row.tags : [],
     rating: row.rating ?? null,
     is_favorite: row.is_favorite === true,
     current_version: row.current_version ?? 1,
@@ -1367,6 +1400,14 @@ const recipeFields = {
     description: "Důležité teploty, např. „Trouba 160 °C“, „Střed masa 58 °C“.",
   },
   equipment: { type: "array", items: { type: "string" }, description: "Potřebné vybavení." },
+  tags: {
+    type: "array",
+    items: { type: "string" },
+    description:
+      "Štítky pro filtry v aplikaci. Způsob přípravy (jeden nebo víc): " + PREP_TAGS.join(", ") +
+      ". Příležitost: " + OCCASION_TAGS.join(", ") + ". Lze přidat i vlastní štítky. " +
+      "Při úpravě pošli celý seznam; když pole vynecháš, štítky zůstanou beze změny.",
+  },
   notes: { type: "string", description: "Poznámky a tipy." },
   source_url: { type: "string", description: "Odkaz na zdroj, pokud recept z nějakého vychází." },
   ingredients: { type: "array", items: ingredientSchema },
@@ -1409,6 +1450,10 @@ export const tools: Tool[] = [
       additionalProperties: false,
       properties: {
         category: { type: "string", description: "Jen recepty z této kategorie." },
+        tag: {
+          type: "string",
+          description: "Jen recepty s tímto štítkem, např. „Sous-vide“ nebo „Pro děti“.",
+        },
         favorites_only: { type: "boolean", description: "Jen oblíbené." },
         limit: { type: "integer", description: "Max. počet (výchozí 50, nejvýše 200)." },
       },
@@ -1420,6 +1465,11 @@ export const tools: Tool[] = [
       const category = text(args?.category, 60);
       if (category) path += `&category=eq.${encodeURIComponent(category)}`;
       if (args?.favorites_only === true) path += "&is_favorite=eq.true";
+      const tag = text(args?.tag, 40);
+      if (tag) {
+        const [canonical] = cleanTags([tag]);
+        path += `&tags=cs.${encodeURIComponent(JSON.stringify([canonical]))}`;
+      }
       const rows = await db.select(path);
       return { count: rows.length, recipes: rows.map((r) => presentRecipe(r, false)) };
     },
@@ -1443,7 +1493,7 @@ export const tools: Tool[] = [
     name: "search_recipes",
     title: "Hledání v receptech",
     description:
-      "Hledá v uložených receptech podle názvu, popisu, kategorie, poznámek a surovin. " +
+      "Hledá v uložených receptech podle názvu, popisu, kategorie, štítků, poznámek a surovin. " +
       "Nerozlišuje diakritiku ani velikost písmen. Nehledá na internetu.",
     inputSchema: {
       type: "object",
@@ -1469,6 +1519,7 @@ export const tools: Tool[] = [
             row.description,
             row.category,
             row.notes,
+            ...(Array.isArray(row.tags) ? row.tags : []),
             ...(Array.isArray(row.recipe_ingredients) ? row.recipe_ingredients.map((i: any) => i.name) : []),
           ].join(" "),
         );

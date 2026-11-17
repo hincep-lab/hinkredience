@@ -1,7 +1,7 @@
 // Testy MCP serveru – bez sítě, Supabase nahrazuje maketa.
 // Spuštění:  deno test supabase/functions/mcp
 
-import { cleanRecipe, type Env, fold, handle, tools } from "./index.ts";
+import { cleanRecipe, cleanTags, type Env, fold, handle, tools } from "./index.ts";
 
 function assert(condition: unknown, message = "assert"): asserts condition {
   if (!condition) throw new Error(message);
@@ -705,4 +705,14 @@ Deno.test("delete_recipe_photo: soubor smaže, jen když ho nezná historie verz
   const keptResult = await call(kept, "delete_recipe_photo", { recipe_id: ID3, position: 1 });
   assert(keptResult.structuredContent.file_kept_for_history);
   assertEquals(kept.calls.filter((c) => c.method === "DELETE" && c.url.includes("/storage/")).length, 0);
+});
+
+Deno.test("štítky: posílají se jen když je klient uvedl, známé v přesném tvaru", () => {
+  assertEquals("tags" in cleanRecipe({ title: "X" }), false);
+  assertEquals(cleanRecipe({ title: "X", tags: ["sous-vide", "pro deti", "Sous-Vide", " ", "Grilovačka"] }).tags, [
+    "Sous-vide",
+    "Pro děti",
+    "Grilovačka",
+  ]);
+  assertEquals(cleanTags(["Pánev", 5, "pomale vareni"]), ["Pánev", "Pomalé vaření"]);
 });

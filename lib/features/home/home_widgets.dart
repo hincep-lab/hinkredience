@@ -341,14 +341,17 @@ class RecipePhotoCard extends ConsumerWidget {
     super.key,
     required this.recipe,
     this.showMeta = true,
+    this.timeMode = TimeMode.total,
   });
 
   final Recipe recipe;
   final bool showMeta;
 
+  /// Který čas ukázat pod názvem (celkový / aktivní práce).
+  final TimeMode timeMode;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final total = totalMinutesOf(recipe);
     return Material(
       color: AppColors.card,
       clipBehavior: Clip.antiAlias,
@@ -397,7 +400,7 @@ class RecipePhotoCard extends ConsumerWidget {
                       child: Text(
                         [
                           groupOf(recipe).label,
-                          if (total != null) formatMinutes(total),
+                          timeLabelOf(recipe, mode: timeMode),
                         ].join(' · '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -492,9 +495,14 @@ class FavoritesStrip extends StatelessWidget {
 
 /// Mřížka receptů (výsledky hledání a filtrů).
 class RecipeResultsGrid extends StatelessWidget {
-  const RecipeResultsGrid({super.key, required this.recipes});
+  const RecipeResultsGrid({
+    super.key,
+    required this.recipes,
+    this.timeMode = TimeMode.total,
+  });
 
   final List<Recipe> recipes;
+  final TimeMode timeMode;
 
   @override
   Widget build(BuildContext context) {
@@ -517,7 +525,7 @@ class RecipeResultsGrid extends StatelessWidget {
           ),
           itemCount: recipes.length,
           itemBuilder: (context, index) =>
-              RecipePhotoCard(recipe: recipes[index]),
+              RecipePhotoCard(recipe: recipes[index], timeMode: timeMode),
         );
       },
     );

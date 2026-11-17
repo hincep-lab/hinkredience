@@ -65,6 +65,28 @@ List<Recipe> _recipes() {
   return [
     for (final r in list)
       fav.contains(r.title) ? r.copyWith(isFavorite: true) : r,
+    Recipe(
+      id: 'losos',
+      title: 'Losos sous-vide 43 °C',
+      category: 'Ryby',
+      prepMinutes: 10,
+      cookMinutes: 32,
+      tags: const ['Sous-vide', 'Pánev', 'Rychlá večeře'],
+      createdAt: DateTime.utc(2026),
+      updatedAt: DateTime.utc(2026),
+      steps: const [
+        RecipeStep(
+          id: 's1',
+          instruction: 'Připravujte ve vodní lázni při 43 °C po dobu 30 minut.',
+          durationMinutes: 30,
+        ),
+        RecipeStep(
+          id: 's2',
+          instruction: 'Krátce opečte na rozpálené pánvi.',
+          durationMinutes: 2,
+        ),
+      ],
+    ),
   ];
 }
 
@@ -74,6 +96,7 @@ Future<void> _shot(
   required Size logical,
   required double dpr,
   double scrollBy = 0,
+  List<Finder> taps = const [],
 }) async {
   tester.view.physicalSize = logical * dpr;
   tester.view.devicePixelRatio = dpr;
@@ -125,6 +148,10 @@ Future<void> _shot(
     }
   });
   await tester.pumpAndSettle();
+  for (final finder in taps) {
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
+  }
   if (scrollBy != 0) {
     await tester.drag(
       find.byKey(const Key('home-scroll')),
@@ -181,5 +208,33 @@ void main() {
       dpr: 2,
     );
     expect(find.text('Štítky'), findsOneWidget);
+  });
+
+  testWidgets('snímek: filtry Sous-vide + Do 60 min (S24 Ultra)', (
+    tester,
+  ) async {
+    await _shot(
+      tester,
+      name: 'filters_s24_ultra',
+      logical: const Size(412, 891),
+      dpr: 2,
+      taps: [find.text('Sous-vide'), find.byKey(const Key('time-upTo60'))],
+      scrollBy: 260,
+    );
+    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+  });
+
+  testWidgets('snímek: prázdný výsledek s vysvětlením (iPhone 13 mini)', (
+    tester,
+  ) async {
+    await _shot(
+      tester,
+      name: 'filters_empty_iphone13mini',
+      logical: const Size(375, 812),
+      dpr: 2,
+      taps: [find.text('Sous-vide'), find.byKey(const Key('time-upTo15'))],
+      scrollBy: 300,
+    );
+    expect(find.text('Nalezeno: 0 receptů'), findsOneWidget);
   });
 }

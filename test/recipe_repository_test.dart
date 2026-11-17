@@ -71,6 +71,18 @@ void main() {
     expect(await repository.versions('recipe-1'), hasLength(1));
   });
 
+  test('štítky se uloží bez nové verze a čekají na synchronizaci', () async {
+    await repository.create(sampleRecipe());
+    await repository.markClean('recipe-1', env.now);
+    expect(await repository.dirtyCount(), 0);
+    await repository.setTags('recipe-1', ['Trouba', 'Pro děti']);
+
+    final loaded = await repository.getById('recipe-1');
+    expect(loaded!.tags, ['Trouba', 'Pro děti']);
+    expect(loaded.currentVersion, 1);
+    expect(await repository.dirtyCount(), 1);
+  });
+
   test('smazání přesune do koše a obnovení vrátí zpět', () async {
     await repository.create(sampleRecipe());
     await repository.softDelete('recipe-1');
