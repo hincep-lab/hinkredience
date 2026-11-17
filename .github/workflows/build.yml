@@ -120,6 +120,25 @@ jobs:
           git add -A
           git commit -qm "Snímky ${{ github.run_number }} (${{ github.sha }})"
           git push -fq "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" screenshots
+      - name: Podpisový klíč z GitHub Secrets
+        # Klíč není v repozitáři (je veřejný). Secret ANDROID_SIGNING_BUNDLE =
+        # base64 archivu s key.properties a hinkredience-release.jks.
+        env:
+          ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "Pull request bez přístupu ke klíči – APK jen ladicím klíčem."
+              exit 0
+            fi
+            echo "::error::Chybí GitHub secret ANDROID_SIGNING_BUNDLE (podpisový klíč APK)."
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          printf '%s' "$ANDROID_SIGNING_BUNDLE" | base64 -d | tar xz -C "$tmp"
+          mv "$tmp/key.properties" android/key.properties
+          mv "$tmp/hinkredience-release.jks" android/app/hinkredience-release.jks
+          rm -rf "$tmp"
       - name: Sestavení APK
         run: >
           flutter build apk --release --split-per-abi

@@ -51,7 +51,8 @@ android {
 
     buildTypes {
         release {
-            // Stálý podpisový klíč z android/key.properties; bez něj ladicí klíč.
+            // Stálý podpisový klíč z android/key.properties (v CI z GitHub Secrets,
+            // v repozitáři není); bez něj ladicí klíč.
             signingConfig = if (keyProperties.containsKey("storeFile")) {
                 signingConfigs.getByName("release")
             } else {

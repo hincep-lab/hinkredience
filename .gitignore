@@ -51,3 +51,8 @@ app.*.map.json
 /web/sqlite3.wasm
 /web/sqflite_sw.js
 tool/web_ocr/node_modules/
+
+# Podpisový klíč APK – jen v GitHub Secrets (ANDROID_SIGNING_BUNDLE), nikdy v repozitáři.
+android/key.properties
+android/app/*.jks
+*.keystore
