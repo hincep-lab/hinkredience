@@ -34,22 +34,28 @@ class FakeScreenWake implements ScreenWake {
 
 var screenWake = FakeScreenWake();
 
-/// Klepne na tlačítko filtru; vodorovnou řadu nejdřív posune, aby bylo vidět.
-Future<void> tapPill(WidgetTester tester, Finder finder) async {
-  final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
-  final rect = tester.getRect(finder);
-  // Posouvat jen když tlačítko není celé vidět – jinak by se řada zbytečně
-  // posunula a sousední tlačítka by zmizela.
-  if (rect.left < 0 ||
-      rect.right > screen.width ||
-      rect.top < 0 ||
-      rect.bottom > screen.height) {
-    await Scrollable.ensureVisible(tester.element(finder), alignment: 0.5);
-    await tester.pumpAndSettle();
-  }
+/// Klepne na tlačítko ve vodorovné řadě filtrů: řadu posune na začátek
+/// a pak po kouscích, dokud tlačítko není vidět (jako prstem).
+Future<void> tapPill(WidgetTester tester, Finder finder, String row) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(PageStorageKey(row)),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  await tester.ensureVisible(scrollable);
+  await tester.pumpAndSettle();
+  await tester.drag(scrollable, const Offset(3000, 0));
+  await tester.pumpAndSettle();
+  await tester.scrollUntilVisible(finder, 120, scrollable: scrollable);
+  await tester.pumpAndSettle();
   await tester.tap(finder);
   await tester.pumpAndSettle();
 }
+
+const prepRow = 'home-prep-row';
+const timeRow = 'home-filter-row-Podle času';
+const occasionRow = 'home-filter-row-Podle příležitosti';
 
 Future<GoRouter> pumpApp(
   WidgetTester tester, {
@@ -232,14 +238,14 @@ void main() {
 
     await tester.tap(find.byTooltip('Vymazat hledání'));
     await tester.pumpAndSettle();
-    await tapPill(tester, find.text('Pánev'));
+    await tapPill(tester, find.text('Pánev'), prepRow);
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
     // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
-    await tapPill(tester, find.text('Trouba').first);
+    await tapPill(tester, find.text('Trouba').first, prepRow);
     expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
-    await tapPill(tester, find.byKey(const Key('time-upTo30')));
+    await tapPill(tester, find.byKey(const Key('time-upTo30')), timeRow);
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
@@ -289,15 +295,15 @@ void main() {
         location: Routes.home,
         recipes: [losos, sampleRecipe()],
       );
-      await tapPill(tester, find.text('Sous-vide'));
-      await tapPill(tester, find.byKey(const Key('time-upTo60')));
+      await tapPill(tester, find.text('Sous-vide'), prepRow);
+      await tapPill(tester, find.byKey(const Key('time-upTo60')), timeRow);
       expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
       expect(find.text('Losos sous-vide 43 °C'), findsOneWidget);
       expect(find.text('Ryby · 42 min'), findsOneWidget);
 
       // Do 15 minut už losos nesplní – aplikace řekne proč.
-      await tapPill(tester, find.byKey(const Key('time-upTo60')));
-      await tapPill(tester, find.byKey(const Key('time-upTo15')));
+      await tapPill(tester, find.byKey(const Key('time-upTo60')), timeRow);
+      await tapPill(tester, find.byKey(const Key('time-upTo15')), timeRow);
       expect(find.text('Nalezeno: 0 receptů'), findsOneWidget);
       await tester.ensureVisible(find.text('Téměř vyhovují'));
       expect(find.text('Nevyhovuje: celkový čas 42 min'), findsOneWidget);
@@ -350,14 +356,10 @@ void main() {
     await tester.tap(find.text('Drůbež a králík'));
     await tester.pumpAndSettle();
     expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
-    await tester.dragUntilVisible(
-      find.byKey(const Key('time-upTo60')),
-      home,
-      const Offset(0, 200),
-    );
+    await tester.drag(home, const Offset(0, 3000));
     await tester.pumpAndSettle();
-    await tapPill(tester, find.text('Pro děti').first);
-    await tapPill(tester, find.byKey(const Key('time-upTo60')));
+    await tapPill(tester, find.text('Pro děti').first, occasionRow);
+    await tapPill(tester, find.byKey(const Key('time-upTo60')), timeRow);
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Kuřecí karbanátky'), findsOneWidget);
     expect(find.text('Kuřecí kari'), findsNothing);
@@ -378,7 +380,7 @@ void main() {
         ),
       ],
     );
-    await tapPill(tester, find.text('Rychlá večeře'));
+    await tapPill(tester, find.text('Rychlá večeře'), occasionRow);
     expect(find.text('Přílohy · Čas neuveden'), findsOneWidget);
   });
 
