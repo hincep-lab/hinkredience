@@ -2535,7 +2535,7 @@ export const tools: Tool[] = [
     description:
       "Uloží akční nabídku obchodu v Sušici do HINKredience pro porovnání cen v nákupním košíku. " +
       "Použij JEN cenu, kterou vidíš na oficiálním webu nebo v letáku řetězce (penny.cz, lidl.cz, " +
-      "albert.cz, itesco.cz, jip.cz, coop.cz) – nikdy ji neodhaduj. Server cenu ověří na zdrojové " +
+      "albert.cz, itesco.cz, jip-potraviny.cz, zkdsusice.cz) – nikdy ji neodhaduj. Server cenu ověří na zdrojové " +
       "stránce; neověřené nabídky se uloží s označením a do přesného porovnání se nepočítají.",
     inputSchema: {
       type: "object",

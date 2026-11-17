@@ -36,11 +36,11 @@ class Chain {
 
 const chains = <Chain>[
   Chain('tesco', 'Tesco', ['itesco.cz', 'tesco.cz']),
-  Chain('penny', 'Penny', ['penny.cz']),
+  Chain('penny', 'Penny', ['penny.cz', 'files.rewe.co.at']),
   Chain('lidl', 'Lidl', ['lidl.cz']),
   Chain('albert', 'Albert', ['albert.cz']),
-  Chain('jip', 'JIP', ['jip.cz']),
-  Chain('coop', 'COOP', ['coop.cz']),
+  Chain('jip', 'JIP', ['jip-potraviny.cz']),
+  Chain('coop', 'COOP', ['zkdsusice.cz', 'coop.cz', 'skupina.coop']),
 ];
 
 const susiceStores = <Store>[

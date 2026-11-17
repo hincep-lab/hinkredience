@@ -160,4 +160,81 @@ void main() {
     expect(susiceStores.length, 10);
     expect(susiceStores.where((s) => s.chain == 'albert').length, 2);
   });
+
+  test('neúplné ceny: součet není cenou celého nákupu', () {
+    final list = [
+      const BuyItem(
+        id: 'a',
+        name: 'Kuřecí prsní řízky',
+        quantity: 1,
+        unit: 'kg',
+      ),
+      const BuyItem(
+        id: 'b',
+        name: 'Vepřová pečeně bez kosti',
+        quantity: 1,
+        unit: 'kg',
+      ),
+      const BuyItem(id: 'c', name: 'Máslo', quantity: 250, unit: 'g'),
+    ];
+    final offers = [
+      offer('penny', 'Kuřecí prsní řízky', 109.9, pack: 1, unit: 'kg'),
+      offer('penny', 'Máslo Boni', 29.9, pack: 250, unit: 'g'),
+      offer('albert', 'Madeta Jihočeské máslo', 34.9, pack: 250, unit: 'g'),
+    ];
+    final r = computeBestBuy(
+      items: list,
+      offers: offers,
+      receipts: const [],
+      today: today,
+    );
+    expect(r.singleStore!.store.chain, 'penny');
+    expect(r.singleStore!.complete, isFalse);
+    expect(r.singleStore!.missing.single.name, 'Vepřová pečeně bez kosti');
+    expect(r.combinationComplete, isFalse);
+    expect(r.savingsCombination, 5.0, reason: 'máslo: 34,90 − 29,90');
+
+    final full = computeBestBuy(
+      items: list,
+      offers: [
+        ...offers,
+        offer('penny', 'Vepřová pečeně', 119.9, pack: 1, unit: 'kg'),
+      ],
+      receipts: const [],
+      today: today,
+    );
+    expect(full.singleStore!.complete, isTrue);
+    expect(full.singleStore!.total, closeTo(259.7, 0.001));
+    expect(full.combinationComplete, isTrue);
+  });
+
+  test('shoda jako na serveru: máslo × máslový, bez kosti × s kostí', () {
+    expect(productMatches('Máslo', 'Chléb toustový máslový'), isFalse);
+    expect(productMatches('Máslo', 'Perla máslová příchuť'), isFalse);
+    expect(productMatches('Máslo', 'MÁSLO BONI 250 g'), isTrue);
+    expect(
+      productMatches('Vepřová pečeně bez kosti', 'VEPŘOVÁ PEČENĚ ve vakuu'),
+      isTrue,
+    );
+    expect(
+      productMatches('Vepřová pečeně bez kosti', 'Vepřová pečeně s kostí'),
+      isFalse,
+    );
+    expect(
+      productMatches('Vepřová pečeně bez kosti', 'Vepřová krkovice bez kosti'),
+      isFalse,
+    );
+    expect(
+      productMatches('Kuřecí prsní řízky', 'Kuřecí stehenní řízky'),
+      isFalse,
+    );
+    expect(
+      chainById('jip')!.isOfficial('https://www.jip-potraviny.cz/x'),
+      isTrue,
+    );
+    expect(
+      chainById('coop')!.isOfficial('https://www.zkdsusice.cz/letak_tuty'),
+      isTrue,
+    );
+  });
 }

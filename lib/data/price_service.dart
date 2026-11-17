@@ -20,6 +20,12 @@ class PriceRefresh {
     this.rejected = 0,
     this.errors = const [],
     this.diag = const [],
+    this.geminiConfigured = false,
+    this.geminiOk,
+    this.geminiCalls = 0,
+    this.geminiModel = '',
+    this.geminiError = '',
+    this.version = '',
   });
 
   final String? provider;
@@ -36,24 +42,30 @@ class PriceRefresh {
   /// Diagnostika po řetězcích (mapy z JSON serveru).
   final List<Map<String, dynamic>> diag;
 
-  bool get noProvider => errors.contains('no_provider');
+  /// Stav Google Gemini v tomto hledání: je klíč nastaven, kolikrát se
+  /// volalo a zda odpovědělo (null = nebylo potřeba volat).
+  final bool geminiConfigured;
+  final bool? geminiOk;
+  final int geminiCalls;
+  final String geminiModel;
+  final String geminiError;
 
-  /// Kód problému s vyhledáváním Google (model_unavailable, search_not_free…).
-  String? get searchProblem {
-    for (final e in errors) {
-      if (e.startsWith('search:')) return e.substring(7);
-    }
-    return null;
-  }
+  /// Verze serverové funkce („letaky-2“); prázdná = stará funkce.
+  final String version;
+
+  bool get noProvider => errors.contains('no_provider');
 
   /// Chyby jednotlivých řetězců („penny: …“).
   List<String> get chainErrors => [
     for (final e in errors)
-      if (e != 'no_provider' && !e.startsWith('search:')) e,
+      if (e != 'no_provider') e,
   ];
 
   factory PriceRefresh.fromJson(Map<String, dynamic> j) {
     int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    final g = j['gemini'] is Map
+        ? Map<String, dynamic>.from(j['gemini'] as Map)
+        : const <String, dynamic>{};
     return PriceRefresh(
       provider: j['provider'] as String?,
       scanned: n('scanned'),
@@ -69,6 +81,12 @@ class PriceRefresh {
         for (final d in (j['diag'] as List?) ?? const [])
           if (d is Map) Map<String, dynamic>.from(d),
       ],
+      geminiConfigured: g['configured'] == true,
+      geminiOk: g['ok'] as bool?,
+      geminiCalls: (g['calls'] as num?)?.toInt() ?? 0,
+      geminiModel: '${g['model'] ?? ''}',
+      geminiError: '${g['error'] ?? ''}',
+      version: '${j['version'] ?? ''}',
     );
   }
 }
@@ -114,9 +132,9 @@ class PriceService {
     }
   }
 
-  /// Najde akce pro [products] ve všech sušických řetězcích (zdarma přes
-  /// Google Gemini; stejný produkt se v jednom dni hledá jen jednou).
-  /// [force] obejde dnešní mezipaměť (pro opakovaný test).
+  /// Najde akce pro [products] v aktuálních letácích sušických řetězců
+  /// (zdarma; letáky čte Google Gemini, stejný leták se pro stejný produkt
+  /// čte jen jednou). [force] obejde mezipaměť (pro opakovaný test).
   Future<PriceRefresh> refresh(
     List<String> products, {
     bool force = false,

@@ -190,6 +190,10 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
         ? result.combinationTotal
         : result.singleStore?.total ?? 0;
     final savings = multi ? result.savingsCombination : result.savingsSingle;
+    // Součet je cenou nákupu jen se známou cenou VŠECH položek.
+    final complete = multi
+        ? result.combinationComplete
+        : result.singleStore?.complete ?? false;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
@@ -209,7 +213,9 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
                 Expanded(
                   child: Text(
                     prefs.collapsed && result.hasPrices
-                        ? 'Nejvýhodnější nákup · ${kc(total)}'
+                        ? complete
+                              ? 'Nejvýhodnější nákup · ${kc(total)}'
+                              : 'Nejvýhodnější nákup · ceny jen části'
                         : 'Nejvýhodnější nákup',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                     maxLines: 1,
@@ -282,8 +288,8 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
                 children: [
                   const Expanded(
                     child: Text(
-                      'Jen ověřené akce z webů obchodů a ceny z vašich '
-                      'účtenek.',
+                      'Jen ověřené ceny z aktuálních letáků obchodů a z '
+                      'vašich účtenek.',
                       style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 11.5,
@@ -306,13 +312,63 @@ class _BestBuyPanelState extends ConsumerState<BestBuyPanel> {
 }
 
 class _Money extends StatelessWidget {
-  const _Money({required this.total, required this.savings});
+  const _Money({
+    required this.total,
+    required this.savings,
+    required this.known,
+    required this.all,
+    required this.missing,
+  });
 
   final double total;
   final double savings;
 
+  /// Kolik položek má ověřenou cenu / kolik jich je v seznamu.
+  final int known;
+  final int all;
+  final List<BuyItem> missing;
+
   @override
   Widget build(BuildContext context) {
+    final complete = known == all;
+    final saved = savings > 0
+        ? Text(
+            complete
+                ? 'ušetříte ${kc(savings)}'
+                : 'na nich ušetříte ${kc(savings)}',
+            style: const TextStyle(
+              color: AppColors.success,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        : null;
+    if (!complete) {
+      // Neúplné ceny: žádná „cena nákupu“, jen mezisoučet a co chybí.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Cenu celého nákupu zatím nejde určit',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: AppColors.copperGold,
+            ),
+          ),
+          Text(
+            'Mezisoučet $known z $all položek: ${kc(total)}',
+            style: const TextStyle(fontSize: 13),
+          ),
+          Text(
+            'Chybí ověřená cena: ${missing.map((i) => i.name).join(', ')}',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12.5,
+            ),
+          ),
+          ?saved,
+        ],
+      );
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
@@ -326,16 +382,7 @@ class _Money extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 10),
-        if (savings > 0)
-          Flexible(
-            child: Text(
-              'ušetříte ${kc(savings)}',
-              style: const TextStyle(
-                color: AppColors.success,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
+        if (saved != null) Flexible(child: saved),
       ],
     );
   }
@@ -363,24 +410,35 @@ class _SingleSummary extends StatelessWidget {
             best.store.label,
             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
           ),
-          _Money(total: best.total, savings: savings),
-          Text(
-            [
-              _coverage(best.prices.length, result.items.length),
-              if (best.missing.isNotEmpty)
-                'bez ceny: ${best.missing.map((i) => i.name).join(', ')}',
-            ].join(' · '),
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 12.5,
-            ),
+          _Money(
+            total: best.total,
+            savings: savings,
+            known: best.prices.length,
+            all: result.items.length,
+            missing: best.missing,
           ),
+          if (best.complete)
+            Text(
+              _coverage(best.prices.length, result.items.length),
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12.5,
+              ),
+            ),
+          for (final p in best.prices)
+            Text(
+              '• ${p.item.name}: ${kc(p.cost)}'
+              '${p.offer == null ? ' (účtenka)' : ' · ${p.offer!.product}${p.offer!.conditions.isEmpty ? '' : ' – ${p.offer!.conditions}'} · do ${shortDay(p.offer!.validTo)}'}',
+              style: const TextStyle(fontSize: 12.5),
+            ),
           if (others.isNotEmpty) ...[
             const SizedBox(height: 6),
             for (final p in others)
               Text(
-                '${p.store.label}: ${kc(p.total)} '
-                '(${p.prices.length}/${result.items.length})',
+                p.complete
+                    ? '${p.store.label}: ${kc(p.total)} (celý nákup)'
+                    : '${p.store.label}: ${p.prices.length} z '
+                          '${result.items.length} položek za ${kc(p.total)}',
                 style: const TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12.5,
@@ -416,7 +474,19 @@ class _MultiSummary extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Money(total: total, savings: savings),
+          _Money(
+            total: total,
+            savings: savings,
+            known: result.combination.length,
+            all: result.items.length,
+            missing: result.combinationMissing,
+          ),
+          for (final p in result.combination)
+            Text(
+              '• ${p.item.name}: ${kc(p.cost)} – ${p.store.label}'
+              '${p.offer == null ? ' (účtenka)' : '${p.offer!.conditions.isEmpty ? '' : ', ${p.offer!.conditions}'} · do ${shortDay(p.offer!.validTo)}'}',
+              style: const TextStyle(fontSize: 12.5),
+            ),
           Text(
             [
               '${groups.length} '
@@ -497,7 +567,8 @@ class OfferTag extends StatelessWidget {
 }
 
 String _providerLabel(String p) => switch (p) {
-  'gemini' => 'Google Gemini (vyhledávání Google)',
+  'gemini' => 'Google Gemini (čtení akčního letáku)',
+  'web' => 'data z webu obchodu',
   'openai' => 'OpenAI',
   'chatgpt' => 'ChatGPT',
   _ => 'ručně',
@@ -908,42 +979,49 @@ class _ReceiptLineRow extends StatelessWidget {
 
 /// Krátká zpráva po hledání akcí (s konkrétní příčinou, když nic není).
 String refreshMessage(PriceRefresh r) {
-  if (r.noProvider) {
-    return 'Hledání akcí zatím není zapnuté – na serveru chybí bezplatný '
-        'klíč Google Gemini. Akce zatím může uložit ChatGPT a ceny můžete '
-        'přidat z účtenky.';
-  }
   if (r.scanned == 0 && r.cached > 0) {
-    return 'Dnes už prohledáno – zobrazuji uložené akce (nic se znovu '
-        'nečerpalo). V Podrobnostech lze hledat znovu.';
+    return 'Tyto letáky už jsou prohledané – zobrazuji uložené akce (nic se '
+        'znovu nečerpalo). V Podrobnostech lze hledat znovu.';
   }
   final counts =
       'Nalezeno ${r.found} · uloženo ${r.saved}'
       '${r.duplicates > 0 ? ' · už uložené ${r.duplicates}' : ''}'
       ' · ověřených ${r.verified}'
       '${r.rejected > 0 ? ' · odmítnuto ${r.rejected}' : ''}.';
+  if (r.noProvider) {
+    return '$counts Na serveru chybí bezplatný klíč Google Gemini, letáky '
+        'proto nemá kdo přečíst (jen data z webu Penny).';
+  }
   if (r.found > 0) return counts;
   final why = r.chainErrors.isNotEmpty
       ? 'Problém: ${r.chainErrors.first}'
-      : 'Hledané zboží teď na stránkách akcí obchodů není.';
+      : 'Hledané zboží teď v aktuálních letácích obchodů není.';
   return '$counts $why';
 }
 
-String _searchProblemText(String code) => switch (code) {
-  'model_unavailable' =>
-    'Vyhledávání Google: model Gemini 2.5 Google pro nové klíče už '
-        'nepouští, novější modely ho zdarma nemají. Hledá se proto '
-        'přímo na stránkách obchodů.',
-  'search_not_free' || 'quota' =>
-    'Vyhledávání Google není pro tento klíč zdarma (nebo je vyčerpaný '
-        'denní limit). Hledá se přímo na stránkách obchodů.',
-  'bad_key' => 'Klíč Gemini je neplatný – zkontrolujte GEMINI_API_KEY.',
-  'forbidden' => 'Klíč Gemini nemá k modelu přístup.',
-  _ => 'Vyhledávání Google teď nefunguje ($code).',
-};
+/// Jednou větou, zda Google Gemini v tomto hledání fungovalo.
+String geminiStatusText(PriceRefresh r) {
+  if (r.version.isEmpty) {
+    return 'Na serveru běží stará verze funkce „prices“ – nasaďte prosím '
+        'novou (čtení letáků).';
+  }
+  final model = r.geminiModel.isEmpty ? '' : ' (${r.geminiModel})';
+  if (!r.geminiConfigured) {
+    return 'Google Gemini: NENÍ nastaveno – chybí GEMINI_API_KEY. Letáky '
+        'nemá kdo přečíst.';
+  }
+  if (r.geminiCalls == 0) {
+    return 'Google Gemini$model: tentokrát nebylo potřeba volat.';
+  }
+  if (r.geminiOk == true) {
+    return 'Google Gemini$model: FUNGUJE – ${r.geminiCalls} čtení letáků '
+        '(zdarma)${r.geminiError.isEmpty ? '' : ', část selhala: ${r.geminiError}'}.';
+  }
+  return 'Google Gemini$model: NEFUNGUJE – ${r.geminiError}';
+}
 
-/// Diagnostika hledání akcí: po obchodech, co se stáhlo, co vrátila AI,
-/// co bylo odmítnuto (a proč) a co se uložilo.
+/// Diagnostika hledání akcí: po obchodech, jaký zdroj se použil, co se
+/// stáhlo, co přečetla AI, co bylo odmítnuto (a proč) a co se uložilo.
 class PriceDiagnostics extends StatelessWidget {
   const PriceDiagnostics({
     super.key,
@@ -961,7 +1039,6 @@ class PriceDiagnostics extends StatelessWidget {
     final theme = Theme.of(context);
     final r = result;
     final small = theme.textTheme.bodySmall;
-    final problem = r.searchProblem;
     return ListView(
       controller: controller,
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
@@ -969,27 +1046,26 @@ class PriceDiagnostics extends StatelessWidget {
         Text('Diagnostika hledání akcí', style: theme.textTheme.titleMedium),
         const SizedBox(height: 6),
         Text(
-          'Nalezeno ${r.found} · uloženo ${r.saved} · už uložené '
-          '${r.duplicates} · ověřených ${r.verified} · neověřených '
-          '${r.unverified} · odmítnuto ${r.rejected} · z mezipaměti '
+          'Nalezeno ${r.found} · ověřených ${r.verified} · neověřených '
+          '${r.unverified} · uloženo ${r.saved} · už uložené '
+          '${r.duplicates} · odmítnuto ${r.rejected} · z mezipaměti '
           '${r.cached}',
           style: small,
         ),
-        if (problem != null) ...[
-          const SizedBox(height: 8),
-          Text(_searchProblemText(problem), style: small),
-        ],
+        const SizedBox(height: 8),
+        Text(geminiStatusText(r), style: small),
         for (final d in r.diag) _chain(context, d),
         const SizedBox(height: 12),
         FilledButton.tonalIcon(
           onPressed: onRetry,
           icon: const Icon(Icons.refresh_rounded),
-          label: const Text('Hledat znovu (bez dnešní mezipaměti)'),
+          label: const Text('Hledat znovu (bez mezipaměti)'),
         ),
         const SizedBox(height: 6),
         Text(
-          'Do porovnání se počítají jen ověřené ceny – cena musí stát na '
-          'oficiálním webu obchodu přímo u produktu.',
+          'Do porovnání se počítají jen ověřené ceny: z dat webu obchodu, '
+          'nebo přečtené z letáku a potvrzené textem letáku či druhým '
+          'nezávislým čtením. Neověřené (?) se nezapočítávají.',
           style: small,
         ),
       ],
@@ -1003,24 +1079,45 @@ class PriceDiagnostics extends StatelessWidget {
       for (final x in (d[k] as List?) ?? const [])
         if (x is Map) Map<String, dynamic>.from(x),
     ];
+    final sources = list('sources');
     final pages = list('pages');
     final ai = list('ai');
     final offers = list('offers');
     final rejected = list('rejected');
     final errors = [for (final e in (d['errors'] as List?) ?? const []) '$e'];
+    String txt(Object? v) => '${v ?? ''}';
     final lines = <String>[
-      if (d['cached'] == true) 'Dnes už prohledáno (mezipaměť).',
+      if (d['cached'] == true)
+        'Tyto letáky už jsou prohledané (mezipaměť) – platí uložené akce.',
+      for (final s in sources)
+        s['kind'] == 'data'
+            ? 'Zdroj: ${s['title']} – ${s['size']} položek (bez AI)'
+            : 'Zdroj: ${s['title']}'
+                  '${txt(s['valid_to']).isEmpty ? '' : ', platí ${txt(s['valid_from']).isEmpty ? '' : '${_day(txt(s['valid_from']))} – '}${_day(txt(s['valid_to']))}'}'
+                  ', ${s['size']} stran'
+                  '${(s['picked'] as List?)?.isNotEmpty == true
+                      ? ', čteny strany ${(s['picked'] as List).join(', ')}'
+                      : d['cached'] == true
+                      ? ''
+                      : s['text'] == true
+                      ? ', hledané zboží v textu letáku není'
+                      : ''}',
       for (final p in pages)
-        'Stránka ${_host('${p['url']}')}: '
-            '${(p['status'] as num?)?.toInt() == 200 ? '${p['chars']} znaků' : 'nestaženo'}'
-            '${'${p['note'] ?? ''}'.isEmpty ? '' : ' (${p['note']})'}'
-            '${(p['matched'] as List?)?.isNotEmpty == true ? ' – zmínky: ${(p['matched'] as List).join(', ')}' : ''}',
+        if ((p['status'] as num?)?.toInt() != 200 || txt(p['note']).isNotEmpty)
+          'Stahování ${_host(txt(p['url']))}: '
+              '${(p['status'] as num?)?.toInt() == 200 ? 'v pořádku' : 'nestaženo'}'
+              '${txt(p['note']).isEmpty ? '' : ' (${p['note']})'}',
       for (final a in ai)
-        'AI ${a['mode']} (${a['model']}): '
-            '${a['status'] == 'ok' ? 'nabídek ${a['offers'] ?? 0}${a['queries'] != null ? ', dotazů Google ${a['queries']}' : ''}${(a['sources'] as List?)?.isNotEmpty == true ? ', zdroje ${(a['sources'] as List).join(', ')}' : ''}${'${a['note'] ?? ''}'.isEmpty ? '' : ' – ${a['note']}'}' : '${a['error']}'}',
+        if (a['mode'] != 'data')
+          '${a['mode'] == 'kontrola' ? 'Kontrolní čtení' : 'Čtení letáku'} '
+              '(${a['model']}), ${txt(a['pages'])}: '
+              '${a['status'] == 'ok' ? '${a['mode'] == 'kontrola' ? 'potvrzeno' : 'nabídek'} ${a['offers'] ?? 0}${txt(a['note']).isEmpty ? '' : ' – ${a['note']}'}' : 'CHYBA – ${a['error']}'}',
       for (final o in offers)
         '${o['verified'] == true ? '✓' : '?'} ${o['product']} '
-            '${kc((o['price'] as num).toDouble())} do ${o['valid_to']} – '
+            '${kc((o['price'] as num).toDouble())}'
+            '${txt(o['pack']).isEmpty ? '' : ' / ${o['pack']}'}'
+            '${txt(o['conditions']).isEmpty ? '' : ' (${o['conditions']})'}'
+            ' do ${_day(txt(o['valid_to']))} – '
             '${o['reason']} (${o['saved']})',
       for (final x in rejected) '✗ ${x['product']}: ${x['reason']}',
       for (final e in errors) '! $e',
@@ -1043,4 +1140,12 @@ class PriceDiagnostics extends StatelessWidget {
   }
 
   static String _host(String url) => Uri.tryParse(url)?.host ?? url;
+
+  /// 2026-11-17 → 17. 11.
+  static String _day(String iso) {
+    final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(iso);
+    return m == null
+        ? iso
+        : '${int.parse(m.group(3)!)}. ${int.parse(m.group(2)!)}.';
+  }
 }

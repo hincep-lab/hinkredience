@@ -217,6 +217,10 @@ class StorePlan {
   final List<BuyItem> missing;
 
   double get total => prices.fold(0, (sum, p) => sum + p.cost);
+
+  /// Známe ověřenou cenu všech položek? Jen pak je [total] cenou nákupu;
+  /// jinak je to jen mezisoučet položek se známou cenou.
+  bool get complete => missing.isEmpty && prices.isNotEmpty;
 }
 
 /// Výsledek porovnání.
@@ -249,6 +253,10 @@ class BestBuy {
   final double savingsCombination;
 
   double get combinationTotal => combination.fold(0, (sum, p) => sum + p.cost);
+
+  /// Má každá položka ověřenou cenu aspoň v jedné prodejně?
+  bool get combinationComplete =>
+      combinationMissing.isEmpty && combination.isNotEmpty;
 
   /// Položky s cenou v kombinaci podle prodejen (pořadí podle počtu).
   Map<Store, List<ItemPrice>> get combinationByStore {
@@ -432,13 +440,41 @@ int packsNeeded(BuyItem item, double? packQty, String packUnit) {
 /// Odpovídá produkt z letáku / účtenky položce seznamu? Porovnává české
 /// kmeny slov (bez koncovek), takže „Máslo“ ~ „Máslo Tatra 250 g“ i „MASLO
 /// TRAD.“ a „Kuřecí prsní řízky“ ~ „Kuřecí prsní řízek“. Všechna podstatná
-/// slova položky musí být v produktu („maso“ ale není „máslo“).
+/// slova položky musí být v produktu („maso“ ale není „máslo“, „máslo“ není
+/// „máslový“ chléb a „bez kosti“ není „s kostí“). Stejně jako na serveru.
 bool productMatches(String itemName, String product) {
-  final need = matchStems(itemName);
+  final fi = foldText(itemName), fp = foldText(product);
+  final without = RegExp(r'\bbez\s+kost'), withBone = RegExp(r'\bs\s+kost');
+  if (without.hasMatch(fi) && withBone.hasMatch(fp)) return false;
+  if (withBone.hasMatch(fi) && without.hasMatch(fp)) return false;
+  final need = [
+    for (final w in _matchWords(itemName))
+      if (!_soft.contains(w.stem)) w,
+  ];
   if (need.isEmpty) return false;
-  final have = matchStems(product);
-  return need.every((s) => have.any((h) => stemsMatch(s, h)));
+  final have = _matchWords(product);
+  return need.every(
+    (n) => have.any((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)),
+  );
 }
+
+/// Slova, která položka nemusí mít v názvu produktu („bez kosti“).
+const _soft = {'bez', 'kost'};
+final _adjOv = RegExp(r'ov(?:y|a|e|ou|ych|ymi|ym|eho|emu)$');
+
+/// Slova pro shodu: kmen + zda jde o přídavné jméno na -ový („máslový“).
+List<({String stem, bool adj})> _matchWords(String text) => [
+  for (final m in RegExp(r'[a-z]+').allMatches(foldText(text)))
+    if (m.group(0)!.length >= 3 && !_ignore.contains(m.group(0)))
+      (
+        stem: czStem(m.group(0)!),
+        adj: () {
+          final w = m.group(0)!;
+          final e = _adjOv.firstMatch(w);
+          return e != null && w.length - e.group(0)!.length >= 3;
+        }(),
+      ),
+];
 
 const _endings = [
   'ovych',

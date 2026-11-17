@@ -2,22 +2,22 @@
 //
 // Hledá aktuální akční nabídky pro položky nákupního seznamu a ukládá je do
 // tabulky price_offers. Zásady:
-// - AI nesmí vymýšlet ceny: nabídka je „ověřená“ jen tehdy, když cenu
-//   dokládá OFICIÁLNÍ web řetězce – cena musí stát v textu stažené stránky
-//   řetězce hned u názvu produktu (nebo ji dokládá citace vyhledávání Google
-//   z oficiálního webu). Ostatní se uloží jako neověřené a aplikace je do
-//   porovnání nepočítá.
-// - Hlavní zdroj zdarma: server sám stáhne stránky akcí řetězců a Gemini
-//   (bezplatná úroveň, bez vyhledávání) z jejich textu jen vypíše nabídky.
-//   Vyhledávání Google (grounding) zkusí jen tehdy, když ho klíč zdarma
-//   umí (modely 2.5 u starších klíčů) – nové klíče ho zdarma nemají.
-// - Šetří bezplatné limity: stejný řetězec + produkt se hledá nejvýš jednou
-//   denně (tabulka price_scans), ale jen když hledání proběhlo bez chyby.
-//   Pro test lze mezipaměť obejít (force).
-// - OpenAI jen když je placené použití výslovně povolené (PRICES_ALLOW_PAID).
+// - Zdrojem jsou AKTUÁLNÍ AKČNÍ LETÁKY na oficiálních webech řetězců
+//   (obrázky stran letáku + text letáku, kde ho web má) a veřejná
+//   strukturovaná data (Penny). Server si je stáhne sám, zdarma.
+// - Google Gemini (bezplatná úroveň) čte přímo obrázky stran letáku. AI nesmí
+//   vymýšlet ceny: nabídka je „ověřená“ jen tehdy, když
+//     a) pochází ze strukturovaných dat webu řetězce (bez AI), nebo
+//     b) cena i název stojí i v textu téže strany letáku, nebo
+//     c) cenu potvrdí druhé nezávislé čtení téže strany (bez nápovědy ceny).
+//   Ostatní se uloží jako neověřené a aplikace je do porovnání nepočítá.
+// - Šetří bezplatné limity: stejný řetězec + produkt + stejné letáky se
+//   prohledá jen jednou (tabulka price_scans), ale jen když hledání
+//   proběhlo bez chyby. Pro test lze mezipaměť obejít (force).
+// - Nic placeného: OpenAI se pro hledání akcí nepoužívá vůbec.
 // - Klíče AI jsou jen v Secrets serverové funkce, nikdy v aplikaci.
-// - Odpověď obsahuje diagnostiku: co se stáhlo, co AI vrátila, co a proč
-//   bylo odmítnuto a co se uložilo.
+// - Odpověď obsahuje diagnostiku: zdroje, co se stáhlo, co AI vrátila, co a
+//   proč bylo odmítnuto a co se uložilo.
 //
 // Bez závislostí, aby šla funkce nasadit z editoru v administraci Supabase.
 
@@ -26,39 +26,40 @@ export interface Env {
   anonKey: string;
   serviceKey: string;
   geminiKey: string;
-  /** Model pro vyhledávání Google (grounding) – zdarma jen řada 2.5. */
+  /** Dříve model pro vyhledávání Google; už se nepoužívá (jen pro zpětnou kompatibilitu nastavení). */
   geminiModel: string;
-  /** Model pro čtení stažených stránek (bez vyhledávání, zdarma). */
+  /** Model pro čtení stran letáků (obrázky), zdarma. */
   geminiExtractModel: string;
   geminiDailyLimit: number;
   openaiKey: string;
   openaiModel: string;
   allowPaid: boolean;
-  /** Volitelně jiné stránky akcí: {"penny": ["https://…"]}. */
-  pages?: Record<string, string[]>;
+  /** Nejdelší doba jednoho hledání v ms (výchozí 110 s). */
+  budgetMs?: number;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 // ------------------------------------------------------------ obchody
 
+/** Řetězce a jejich oficiální weby (jen ty smí být zdrojem ceny). */
 export const CHAINS: Record<string, { name: string; domains: string[] }> = {
   tesco: { name: "Tesco", domains: ["itesco.cz", "tesco.cz"] },
-  penny: { name: "Penny", domains: ["penny.cz"] },
+  penny: { name: "Penny", domains: ["penny.cz", "files.rewe.co.at"] },
   lidl: { name: "Lidl", domains: ["lidl.cz"] },
   albert: { name: "Albert", domains: ["albert.cz"] },
-  jip: { name: "JIP Cash & Carry", domains: ["jip.cz"] },
-  coop: { name: "COOP (Západočeské konzumní družstvo Sušice)", domains: ["coop.cz", "skupina.coop"] },
+  jip: { name: "JIP Cash & Carry", domains: ["jip-potraviny.cz"] },
+  coop: { name: "COOP (Západočeské konzumní družstvo Sušice)", domains: ["zkdsusice.cz", "coop.cz", "skupina.coop"] },
 };
 
-/** Výchozí stránky akcí (oficiální weby). Z nich se dohledají i odkazy na akce. */
-export const OFFER_PAGES: Record<string, string[]> = {
-  tesco: ["https://itesco.cz/akcni-nabidky/"],
-  penny: ["https://www.penny.cz/nabidky"],
-  lidl: ["https://www.lidl.cz/"],
-  albert: ["https://www.albert.cz/"],
-  jip: ["https://www.jip.cz/"],
-  coop: ["https://www.coop.cz/"],
+/** Odkud se smí stahovat data a obrázky letáků (oficiální weby + jejich úložiště letáků). */
+export const SOURCE_HOSTS: Record<string, string[]> = {
+  tesco: ["itesco.cz", "digitalcontent.api.tesco.com"],
+  penny: ["penny.cz", "files.rewe.co.at"],
+  lidl: ["lidl.cz", "leaflets.schwarz"],
+  albert: ["albert.cz"],
+  jip: ["jip-potraviny.cz"],
+  coop: ["zkdsusice.cz"],
 };
 
 export const STORES: Record<string, string> = {
@@ -74,6 +75,17 @@ export const STORES: Record<string, string> = {
   "coop-smetanova": "coop",
 };
 
+function hostIn(url: string, domains: string[]): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    return domains.some((d) => host === d || host.endsWith(`.${d}`));
+  } catch {
+    return false;
+  }
+}
+
 export function isOfficial(chain: string, url: string): boolean {
   let host = "";
   try {
@@ -81,11 +93,15 @@ export function isOfficial(chain: string, url: string): boolean {
     if (u.protocol !== "https:") return false;
     host = u.hostname.toLowerCase();
   } catch {
-    // Gemini u citací uvádí jen název webu („penny.cz“).
     host = url.trim().toLowerCase().replace(/^www\./, "");
     if (!/^[a-z0-9.-]+$/.test(host)) return false;
   }
   return (CHAINS[chain]?.domains ?? []).some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+/** Smí se z této adresy stahovat podklad pro řetězec? */
+export function isSource(chain: string, url: string): boolean {
+  return hostIn(url, SOURCE_HOSTS[chain] ?? []);
 }
 
 // ------------------------------------------------- klíč produktu (jako v Dart)
@@ -155,7 +171,42 @@ function matchedCount(need: string[], have: string[]): number {
   return need.filter((s) => have.some((h) => stemsMatch(s, h))).length;
 }
 
-// ------------------------------------------------------------ nabídky
+// Shoda položky seznamu s produktem z letáku – stejná pravidla jako v aplikaci
+// (lib/core/best_buy.dart), aby se uložená nabídka v košíku opravdu ukázala.
+
+const ADJ_OV = /ov(?:y|a|e|ou|ych|ymi|ym|eho|emu)$/;
+/** Slova, která položka nemusí mít v názvu produktu („bez kosti“). */
+const SOFT = new Set(["bez", "kost"]);
+
+interface Word {
+  stem: string;
+  adj: boolean;
+}
+
+function matchWords(text: string): Word[] {
+  const out: Word[] = [];
+  for (const w of fold(text).match(/[a-z]+/g) ?? []) {
+    if (w.length < 3 || IGNORE.has(w)) continue;
+    const m = w.match(ADJ_OV);
+    out.push({ stem: czStem(w), adj: !!m && w.length - m[0].length >= 3 });
+  }
+  return out;
+}
+
+/**
+ * Odpovídá produkt položce seznamu? Všechna podstatná slova položky musí
+ * být v produktu; „máslo“ ale není „máslový“ (příchuť, pečivo) a „bez
+ * kosti“ není „s kostí“.
+ */
+export function productMatches(item: string, product: string): boolean {
+  const fi = fold(item), fp = fold(product);
+  if (/\bbez\s+kost/.test(fi) && /\bs\s+kost/.test(fp)) return false;
+  if (/\bs\s+kost/.test(fi) && /\bbez\s+kost/.test(fp)) return false;
+  const need = matchWords(item).filter((w) => !SOFT.has(w.stem) && !/^\d/.test(w.stem));
+  if (need.length === 0) return false;
+  const have = matchWords(product);
+  return need.every((n) => have.some((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)));
+}
 
 export interface RawOffer {
   product: string;
@@ -253,6 +304,7 @@ export function parseOffersDetailed(
 export function parseOffers(text: string): RawOffer[] {
   return parseOffersDetailed(text).offers;
 }
+
 
 const PRICE_RE = /\d{1,5}(?:[.,]\d{1,2})?/g;
 
@@ -360,7 +412,6 @@ export interface Page {
   note: string;
 }
 
-const UA = "Mozilla/5.0 (compatible; HINKredience-ceny/1.1; kontrola akcni nabidky)";
 
 /** Stáhne oficiální stránku (jen https a jen web řetězce, i po přesměrování). */
 export async function fetchPage(chain: string, url: string, fetchImpl: FetchLike): Promise<Page> {
@@ -408,94 +459,675 @@ function hostOf(url: string): string {
   }
 }
 
-/** Odkazy na akce / letáky ze stejné stránky (nejvýš [max]). */
-export function offerLinks(links: string[], max = 3): string[] {
-  const good = links.filter((l) => {
-    let p = l;
-    try {
-      p = decodeURI(l);
-    } catch {
-      // ponechat
-    }
-    p = fold(p);
-    return /akc|nabid|letak|sleva|vyhodn|tyden/.test(p) && !/\.(pdf|jpe?g|png|webp)(\?|$)/.test(p) &&
-      !/kariera|prace|recept|kontakt|vernost|cookie|gdpr|pravidla/.test(p);
-  });
-  return good.slice(0, max);
+
+// ------------------------------------------------------------ zdroje: letáky a data
+
+/** Jedna strana letáku. */
+export interface FlyerPage {
+  n: number;
+  /** Obrázek strany (pro čtení). */
+  image: string;
+  /** Větší obrázek pro kontrolní čtení (když ho web má). */
+  zoom?: string;
+  /** Text strany, kde ho web poskytuje (pro výběr stran a ověření ceny). */
+  text?: string;
+  /** Je text úplný text strany (true), nebo jen klíčová slova (false)? */
+  fullText?: boolean;
+  /** Odkaz na stranu pro člověka (oficiální web). */
+  link: string;
 }
 
-/** Úseky textu kolem zmínek produktů (pro AI), jinak nic. */
-export function excerptsFor(text: string, products: string[], maxChars = 14000): { excerpt: string; matched: string[] } {
-  const folded = fold(text);
-  const parts: [number, number][] = [];
-  const matched: string[] = [];
-  for (const p of products) {
-    const need = matchStems(p).filter((s) => !/^\d/.test(s));
-    if (need.length === 0) continue;
-    const want = Math.max(1, Math.ceil(need.length * 0.6));
-    // začátek nejdelšího slova (kmen se v textu nemusí vyskytovat doslova)
-    const words = (fold(p).match(/[a-z]+/g) ?? []).filter((w) => w.length >= 3 && !IGNORE.has(w));
-    const anchor = [...words].sort((a, b) => b.length - a.length)[0]?.slice(0, 3) ?? "";
-    if (!anchor) continue;
-    let found = false;
-    let from = 0;
-    while (parts.length < 80) {
-      const at = folded.indexOf(anchor, from);
-      if (at < 0) break;
-      from = at + anchor.length;
-      const a = Math.max(0, at - 300), b = Math.min(text.length, at + 300);
-      if (matchedCount(need, matchStems(text.slice(a, b))) >= want) {
-        parts.push([a, b]);
-        found = true;
+export interface Flyer {
+  chain: string;
+  id: string;
+  title: string;
+  url: string;
+  validFrom: string | null;
+  validTo: string | null;
+  /** Jen pro konkrétní prodejnu (jinak všechny sušické prodejny řetězce). */
+  storeId?: string | null;
+  pages: FlyerPage[];
+}
+
+/** Záznam o stažení (pro diagnostiku). */
+export interface FetchLog {
+  url: string;
+  status: number;
+  chars: number;
+  note: string;
+}
+
+export interface Sources {
+  flyers: Flyer[];
+  /** Nabídky přímo ze strukturovaných dat webu (bez AI). */
+  offers: RawOffer[];
+  log: FetchLog[];
+}
+
+const UA = "Mozilla/5.0 (Linux; Android 14; HINKredience) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36";
+
+interface Got {
+  ok: boolean;
+  status: number;
+  text: string;
+  url: string;
+  note: string;
+}
+
+/** Stáhne text (HTML/JSON/JS) z povoleného zdroje řetězce a zapíše do logu. */
+export async function getText(chain: string, url: string, fetchImpl: FetchLike, log: FetchLog[], accept = "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"): Promise<Got> {
+  const done = (g: Got): Got => {
+    log.push({ url: g.url, status: g.status, chars: g.text.length, note: g.note });
+    return g;
+  };
+  if (!isSource(chain, url)) return done({ ok: false, status: 0, text: "", url, note: "adresa mimo oficiální zdroje" });
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      headers: { "User-Agent": UA, Accept: accept, "Accept-Language": "cs-CZ,cs;q=0.9" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    return done({ ok: false, status: 0, text: "", url, note: `nedostupná (${(e as Error).name})` });
+  }
+  const finalUrl = res.url || url;
+  if (!isSource(chain, finalUrl)) {
+    return done({ ok: false, status: res.status, text: "", url, note: `přesměrováno mimo oficiální web (${hostOf(finalUrl)})` });
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    return done({ ok: false, status: res.status, text: "", url: finalUrl, note: `HTTP ${res.status}` });
+  }
+  const text = (await res.text()).slice(0, 4_000_000);
+  return done({ ok: true, status: res.status, text, url: finalUrl, note: "" });
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&nbsp;|&#160;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&([a-z]+)acute;/gi, (_, c) => ACUTE[c] ?? c)
+    .replace(/&([a-z]+)caron;/gi, (_, c) => CARON[c] ?? c)
+    .replace(/&uring;/g, "ů").replace(/&Uring;/g, "Ů");
+}
+const ACUTE: Record<string, string> = { a: "á", e: "é", i: "í", o: "ó", u: "ú", y: "ý", A: "Á", E: "É", I: "Í", O: "Ó", U: "Ú", Y: "Ý" };
+const CARON: Record<string, string> = { s: "š", c: "č", r: "ř", z: "ž", e: "ě", n: "ň", d: "ď", t: "ť", S: "Š", C: "Č", R: "Ř", Z: "Ž", E: "Ě", N: "Ň", D: "Ď", T: "Ť" };
+
+function stripTags(html: string): string {
+  return decodeEntities(
+    html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " "),
+  ).replace(/\s+/g, " ").trim();
+}
+
+function iso(y: number, m: number, d: number): string | null {
+  if (!(y > 2000 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** První rozsah dat v textu: „11. 11. – 17. 11. 2026“, „od 4.11.2026 do 17.11.2026“, „11. 11. do 17. 11. 2026“. */
+export function dateRange(text: string, fallbackYear?: number): { from: string | null; to: string | null } {
+  const m = text.match(/(\d{1,2})\.\s*(\d{1,2})\.(?:\s*(\d{4}))?\s*(?:[-–—]|do(?:\s+[^\d\s]+)?)\s*(\d{1,2})\.\s*(\d{1,2})\.(?:\s*(\d{4}))?/i);
+  if (!m) return { from: null, to: null };
+  const y2 = Number(m[6] ?? m[3] ?? fallbackYear ?? 0);
+  let y1 = Number(m[3] ?? y2);
+  if (!m[3] && Number(m[2]) > Number(m[5])) y1 = y2 - 1; // prosinec → leden
+  return { from: iso(y1, Number(m[2]), Number(m[1])), to: iso(y2, Number(m[5]), Number(m[4])) };
+}
+
+function nextData(html: string): any {
+  const m = html.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/** Rozbalí data Nuxt (formát devalue: pole hodnot s odkazy přes indexy). */
+export function unflattenNuxt(arr: unknown[]): unknown {
+  const cache = new Map<number, unknown>();
+  const WRAP = new Set(["Reactive", "ShallowReactive", "Ref", "ShallowRef"]);
+  const NONE = new Set(["EmptyRef", "EmptyShallowRef", "NuxtError", "Set", "Map", "Date", "null", "undefined", "NaN"]);
+  const hydrate = (i: unknown): unknown => {
+    if (typeof i !== "number" || i < 0 || i >= arr.length) return null;
+    if (cache.has(i)) return cache.get(i);
+    const v = arr[i];
+    if (v === null || typeof v !== "object") {
+      cache.set(i, v);
+      return v;
+    }
+    if (Array.isArray(v)) {
+      if (typeof v[0] === "string" && v.length <= 3) {
+        if (WRAP.has(v[0])) {
+          const r = hydrate(v[1]);
+          cache.set(i, r);
+          return r;
+        }
+        if (NONE.has(v[0])) {
+          cache.set(i, null);
+          return null;
+        }
       }
+      const out: unknown[] = [];
+      cache.set(i, out);
+      for (const x of v) out.push(hydrate(x));
+      return out;
     }
-    if (found) matched.push(p);
-  }
-  parts.sort((x, y) => x[0] - y[0]);
-  const merged: [number, number][] = [];
-  for (const r of parts) {
-    const last = merged[merged.length - 1];
-    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
-    else merged.push([...r]);
-  }
-  let excerpt = merged.map(([a, b]) => text.slice(a, b)).join("\n…\n");
-  if (excerpt.length > maxChars) excerpt = excerpt.slice(0, maxChars);
-  return { excerpt, matched };
+    const out: Record<string, unknown> = {};
+    cache.set(i, out);
+    for (const k of Object.keys(v)) out[k] = hydrate((v as Record<string, unknown>)[k]);
+    return out;
+  };
+  return hydrate(0);
 }
 
-/** Zmínky o platnosti letáku („platí od … do …“) pro AI. */
-export function validityHints(text: string): string {
+// ---- Penny: strukturovaná data webu (akční položky) + leták (FlippingBook)
+
+/** Akční položky z dat stránky penny.cz/nabidky (bez AI). */
+export function pennyProducts(html: string): RawOffer[] {
+  const m = html.match(/<script[^>]*id=["']__NUXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return [];
+  let root: unknown;
+  try {
+    root = unflattenNuxt(JSON.parse(m[1]));
+  } catch {
+    return [];
+  }
+  const found: any[] = [];
+  const seen = new Set<unknown>();
+  const walk = (x: unknown, depth: number) => {
+    if (!x || typeof x !== "object" || seen.has(x) || depth > 18) return;
+    seen.add(x);
+    const o = x as any;
+    if (!Array.isArray(o) && typeof o.name === "string" && o.price && typeof o.price === "object" && o.price.regular) {
+      found.push(o);
+      return;
+    }
+    for (const k of Object.keys(o)) walk(o[k], depth + 1);
+  };
+  walk(root, 0);
+  const out: RawOffer[] = [];
+  const dedupe = new Set<string>();
+  for (const p of found) {
+    const end = isoDay(p.price.validityEnd);
+    const start = isoDay(p.price.validityStart);
+    if (!end) continue;
+    const qty = num(typeof p.amount === "string" ? p.amount.replace(",", ".") : p.amount);
+    const unit = typeof p.volumeLabelShort === "string" ? p.volumeLabelShort : "";
+    const url = typeof p.slug === "string" ? `https://www.penny.cz/products/${p.slug}` : "https://www.penny.cz/nabidky";
+    const add = (cents: unknown, conditions: string) => {
+      const c = Number(cents);
+      if (!Number.isFinite(c) || c <= 0) return;
+      const key = `${p.sku ?? p.name}|${c}|${conditions}`;
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      out.push({
+        product: String(p.name).slice(0, 160),
+        label: [qty ? `${String(qty).replace(".", ",")} ${unit}`.trim() : "", typeof p.category === "string" ? p.category.toLowerCase() : ""].filter(Boolean).join(" · "),
+        price: Math.round(c) / 100,
+        pack_qty: qty,
+        pack_unit: unit,
+        regular_price: null,
+        conditions,
+        valid_from: start,
+        valid_to: end,
+        source_url: url,
+      });
+    };
+    add(p.price.regular?.value, p.price.loyalty?.value ? "bez PENNY karty" : "");
+    add(p.price.loyalty?.value, "s PENNY kartou");
+  }
+  return out;
+}
+
+async function pennySources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const flyers: Flyer[] = [];
+  const [data, list] = await Promise.all([
+    getText("penny", "https://www.penny.cz/nabidky", fetchImpl, log),
+    getText("penny", "https://www.penny.cz/nabidky?tab=nabidky/letaky", fetchImpl, log),
+  ]);
+  const offers = data.ok ? pennyProducts(data.text) : [];
+  if (data.ok && offers.length === 0) log[log.length - 2].note = "data akčních položek na stránce nejsou";
+  const bases = [...new Set([...(list.text + data.text).matchAll(/https:\/\/files\.rewe\.co\.at\/PennyIntLeaflet\/CZ\/([A-Za-z0-9_]+)/g)].map((m) => m[1]))];
+  // Název začíná datem začátku (11_11_2026_tl); katalogy a budoucí letáky stranou.
+  const current = bases
+    .map((id) => {
+      const d = id.match(/^(\d{1,2})_(\d{1,2})_(\d{4})/);
+      return { id, start: d ? iso(Number(d[3]), Number(d[2]), Number(d[1])) : null };
+    })
+    .filter((b) => b.start && b.start <= today && !/katalog/i.test(b.id))
+    .sort((a, b) => (a.start! < b.start! ? 1 : -1))
+    .slice(0, 1);
+  for (const b of current) {
+    const base = `https://files.rewe.co.at/PennyIntLeaflet/CZ/${b.id}/`;
+    const index = await getText("penny", base, fetchImpl, log);
+    if (!index.ok) continue;
+    const count = Math.min(60, Math.max(1, ...[...index.text.matchAll(/href="\.\/(\d+)\/"/g)].map((m) => Number(m[1]))));
+    const range = dateRange(stripTags(index.text.replace(/title="([^"]*)"/g, " $1 ")), Number(b.start!.slice(0, 4)));
+    const texts = new Map<number, string>();
+    const quiet: FetchLog[] = [];
+    const numbers = Array.from({ length: count }, (_, i) => i + 1);
+    for (let i = 0; i < numbers.length; i += 12) {
+      await Promise.all(numbers.slice(i, i + 12).map(async (n) => {
+        const page = n === 1 ? index : await getText("penny", `${base}${n}/`, fetchImpl, quiet);
+        if (page.ok) texts.set(n, stripTags(page.text.slice(page.text.indexOf("<body"))));
+      }));
+    }
+    const failed = quiet.filter((q) => q.status !== 200).length;
+    log.push({ url: `${base}2/ … ${count}/`, status: failed ? 0 : 200, chars: [...texts.values()].reduce((s, t) => s + t.length, 0), note: failed ? `text ${failed} stran se nestáhl` : `text ${texts.size} stran letáku` });
+    flyers.push({
+      chain: "penny",
+      id: b.id,
+      title: "Akční leták Penny",
+      url: base,
+      validFrom: range.from ?? b.start,
+      validTo: range.to,
+      pages: numbers.map((n) => ({
+        n,
+        image: `${base}files/assets/common/page-html5-substrates/page${String(n).padStart(4, "0")}_4.jpg`,
+        text: texts.get(n),
+        fullText: true,
+        link: n === 1 ? base : `${base}${n}/`,
+      })),
+    });
+  }
+  return { flyers, offers, log };
+}
+
+// ---- Tesco: leták hypermarketů (obrázky stran v datech stránky)
+
+export function tescoFlyers(html: string, today: string): Flyer[] {
+  const state = nextData(html)?.props?.pageProps?.__APOLLO_STATE__;
+  if (!state || typeof state !== "object") return [];
+  const out: Flyer[] = [];
+  for (const key of Object.keys(state)) {
+    const l = state[key];
+    if (l?.__typename !== "Leaflet" || l.type !== "HM" || typeof l.slug !== "string") continue;
+    const from = pragueDay(l.validFrom), to = pragueDay(l.validTo);
+    if (!to || to < today || (from && from > today)) continue;
+    const base = `https://www.itesco.cz/akcni-nabidky/letaky-a-katalogy/hypermarkety/${l.slug}/`;
+    const pages: FlyerPage[] = [];
+    for (const ref of l.pages ?? []) {
+      const p = ref?.__ref ? state[ref.__ref] : ref;
+      const img = typeof p?.pagePNG === "string" ? p.pagePNG : "";
+      const n = Number(p?.page ?? img.match(/\.(\d+)\.(?:jpe?g|png)$/i)?.[1]);
+      if (!img || !Number.isFinite(n) || !isSource("tesco", img)) continue;
+      pages.push({ n, image: `${img}?w=1000`, zoom: `${img}?w=1700`, link: `${base}${n}` });
+    }
+    pages.sort((a, b) => a.n - b.n);
+    if (pages.length) {
+      out.push({ chain: "tesco", id: `HM-${l.slug}`, title: "Tesco leták hypermarkety", url: `${base}1`, validFrom: from, validTo: to, pages });
+    }
+  }
+  return out;
+}
+
+async function tescoSources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const list = await getText("tesco", "https://www.itesco.cz/akcni-nabidky/letaky-a-katalogy", fetchImpl, log);
+  const flyers = list.ok ? tescoFlyers(list.text, today) : [];
+  if (list.ok && flyers.length === 0) log[0].note = "platný leták hypermarketů na stránce není";
+  return { flyers: flyers.slice(0, 1), offers: [], log };
+}
+
+// ---- Lidl: letáky přes leaflets.schwarz (obrázky stran + klíčová slova)
+
+export function lidlSlugs(html: string): string[] {
+  const all = [...new Set([...html.matchAll(/\/l\/cs\/letak\/([a-z0-9-]+)/g)].map((m) => m[1]))];
+  return all.filter((s) => /akcni-leta/.test(s));
+}
+
+export function lidlFlyer(json: any, slug: string, today: string): Flyer | null {
+  const f = json?.flyer;
+  if (!f || !Array.isArray(f.pages)) return null;
+  const from = isoDay(f.offerStartDate) ?? isoDay(f.startDate);
+  let to = isoDay(f.offerEndDate) ?? isoDay(f.endDate);
+  // Titulek „16. 11. - 18. 11. 2026“ bývá přesnější než data zveřejnění.
+  const t = dateRange(String(f.title ?? ""));
+  const validFrom = t.from ?? from;
+  if (t.to) to = t.to;
+  if (!to || to < today || (validFrom && validFrom > today)) return null;
+  const pages: FlyerPage[] = [];
+  for (const p of f.pages) {
+    const n = Number(p?.number);
+    if (!Number.isFinite(n) || typeof p?.image !== "string" || !isSource("lidl", p.image)) continue;
+    pages.push({
+      n,
+      image: p.image,
+      zoom: typeof p.zoom === "string" && isSource("lidl", p.zoom) ? p.zoom : undefined,
+      text: [p.keyWords, p.altText].filter((x) => typeof x === "string").join(" "),
+      fullText: false,
+      link: `https://www.lidl.cz/l/cs/letak/${slug}/view/flyer/page/${n}`,
+    });
+  }
+  if (!pages.length) return null;
+  return {
+    chain: "lidl",
+    id: slug,
+    title: `${f.name ?? "Lidl leták"} ${f.title ?? ""}`.trim(),
+    url: `https://www.lidl.cz/l/cs/letak/${slug}/view/flyer/page/1`,
+    validFrom,
+    validTo: to,
+    pages,
+  };
+}
+
+async function lidlSources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const flyers: Flyer[] = [];
+  const list = await getText("lidl", "https://www.lidl.cz/c/akcni-letak/s10008644", fetchImpl, log);
+  if (!list.ok) return { flyers, offers: [], log };
+  const slugs = lidlSlugs(list.text).slice(0, 4);
+  if (slugs.length === 0) log[0].note = "odkazy na akční letáky na stránce nejsou";
+  await Promise.all(slugs.map(async (slug) => {
+    const r = await getText("lidl", `https://endpoints.leaflets.schwarz/v4/flyer?flyer_identifier=${encodeURIComponent(slug)}`, fetchImpl, log, "application/json");
+    if (!r.ok) return;
+    try {
+      const f = lidlFlyer(JSON.parse(r.text), slug, today);
+      if (f) flyers.push(f);
+      else log[log.length - 1].note = "leták dnes neplatí";
+    } catch {
+      log[log.length - 1].note = "neplatná data letáku";
+    }
+  }));
+  flyers.sort((a, b) => (a.id < b.id ? -1 : 1));
+  return { flyers: flyers.slice(0, 2), offers: [], log };
+}
+
+// ---- Albert: leták supermarketů (Publitas – text i obrázky stran)
+
+/** Letáky z dat stránky albert.cz/aktualni-letaky (platnost, typ prodejny, seznam prodejen). */
+export function albertLeaflets(html: string): { slug: string; from: string | null; to: string | null; leaflet: boolean; supermarket: boolean; susice: boolean }[] {
+  const out: { slug: string; from: string | null; to: string | null; leaflet: boolean; supermarket: boolean; susice: boolean }[] = [];
+  const re = /"__typename":"Leaflet","id":"(\d+)"([^\[\]]{0,1500}?)"viewUrl":"https:\/\/letaky\.albert\.cz\/([a-z0-9_-]+)\/"([^\[\]]{0,1500}?)"stores":\[([^\]]*)\]/gi;
+  for (const m of html.matchAll(re)) {
+    const seg = m[2] + m[4];
+    const get = (k: string) => seg.match(new RegExp(`"${k}":"([^"]*)"`))?.[1] ?? "";
+    const day = (v: string) => {
+      const d = v.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+      return d ? iso(Number(d[3]), Number(d[2]), Number(d[1])) : null;
+    };
+    if (out.some((o) => o.slug === m[3])) continue;
+    out.push({
+      slug: m[3],
+      from: day(get("validityStartDateFormatted")),
+      to: day(get("validityEndDateFormatted")),
+      leaflet: get("documentType") === "LEAFLET",
+      supermarket: get("locationType") === "SUPERMARKET",
+      susice: /Su[šs]ice/.test(m[5]),
+    });
+  }
+  return out;
+}
+
+export function albertFlyer(spreads: any, slug: string, from: string | null, to: string | null): Flyer | null {
+  if (!Array.isArray(spreads)) return null;
+  const base = `https://letaky.albert.cz/${slug}/`;
+  const pages: FlyerPage[] = [];
+  for (const s of spreads) {
+    for (const p of s?.pages ?? []) {
+      const n = Number(p?.number);
+      const im = p?.images ?? {};
+      const img = im.at1200 ?? im.at1000 ?? im.at1600 ?? im.at800;
+      if (!Number.isFinite(n) || typeof img !== "string") continue;
+      const abs = (u: string) => new URL(u, base).toString();
+      pages.push({
+        n,
+        image: abs(img),
+        zoom: typeof im.at2000 === "string" ? abs(im.at2000) : undefined,
+        text: typeof p.text === "string" ? p.text.replace(/\s+/g, " ") : undefined,
+        fullText: true,
+        link: `${base}page/${n}`,
+      });
+    }
+  }
+  pages.sort((a, b) => a.n - b.n);
+  if (!pages.length) return null;
+  return { chain: "albert", id: slug, title: "Albert akční leták", url: `${base}page/1`, validFrom: from, validTo: to, pages };
+}
+
+async function albertSources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const flyers: Flyer[] = [];
+  const list = await getText("albert", "https://www.albert.cz/aktualni-letaky", fetchImpl, log);
+  if (!list.ok) return { flyers, offers: [], log };
+  const all = albertLeaflets(list.text).filter((l) => l.leaflet && l.to && l.to >= today && (!l.from || l.from <= today));
+  // Leták, který má Sušici v seznamu prodejen; jinak leták supermarketů.
+  const slugs = (all.some((l) => l.susice) ? all.filter((l) => l.susice) : all.filter((l) => l.supermarket)).slice(0, 1);
+  if (slugs.length === 0) log[0].note = "platný leták pro Sušici v datech stránky není";
+  for (const s of slugs) {
+    const r = await getText("albert", `https://letaky.albert.cz/${s.slug}/spreads.json`, fetchImpl, log, "application/json");
+    if (!r.ok) continue;
+    try {
+      const f = albertFlyer(JSON.parse(r.text), s.slug, s.from, s.to);
+      if (f) flyers.push(f);
+    } catch {
+      log[log.length - 1].note = "neplatná data letáku";
+    }
+  }
+  return { flyers, offers: [], log };
+}
+
+// ---- JIP: leták pro Sušici (Flip PDF – text i obrázky stran)
+
+export function jipLeaflets(html: string): { href: string; title: string; from: string | null; to: string | null; susice: boolean }[] {
+  const out: { href: string; title: string; from: string | null; to: string | null; susice: boolean }[] = [];
+  for (const a of html.matchAll(/<article class="i-leaflet[\s\S]*?<\/article>/g)) {
+    const s = a[0];
+    const href = s.match(/href="([^"]+)"/)?.[1] ?? "";
+    if (!href || out.some((o) => o.href === href)) continue;
+    const text = stripTags(s);
+    const r = dateRange(text);
+    out.push({ href, title: decodeEntities(s.match(/title="([^"]+)"/)?.[1] ?? "Leták JIP"), from: r.from, to: r.to, susice: /Su[šs]ice/i.test(text) });
+  }
+  return out;
+}
+
+/** Pole řetězců z JS souboru (var textForPages = ["…","…"];) bez spouštění kódu. */
+export function jsStringArray(js: string): string[] {
+  const start = js.indexOf("[");
+  if (start < 0) return [];
   const out: string[] = [];
-  for (const m of text.matchAll(/(?:platn|plati|od\s+\S+\s+\d{1,2}\.)[^.]{0,20}?\d{1,2}\.\s?\d{1,2}\.(?:\s?\d{4})?[^.]{0,40}?\d{1,2}\.\s?\d{1,2}\.(?:\s?\d{4})?/gi)) {
-    if (!out.includes(m[0])) out.push(m[0]);
-    if (out.length >= 5) break;
+  let i = start + 1;
+  while (i < js.length) {
+    while (i < js.length && /[\s,]/.test(js[i])) i++;
+    const q = js[i];
+    if (q !== '"' && q !== "'") break;
+    let s = "";
+    i++;
+    while (i < js.length && js[i] !== q) {
+      if (js[i] === "\\") {
+        const c = js[i + 1];
+        if (c === "n" || c === "r" || c === "t") s += " ";
+        else if (c === "u" && /^[0-9a-fA-F]{4}$/.test(js.slice(i + 2, i + 6))) {
+          s += String.fromCharCode(parseInt(js.slice(i + 2, i + 6), 16));
+          i += 4;
+        } else s += c ?? "";
+        i += 2;
+      } else s += js[i++];
+    }
+    i++;
+    out.push(s);
   }
-  return out.join(" | ");
+  return out;
 }
 
-// ------------------------------------------------------------ poskytovatelé AI
+async function jipSources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const flyers: Flyer[] = [];
+  const list = await getText("jip", "https://www.jip-potraviny.cz/akcni-letaky/", fetchImpl, log);
+  if (!list.ok) return { flyers, offers: [], log };
+  const mine = jipLeaflets(list.text).filter((l) => l.susice && (!l.to || l.to >= today) && (!l.from || l.from <= today)).slice(0, 1);
+  if (mine.length === 0) log[0].note = "platný leták pro Sušici na stránce není";
+  for (const l of mine) {
+    const base = new URL(l.href.replace(/\/?$/, "/"), "https://www.jip-potraviny.cz/").toString();
+    const r = await getText("jip", `${base}mobile/javascript/search_config.js`, fetchImpl, log, "*/*");
+    if (!r.ok) continue;
+    const texts = jsStringArray(r.text).map((t) => t.replace(/\s+/g, " ").trim());
+    if (texts.length === 0) {
+      log[log.length - 1].note = "text letáku se nepodařilo přečíst";
+      continue;
+    }
+    flyers.push({
+      chain: "jip",
+      id: base.replace(/\/$/, "").split("/").pop() ?? base,
+      title: l.title,
+      url: base,
+      validFrom: l.from,
+      validTo: l.to,
+      pages: texts.slice(0, 60).map((text, i) => ({ n: i + 1, image: `${base}files/mobile/${i + 1}.jpg`, text, fullText: true, link: `${base}#p=${i + 1}` })),
+    });
+  }
+  return { flyers, offers: [], log };
+}
+
+// ---- COOP: letáky Západočeského konzumního družstva Sušice (obrázky stran)
+
+export function coopFlyer(html: string, pageUrl: string, id: string, title: string, storeId: string | null): Flyer | null {
+  const main = html.slice(Math.max(0, html.indexOf("<main")));
+  const start = main.search(/Aktu[aá]ln[ií] nab[ií]dka/i);
+  if (start < 0) return null;
+  const rest = main.slice(start);
+  const end = rest.search(/P[řr][ií][šs]t[ií] nab[ií]dka|<\/main>/i);
+  const part = end > 0 ? rest.slice(0, end) : rest;
+  const r = dateRange(stripTags(part));
+  const pages: FlyerPage[] = [];
+  for (const m of part.matchAll(/<a[^>]*class=['"]letak['"][^>]*href=['"]([^'"]+)['"]/gi)) {
+    const image = new URL(m[1], pageUrl).toString();
+    if (isSource("coop", image)) pages.push({ n: pages.length + 1, image, link: pageUrl });
+  }
+  if (!pages.length) return null;
+  return { chain: "coop", id: `${id}-${r.from ?? ""}`, title, url: pageUrl, validFrom: r.from, validTo: r.to, storeId, pages };
+}
+
+async function coopSources(fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const log: FetchLog[] = [];
+  const flyers: Flyer[] = [];
+  // Leták TUTY a TIP platí pro prodejny Nádražní, náměstí Svobody i Lerchova;
+  // TIP Extra jen pro prodejnu Lerchova.
+  const defs: [string, string, string, string | null][] = [
+    ["https://www.zkdsusice.cz/letak_tuty", "tuty", "COOP leták TUTY a TIP", null],
+    ["https://www.zkdsusice.cz/letak_tip", "tip", "COOP TIP Extra (Lerchova)", "coop-lerchova"],
+  ];
+  await Promise.all(defs.map(async ([url, id, title, store]) => {
+    const r = await getText("coop", url, fetchImpl, log);
+    if (!r.ok) return;
+    const f = coopFlyer(r.text, url, id, title, store);
+    if (f && (!f.validTo || f.validTo >= today) && (!f.validFrom || f.validFrom <= today)) flyers.push(f);
+    else log[log.length - 1].note = f ? "leták dnes neplatí" : "leták na stránce není";
+  }));
+  flyers.sort((a, b) => (a.id < b.id ? 1 : -1));
+  return { flyers, offers: [], log };
+}
+
+const LOADERS: Record<string, (f: FetchLike, today: string) => Promise<Sources>> = {
+  tesco: tescoSources,
+  penny: pennySources,
+  lidl: lidlSources,
+  albert: albertSources,
+  jip: jipSources,
+  coop: coopSources,
+};
+
+/** Aktuální letáky a data řetězce (bez AI, zdarma). */
+export async function loadSources(chain: string, fetchImpl: FetchLike, today: string): Promise<Sources> {
+  const load = LOADERS[chain];
+  if (!load) return { flyers: [], offers: [], log: [] };
+  try {
+    return await load(fetchImpl, today);
+  } catch (e) {
+    return { flyers: [], offers: [], log: [{ url: `https://${CHAINS[chain].domains[0]}/`, status: 0, chars: 0, note: `chyba čtení zdroje (${(e as Error).name})` }] };
+  }
+}
+
+/** Krátký otisk sady letáků – stejné letáky se pro stejný produkt nečtou znovu. */
+export function flyersKey(src: Sources): string {
+  const s = src.flyers.map((f) => `${f.id}|${f.validTo}|${f.pages.length}`).sort().join(";") + `#${src.offers.length}`;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+// ------------------------------------------------------------ výběr stran a ověření v textu
+
+/** Je položka zmíněná v textu strany? (stejná pravidla jako shoda produktu, slova kdekoli na straně) */
+export function pageMentions(text: string, item: string): boolean {
+  return productMatches(item, text);
+}
+
+/**
+ * Strany letáku, které stojí za přečtení: s textem jen ty, kde je některá
+ * položka zmíněná (nejvíc shod napřed); bez textu všechny.
+ */
+export function pickPages(flyer: Flyer, items: string[], max: number): { page: FlyerPage; items: string[] }[] {
+  const withText = flyer.pages.some((p) => (p.text ?? "").length > 30);
+  if (!withText) return flyer.pages.slice(0, max).map((page) => ({ page, items }));
+  const hits = flyer.pages
+    .map((page) => ({ page, items: items.filter((it) => page.text && pageMentions(page.text, it)) }))
+    .filter((h) => h.items.length > 0);
+  hits.sort((a, b) => b.items.length - a.items.length || a.page.n - b.page.n);
+  return hits.slice(0, max).sort((a, b) => a.page.n - b.page.n);
+}
+
+/** Stojí cena v textu letáku? Letáky píší 34,90 i „3490“, „34 90“, „90 34“ a „199,-“. */
+export function priceInFlyerText(text: string, price: number): boolean {
+  const cents = Math.round(price * 100);
+  const kc = Math.floor(cents / 100), hal = cents % 100;
+  const h = String(hal).padStart(2, "0");
+  const forms = hal === 0
+    ? [`${kc}(?:[,.]-|[,.]–|[,.]00)?(?![,.]\\d)`]
+    : [`${kc}[,.]${h}`, `${kc}${h}`, `${kc}\\s${h}`, `${h}\\s${kc}`];
+  return forms.some((f) => new RegExp(`(?<![\\d,.])${f}(?!\\d)`).test(text));
+}
+
+/**
+ * Ověření v textu strany: název produktu musí být v textu a cena musí stát
+ * blízko něj (do 300 znaků) – cena jiného zboží z jiného místa strany nestačí.
+ */
+export function verifiedByText(page: FlyerPage, product: string, price: number): boolean {
+  if (!page.fullText || !page.text) return false;
+  const need = matchStems(product).filter((s) => !/^\d/.test(s));
+  if (need.length === 0) return false;
+  const text = fold(page.text);
+  const words = [...text.matchAll(/[a-z]+/g)]
+    .filter((m) => m[0].length >= 3 && !IGNORE.has(m[0]))
+    .map((m) => ({ at: m.index ?? 0, stem: czStem(m[0]) }));
+  const want = Math.max(1, Math.ceil(need.length * 0.6));
+  // Kotvy: místa, kde stojí nejdelší (nejurčitější) slovo názvu.
+  const main = [...need].sort((x, y) => y.length - x.length)[0];
+  for (const w of words) {
+    if (!stemsMatch(main, w.stem)) continue;
+    const near = words.filter((o) => Math.abs(o.at - w.at) <= 120).map((o) => o.stem);
+    if (matchedCount(need, near) < want) continue;
+    if (priceInFlyerText(text.slice(Math.max(0, w.at - 300), w.at + 300), price)) return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------------------ Gemini: čtení stran letáku
 
 export interface AiDiag {
-  mode: "stránka" | "vyhledávání";
+  mode: "leták" | "kontrola" | "data";
   model: string;
   status: "ok" | "chyba";
   error?: string;
   code?: string;
-  queries?: number;
-  sources?: string[];
+  /** Které strany (a kterého letáku) se četly. */
+  pages?: string;
   offers?: number;
   note?: string;
 }
 
-export interface ProviderResult {
-  offers: RawOffer[];
-  rejected: Rejected[];
-  evidence: Evidence;
-  diag: AiDiag;
-}
-
 export class AiError extends Error {
-  constructor(public code: string, message: string, public status = 0) {
+  constructor(public code: string, message: string, public status = 0, public retryAfter = 0) {
     super(message);
   }
 }
@@ -503,8 +1135,14 @@ export class AiError extends Error {
 /** Srozumitelný důvod chyby Gemini (bez klíče a bez dlouhých odpovědí). */
 export function geminiError(status: number, body: string, model: string): AiError {
   let msg = "";
+  let retry = 0;
   try {
-    msg = String(JSON.parse(body)?.error?.message ?? "");
+    const j = JSON.parse(body);
+    msg = String(j?.error?.message ?? "");
+    for (const d of j?.error?.details ?? []) {
+      const m = String(d?.retryDelay ?? "").match(/^(\d+(?:\.\d+)?)s$/);
+      if (m) retry = Math.ceil(Number(m[1]));
+    }
   } catch {
     msg = body;
   }
@@ -514,70 +1152,42 @@ export function geminiError(status: number, body: string, model: string): AiErro
     return new AiError("model_unavailable", `model ${model} není pro tento klíč dostupný: ${msg}`, status);
   }
   if (status === 429) {
-    return new AiError(
-      /search|grounding/.test(low) ? "search_not_free" : "quota",
-      `vyčerpaný bezplatný limit nebo funkce není zdarma (${model}): ${msg}`,
-      status,
-    );
+    return new AiError("quota", `vyčerpaný bezplatný limit Gemini (${model}): ${msg}`, status, retry);
   }
   if (status === 400 && /api key|api_key/.test(low)) return new AiError("bad_key", `klíč Gemini je neplatný: ${msg}`, status);
   if (status === 403) return new AiError("forbidden", `klíč nemá přístup (${model}): ${msg}`, status);
-  if (status === 400 && /search|grounding|tool/.test(low)) {
-    return new AiError("search_not_free", `vyhledávání Google není pro ${model} dostupné: ${msg}`, status);
-  }
+  if (status >= 500) return new AiError("overloaded", `Gemini je dočasně nedostupné (${status}, ${model})`, status, 3);
   return new AiError("error", `Gemini ${status} (${model}): ${msg}`, status);
 }
 
-export function promptFor(chain: string, products: string[], today: string): string {
-  const c = CHAINS[chain];
-  return [
-    `Dnes je ${today}. Najdi AKTUÁLNĚ PLATNÉ akční nabídky řetězce ${c.name} v České republice`,
-    `(leták platný i pro prodejny v Sušici) pro tyto produkty: ${products.join(", ")}.`,
-    `Používej jen oficiální web řetězce (${c.domains.join(", ")}). Nic nevymýšlej:`,
-    "když cenu ve zdroji nenajdeš, produkt vynech. Cena musí být přesně jako ve zdroji.",
-    "Odpověz POUZE polem JSON, každá nabídka jako objekt:",
-    '{"product": "název produktu ve zdroji", "label": "značka a gramáž", "price": 39.9,',
-    '"pack_qty": 250, "pack_unit": "g", "regular_price": 54.9, "conditions": "např. s aplikací",',
-    '"valid_from": "YYYY-MM-DD", "valid_to": "YYYY-MM-DD", "source_url": "https://…"}',
-    "Když nic nenajdeš, odpověz [].",
-  ].join(" ");
-}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function extractPrompt(chain: string, products: string[], today: string, url: string, excerpt: string, validity: string): string {
-  const c = CHAINS[chain];
-  return [
-    `Dnes je ${today}. Níže je text z oficiální stránky řetězce ${c.name} (${url}).`,
-    `Vypiš z něj akční nabídky, které odpovídají těmto položkám nákupu: ${products.join(", ")}.`,
-    "Používej VÝHRADNĚ údaje doslova uvedené v textu. Nic nedoplňuj ani neodhaduj.",
-    "Cena musí být přesně jako v textu (bez Kč). U cen s věrnostní kartou/aplikací vrať cenu bez karty",
-    "a podmínku dej do conditions, nebo dvě nabídky. Platnost převeď na YYYY-MM-DD (rok doplň podle dneška);",
-    "když platnost u produktu chybí, použij platnost letáku z textu. Když produkt v textu není, vynech ho.",
-    "Odpověz POUZE polem JSON: [{\"product\": \"název v textu\", \"label\": \"značka a gramáž\", \"price\": 39.9,",
-    "\"pack_qty\": 250, \"pack_unit\": \"g\", \"regular_price\": 54.9, \"conditions\": \"\",",
-    "\"valid_from\": \"YYYY-MM-DD\", \"valid_to\": \"YYYY-MM-DD\"}]. Když nic, odpověz [].",
-    validity ? `Platnost letáku podle stránky: ${validity}` : "",
-    "TEXT STRÁNKY:",
-    excerpt,
-  ].filter(Boolean).join("\n");
-}
-
-async function callGemini(env: Env, model: string, body: unknown, fetchImpl: FetchLike): Promise<any> {
-  let res: Response;
-  try {
-    res = await fetchImpl(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": env.geminiKey },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(45000),
-      },
-    );
-  } catch (e) {
-    throw new AiError("network", `Gemini nedostupné (${(e as Error).name})`);
+/** Jedno volání Gemini; při krátkém omezení (429/5xx) jednou počká a zkusí znovu. */
+async function callGemini(env: Env, model: string, body: unknown, fetchImpl: FetchLike, deadline: number): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": env.geminiKey },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(60000),
+        },
+      );
+    } catch (e) {
+      throw new AiError("network", `Gemini nedostupné (${(e as Error).name})`);
+    }
+    if (res.ok) return await res.json();
+    const err = geminiError(res.status, await res.text().catch(() => ""), model);
+    const wait = Math.min(err.retryAfter, 25) * 1000;
+    if (attempt === 0 && wait > 0 && Date.now() + wait + 15000 < deadline) {
+      await sleep(wait);
+      continue;
+    }
+    throw err;
   }
-  if (!res.ok) throw geminiError(res.status, await res.text().catch(() => ""), model);
-  return await res.json();
 }
 
 function candidateText(body: any): { text: string; finish: string } {
@@ -590,125 +1200,224 @@ function candidateText(body: any): { text: string; finish: string } {
   return { text, finish: block ? `zablokováno: ${block}` : String(cand?.finishReason ?? "") };
 }
 
-/** Vyhledávání Google (grounding) – zdarma jen u modelů 2.5 a jen u starších klíčů. */
-export async function askGemini(env: Env, prompt: string, fetchImpl: FetchLike): Promise<ProviderResult> {
-  const body = await callGemini(env, env.geminiModel, {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    tools: [{ google_search: {} }],
-    generationConfig: { temperature: 0 },
-  }, fetchImpl);
-  const { text, finish } = candidateText(body);
-  const meta = body?.candidates?.[0]?.groundingMetadata ?? {};
-  const chunks: { url: string; title: string }[] = (meta.groundingChunks ?? []).map((c: any) => ({
-    url: String(c?.web?.uri ?? ""),
-    title: String(c?.web?.title ?? ""),
-  }));
-  const supports = (meta.groundingSupports ?? []).map((s: any) => ({
-    text: String(s?.segment?.text ?? ""),
-    sources: (s?.groundingChunkIndices ?? [])
-      .map((i: number) => chunks[i])
-      .filter(Boolean)
-      .flatMap((c: { url: string; title: string }) => [c.title, c.url]),
-  }));
-  const parsed = parseOffersDetailed(text);
-  const queries = (meta.webSearchQueries ?? []).length;
-  return {
-    offers: parsed.offers,
-    rejected: parsed.rejected,
-    evidence: { supports, sources: chunks },
-    diag: {
-      mode: "vyhledávání",
-      model: env.geminiModel,
-      status: "ok",
-      queries,
-      sources: [...new Set(chunks.map((c) => c.title || hostOf(c.url)))].slice(0, 10),
-      offers: parsed.offers.length,
-      note: [
-        queries === 0 ? "Google nic nehledal (bez groundingu)" : "",
-        parsed.note,
-        finish && finish !== "STOP" ? `konec: ${finish}` : "",
-      ].filter(Boolean).join("; "),
-    },
-  };
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[]);
+  }
+  return btoa(bin);
 }
 
-/** Čtení stažené stránky (bez vyhledávání): AI jen vypíše, co v textu je. */
-export async function extractFromPage(
+export interface Img {
+  mime: string;
+  data: string;
+}
+
+/** Stáhne obrázek strany letáku (jen z povolených zdrojů řetězce, nejvýš 6 MB). */
+export async function fetchImage(chain: string, url: string, fetchImpl: FetchLike): Promise<Img | string> {
+  if (!isSource(chain, url)) return "obrázek mimo oficiální zdroje";
+  try {
+    const res = await fetchImpl(url, {
+      headers: { "User-Agent": UA, Accept: "image/jpeg,image/png,image/webp,*/*;q=0.5" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return `obrázek HTTP ${res.status}`;
+    }
+    if (!isSource(chain, res.url || url)) return "obrázek přesměrován mimo oficiální web";
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length < 2000) return "obrázek je prázdný";
+    if (bytes.length > 6_000_000) return "obrázek je příliš velký";
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+    const mime = /^image\/(jpeg|png|webp)$/.test(type) ? type : bytes[0] === 0x89 ? "image/png" : "image/jpeg";
+    return { mime, data: toBase64(bytes) };
+  } catch (e) {
+    return `obrázek nedostupný (${(e as Error).name})`;
+  }
+}
+
+export function readPrompt(chainName: string, items: string[], pages: number[], today: string): string {
+  return [
+    `Dnes je ${today}. Přiložené obrázky jsou strany aktuálního akčního letáku řetězce ${chainName}`,
+    `(v pořadí strany: ${pages.join(", ")}). Najdi na nich nabídky zboží, které odpovídá těmto položkám nákupního seznamu:`,
+    items.map((i) => `- ${i}`).join("\n"),
+    "Pravidla:",
+    "1. Používej VÝHRADNĚ to, co je na obrázcích skutečně vytištěno. Nic neodhaduj a nedoplňuj. Když položka v letáku není, vynech ji.",
+    "2. Zboží musí být opravdu tou položkou: „máslo“ je máslo, ne pečivo, sušenky nebo margarín „s máslovou příchutí“; „kuřecí prsní řízky“ nejsou stehenní řízky ani šunka; „vepřová pečeně“ není krkovice, plec ani bok. Přesnější druh téhož zboží (značka, balení) vyhovuje.",
+    "3. Cena přesně jako v letáku, v Kč, s DPH (u velkoobchodu ber cenu s DPH, ne „bez DPH“). Ceny v letácích mívají haléře malým písmem (109⁹⁰ = 109.90).",
+    "4. Když má zboží cenu s věrnostní kartou/aplikací/kuponem a jinou bez ní, vrať DVĚ nabídky a do conditions napiš např. „s aplikací“ a „bez aplikace“. Jiné podmínky (od 2 ks, jen čtvrtek–sobota, jen pult) napiš také do conditions.",
+    "5. pack_qty a pack_unit = velikost balení, ke které cena patří (250 g, 1 kg, 1 ks). U ceny za kilogram je to 1 kg. regular_price = přeškrtnutá původní cena, jinak null.",
+    "6. valid_from a valid_to (YYYY-MM-DD) vyplň JEN když je u nabídky nebo na straně vytištěna vlastní platnost; jinak null.",
+    "7. page = číslo strany, na které nabídka je (z výše uvedených čísel).",
+    "Odpověz POUZE polem JSON (když nic, tak []):",
+    '[{"item": "položka seznamu přesně jak je výše", "product": "název zboží v letáku", "label": "značka, druh, gramáž", "price": 34.9, "pack_qty": 250, "pack_unit": "g", "regular_price": 54.9, "conditions": "", "valid_from": null, "valid_to": null, "page": 3}]',
+  ].join("\n");
+}
+
+export function checkPrompt(chainName: string, products: { id: number; product: string; label: string; conditions: string }[]): string {
+  return [
+    `Na obrázku je jedna strana akčního letáku řetězce ${chainName}. Přečti z ní přesnou akční cenu (Kč, s DPH) těchto výrobků:`,
+    products.map((p) => `${p.id}. ${p.product}${p.label ? ` (${p.label})` : ""}${p.conditions ? ` – cena ${p.conditions}` : ""}`).join("\n"),
+    "Čti pouze to, co je na obrázku vytištěno; haléře bývají malým písmem (109⁹⁰ = 109.90). Když výrobek na straně není nebo cenu nelze bezpečně přečíst, dej found false a price null.",
+    'Odpověz POUZE polem JSON: [{"id": 1, "found": true, "price": 34.9}]',
+  ].join("\n");
+}
+
+/** Nabídka přečtená z letáku (před ověřením). */
+export interface FlyerOffer extends RawOffer {
+  item: string;
+  page: number;
+}
+
+function jsonArray(text: string): unknown[] | string {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) return text.trim() ? "odpověď neobsahuje pole JSON" : "prázdná odpověď";
+  try {
+    const data = JSON.parse(text.slice(start, end + 1));
+    return Array.isArray(data) ? data : "odpověď není pole";
+  } catch {
+    return "neplatný JSON v odpovědi";
+  }
+}
+
+/** Odpověď modelu → nabídky; co nesedí (cizí položka, jiný produkt, chybí cena), odmítne s důvodem. */
+export function parseFlyerOffers(
+  text: string,
+  items: string[],
+  pages: FlyerPage[],
+  flyer: Flyer,
+): { offers: FlyerOffer[]; rejected: Rejected[]; note: string } {
+  const data = jsonArray(text);
+  if (typeof data === "string") return { offers: [], rejected: [], note: data };
+  const offers: FlyerOffer[] = [];
+  const rejected: Rejected[] = [];
+  for (const raw of data.slice(0, 60)) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const product = typeof o.product === "string" ? o.product.trim().slice(0, 160) : "";
+    const label = typeof o.label === "string" ? o.label.trim().slice(0, 200) : "";
+    const price = num(o.price);
+    const said = typeof o.item === "string" ? o.item : "";
+    const item = items.find((i) => i === said) ?? items.find((i) => productKey(i) === productKey(said)) ??
+      items.find((i) => productMatches(i, `${product} ${label}`));
+    const page = pages.find((p) => p.n === Number(o.page)) ?? (pages.length === 1 ? pages[0] : undefined);
+    const name = product || "?";
+    if (!product || price === null) {
+      rejected.push({ product: name, reason: `chybí ${[!product && "název", price === null && "cena"].filter(Boolean).join(", ")}` });
+      continue;
+    }
+    if (price <= 0 || price >= 100000) {
+      rejected.push({ product: name, reason: "nesmyslná cena" });
+      continue;
+    }
+    if (!item) {
+      rejected.push({ product: name, reason: "nepatří k žádné položce seznamu" });
+      continue;
+    }
+    if (!productMatches(item, `${product} ${label}`)) {
+      rejected.push({ product: name, reason: `jiné zboží než „${item}“` });
+      continue;
+    }
+    if (!page) {
+      rejected.push({ product: name, reason: "AI neuvedla stranu letáku" });
+      continue;
+    }
+    // Platnost: vlastní jen uvnitř platnosti letáku, jinak platnost letáku.
+    let from = isoDay(o.valid_from), to = isoDay(o.valid_to);
+    if (flyer.validTo && (!to || to > flyer.validTo)) to = flyer.validTo;
+    if (flyer.validFrom && (!from || from < flyer.validFrom)) from = flyer.validFrom;
+    if (!to) {
+      rejected.push({ product: name, reason: "u letáku není známá platnost" });
+      continue;
+    }
+    offers.push({
+      item,
+      page: page.n,
+      product,
+      label,
+      price,
+      pack_qty: num(o.pack_qty),
+      pack_unit: typeof o.pack_unit === "string" ? o.pack_unit.slice(0, 20) : "",
+      regular_price: num(o.regular_price),
+      conditions: typeof o.conditions === "string" ? o.conditions.slice(0, 200) : "",
+      valid_from: from,
+      valid_to: to,
+      source_url: page.link,
+      store_id: flyer.storeId ?? null,
+    });
+  }
+  return { offers, rejected, note: "" };
+}
+
+function imageParts(pages: FlyerPage[], images: Img[]): unknown[] {
+  return pages.flatMap((p, i) => [{ text: `Strana ${p.n}:` }, { inline_data: { mime_type: images[i].mime, data: images[i].data } }]);
+}
+
+/** Přečte strany letáku (obrázky) a vrátí nabídky pro položky seznamu. */
+export async function readFlyerPages(
   env: Env,
-  prompt: string,
-  pageUrl: string,
+  flyer: Flyer,
+  pages: FlyerPage[],
+  images: Img[],
+  items: string[],
+  today: string,
   fetchImpl: FetchLike,
-): Promise<ProviderResult> {
+  deadline: number,
+): Promise<{ offers: FlyerOffer[]; rejected: Rejected[]; diag: AiDiag }> {
   const body = await callGemini(env, env.geminiExtractModel, {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    contents: [{
+      role: "user",
+      parts: [{ text: readPrompt(CHAINS[flyer.chain].name, items, pages.map((p) => p.n), today) }, ...imageParts(pages, images)],
+    }],
     generationConfig: { temperature: 0, responseMimeType: "application/json" },
-  }, fetchImpl);
+  }, fetchImpl, deadline);
   const { text, finish } = candidateText(body);
-  const parsed = parseOffersDetailed(text, pageUrl);
-  // Zdrojem je vždy stažená stránka, ne to, co napíše model.
-  for (const o of parsed.offers) o.source_url = pageUrl;
+  const parsed = parseFlyerOffers(text, items, pages, flyer);
   return {
     offers: parsed.offers,
     rejected: parsed.rejected,
-    evidence: { supports: [], sources: [] },
     diag: {
-      mode: "stránka",
+      mode: "leták",
       model: env.geminiExtractModel,
       status: "ok",
+      pages: `${flyer.title}, str. ${pages.map((p) => p.n).join(", ")}`,
       offers: parsed.offers.length,
       note: [parsed.note, finish && finish !== "STOP" ? `konec: ${finish}` : ""].filter(Boolean).join("; "),
     },
   };
 }
 
-export async function askOpenAI(
+/** Kontrolní čtení jedné strany: ceny výrobků bez nápovědy. Vrací id → cena (null = nenašlo). */
+export async function checkFlyerPage(
   env: Env,
-  prompt: string,
+  flyer: Flyer,
+  page: FlyerPage,
+  image: Img,
+  products: { id: number; product: string; label: string; conditions: string }[],
   fetchImpl: FetchLike,
-): Promise<ProviderResult> {
-  const res = await fetchImpl("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.openaiKey}` },
-    body: JSON.stringify({ model: env.openaiModel, tools: [{ type: "web_search" }], input: prompt }),
-  });
-  if (!res.ok) throw new AiError("error", `OpenAI ${res.status}`, res.status);
-  const body = await res.json();
-  let text = "";
-  const supports: { text: string; sources: string[] }[] = [];
-  const sources: { url: string; title: string }[] = [];
-  for (const item of body?.output ?? []) {
-    if (item?.type !== "message") continue;
-    for (const part of item?.content ?? []) {
-      if (part?.type !== "output_text") continue;
-      const t = String(part.text ?? "");
-      for (const a of part.annotations ?? []) {
-        if (a?.type !== "url_citation") continue;
-        const url = String(a.url ?? "");
-        sources.push({ url, title: String(a.title ?? "") });
-        const from = Math.max(0, Number(a.start_index ?? 0) - 200);
-        const to = Math.min(t.length, Number(a.end_index ?? 0) + 50);
-        supports.push({ text: t.slice(from, to), sources: [url] });
-      }
-      text += t;
-    }
+  deadline: number,
+): Promise<Map<number, number | null>> {
+  const body = await callGemini(env, env.geminiExtractModel, {
+    contents: [{
+      role: "user",
+      parts: [{ text: checkPrompt(CHAINS[flyer.chain].name, products) }, { inline_data: { mime_type: image.mime, data: image.data } }],
+    }],
+    generationConfig: { temperature: 0, responseMimeType: "application/json" },
+  }, fetchImpl, deadline);
+  const data = jsonArray(candidateText(body).text);
+  const out = new Map<number, number | null>();
+  if (typeof data === "string") return out;
+  for (const raw of data) {
+    const o = raw as Record<string, unknown>;
+    const id = Number(o?.id);
+    if (!Number.isFinite(id)) continue;
+    out.set(id, o.found === false ? null : num(o.price));
   }
-  const parsed = parseOffersDetailed(text);
-  return {
-    offers: parsed.offers,
-    rejected: parsed.rejected,
-    evidence: { supports, sources },
-    diag: {
-      mode: "vyhledávání",
-      model: env.openaiModel,
-      status: "ok",
-      sources: [...new Set(sources.map((s) => hostOf(s.url)))].slice(0, 10),
-      offers: parsed.offers.length,
-      note: parsed.note,
-    },
-  };
+  return out;
 }
-
-// ------------------------------------------------------------ databáze
 
 class Db {
   constructor(private env: Env, private fetchImpl: FetchLike) {}
@@ -745,13 +1454,16 @@ class Db {
     return t ? JSON.parse(t) : null;
   }
 
-  async scannedToday(chain: string, keys: string[], today: string): Promise<Set<string>> {
-    if (keys.length === 0) return new Set();
+  /** Co už je pro řetězec prohledané: klíč produktu → stav (poslední záznam od [since]). */
+  async scanned(chain: string, keys: string[], since: string): Promise<Map<string, { status: string; day: string }>> {
+    const out = new Map<string, { status: string; day: string }>();
+    if (keys.length === 0) return out;
     const list = keys.map((k) => `"${k.replace(/"/g, "")}"`).join(",");
     const rows = await this.rest(
-      `price_scans?select=product_key&chain=eq.${chain}&scanned_on=eq.${today}&product_key=in.(${encodeURIComponent(list)})`,
+      `price_scans?select=product_key,status,scanned_on&chain=eq.${chain}&scanned_on=gte.${since}&product_key=in.(${encodeURIComponent(list)})&order=scanned_on.asc`,
     );
-    return new Set((rows ?? []).map((r: any) => r.product_key));
+    for (const r of rows ?? []) out.set(r.product_key, { status: String(r.status ?? ""), day: String(r.scanned_on ?? "") });
+    return out;
   }
 
   async markScanned(chain: string, keys: string[], today: string, provider: string, status: string, found: number) {
@@ -854,6 +1566,13 @@ export function pragueToday(now = new Date()): string {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Prague" }).format(now);
 }
 
+/** Den v Praze z časového údaje ISO („2026-11-17T22:59:59Z“ → 2026-11-17). */
+function pragueDay(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : pragueToday(d);
+}
+
 function addDays(day: string, days: number): string {
   const d = new Date(`${day}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -862,18 +1581,38 @@ function addDays(day: string, days: number): string {
 
 export interface OfferDiag {
   product: string;
+  item?: string;
   price: number;
+  pack?: string;
+  conditions?: string;
   valid_to: string;
   source: string;
+  url?: string;
   verified: boolean;
+  method?: string;
   reason: string;
   saved: "uloženo" | "už uloženo";
+}
+
+export interface SourceDiag {
+  kind: "leták" | "data";
+  title: string;
+  url: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  /** Počet stran letáku / položek v datech. */
+  size: number;
+  /** Má leták text stran (pro výběr stran a ověření)? */
+  text: boolean;
+  /** Strany vybrané ke čtení. */
+  picked: number[];
 }
 
 export interface ChainDiag {
   chain: string;
   name: string;
   cached: boolean;
+  sources: SourceDiag[];
   pages: { url: string; status: number; chars: number; matched: string[]; note: string }[];
   ai: AiDiag[];
   offers: OfferDiag[];
@@ -881,20 +1620,21 @@ export interface ChainDiag {
   errors: string[];
 }
 
-function pagesFor(env: Env, chain: string): string[] {
-  const own = env.pages?.[chain];
-  const list = Array.isArray(own) && own.length ? own : OFFER_PAGES[chain] ?? [];
-  return list.filter((u) => typeof u === "string" && isOfficial(chain, u)).slice(0, 4);
-}
+/** Nejvíc stran na jedno čtení a nejvíc stran z jednoho letáku. */
+const BATCH = 6;
+const MAX_PAGES_TEXT = 6;
+const MAX_PAGES_BLIND = 42;
 
-/** Stáhne stránky akcí řetězce (výchozí + odkazy na akce z nich). */
-async function loadPages(env: Env, chain: string, fetchImpl: FetchLike): Promise<Page[]> {
-  const start = pagesFor(env, chain);
-  const first = await Promise.all(start.map((u) => fetchPage(chain, u, fetchImpl)));
-  const seen = new Set([...start, ...first.map((p) => p.url)]);
-  const more = offerLinks(first.flatMap((p) => p.links)).filter((u) => !seen.has(u)).slice(0, 3);
-  const second = await Promise.all(more.map((u) => fetchPage(chain, u, fetchImpl)));
-  return [...first, ...second];
+async function inParallel<T>(jobs: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const out: T[] = new Array(jobs.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, async () => {
+    while (next < jobs.length) {
+      const i = next++;
+      out[i] = await jobs[i]();
+    }
+  }));
+  return out;
 }
 
 export async function handle(
@@ -922,12 +1662,13 @@ export async function handle(
     return reply(400, { error: "Neplatný požadavek." });
   }
   const today = pragueToday(now);
+  const deadline = Date.now() + (env.budgetMs ?? 110_000);
 
   try {
     switch (payload?.action) {
       case "status": {
         const providers = await providerStatus(env, db, today);
-        return reply(200, { providers, chosen: chooseProvider(providers)?.id ?? null });
+        return reply(200, { providers, chosen: chooseProvider(providers)?.id ?? null, version: VERSION });
       }
 
       case "refresh": {
@@ -940,17 +1681,8 @@ export async function handle(
           )].slice(0, 20) as string[]
           : [];
         const force = payload?.force === true;
-        if (products.length === 0) {
-          return reply(200, { scanned: 0, cached: 0, found: 0, verified: 0, unverified: 0, saved: 0, duplicates: 0, rejected: 0, errors: [], diag: [] });
-        }
-        const chainIds: string[] = Array.isArray(payload?.chains)
-          ? payload.chains.filter((c: unknown) => typeof c === "string" && CHAINS[c as string])
-          : Object.keys(CHAINS);
-
-        const providers = await providerStatus(env, db, today);
-        const gemini = providers[0];
-        const startUsage = { gemini: providers[0].usedToday, openai: providers[1].usedToday };
         const summary = {
+          version: VERSION,
           provider: null as string | null,
           scanned: 0,
           cached: 0,
@@ -961,35 +1693,60 @@ export async function handle(
           duplicates: 0,
           rejected: 0,
           errors: [] as string[],
+          gemini: {
+            configured: !!env.geminiKey,
+            model: env.geminiExtractModel,
+            calls: 0,
+            ok: null as boolean | null,
+            error: "",
+          },
           diag: [] as ChainDiag[],
         };
-        // Vyhledávání Google: po první „není zdarma / model nedostupný“ už nezkoušet.
-        let searchOff = "";
+        if (products.length === 0) return reply(200, summary);
+        const chainIds: string[] = Array.isArray(payload?.chains)
+          ? payload.chains.filter((c: unknown) => typeof c === "string" && CHAINS[c as string])
+          : Object.keys(CHAINS);
 
-        const canAsk = (p: ProviderStatus) =>
-          p.configured && p.allowed && (p.limit === null || p.usedToday < p.limit);
+        const providers = await providerStatus(env, db, today);
+        const gemini = providers[0];
+        const startUsage = gemini.usedToday;
+        const canAsk = () => gemini.configured && gemini.usedToday < (gemini.limit ?? Infinity);
+        // Po neodstranitelné chybě (klíč, model, limit) už Gemini v tomto běhu nezkoušet.
+        let aiOff = "";
+        const ask = async <T>(d: ChainDiag, mode: AiDiag["mode"], pagesLabel: string, run: () => Promise<T>): Promise<T | null> => {
+          if (!gemini.configured) {
+            if (!d.errors.includes(NO_KEY)) d.errors.push(NO_KEY);
+            return null;
+          }
+          if (aiOff) return null;
+          if (!canAsk()) {
+            aiOff = "denní limit čtení přes Gemini je vyčerpán";
+            d.errors.push(aiOff);
+            return null;
+          }
+          if (Date.now() > deadline - 20000) {
+            if (!d.errors.includes(NO_TIME)) d.errors.push(NO_TIME);
+            return null;
+          }
+          gemini.usedToday++;
+          summary.gemini.calls++;
+          summary.provider = "gemini";
+          try {
+            const r = await run();
+            summary.gemini.ok = true;
+            return r;
+          } catch (e) {
+            const err = e as AiError;
+            d.ai.push({ mode, model: env.geminiExtractModel, status: "chyba", code: err.code, error: err.message, pages: pagesLabel });
+            if (!d.errors.includes(err.message)) d.errors.push(err.message);
+            if (summary.gemini.ok !== true) summary.gemini.ok = false;
+            summary.gemini.error = err.message;
+            if (["model_unavailable", "quota", "forbidden", "bad_key"].includes(err.code)) aiOff = err.message;
+            return null;
+          }
+        };
 
-        if (!chooseProvider(providers) && !gemini.configured) {
-          summary.errors.push("no_provider");
-          return reply(200, summary);
-        }
-
-        // Stránky všech řetězců najednou (zdarma, bez AI).
-        const todoByChain = new Map<string, [string, string][]>();
-        for (const chain of chainIds) {
-          const keys = new Map(products.map((p) => [productKey(p), p]));
-          const done = force ? new Set<string>() : await db.scannedToday(chain, [...keys.keys()], today);
-          const todo = [...keys.entries()].filter(([k]) => !done.has(k));
-          summary.cached += keys.size - todo.length;
-          todoByChain.set(chain, todo);
-        }
-        const pagesByChain = new Map<string, Page[]>();
-        await Promise.all(chainIds.map(async (chain) => {
-          if ((todoByChain.get(chain) ?? []).length === 0) return;
-          pagesByChain.set(chain, await loadPages(env, chain, fetchImpl).catch(() => []));
-        }));
-
-        const save = async (chain: string, offer: RawOffer, verdict: Verdict, provider: string, d: ChainDiag) => {
+        const save = async (chain: string, offer: RawOffer, item: string, verdict: Verdict, provider: string, d: ChainDiag) => {
           const storeId = offer.store_id && STORES[offer.store_id] === chain ? offer.store_id : null;
           const inserted = await db.insertOffer({
             chain,
@@ -1014,145 +1771,193 @@ export async function handle(
           });
           d.offers.push({
             product: offer.product,
+            item,
             price: offer.price,
+            pack: offer.pack_qty ? `${String(offer.pack_qty).replace(".", ",")} ${offer.pack_unit ?? ""}`.trim() : "",
+            conditions: offer.conditions ?? "",
             valid_to: offer.valid_to,
             source: hostOf(offer.source_url),
+            url: offer.source_url,
             verified: verdict.verified,
+            method: verdict.method,
             reason: verdict.reason,
             saved: inserted ? "uloženo" : "už uloženo",
           });
+          summary.found++;
           if (inserted) summary.saved++;
           else summary.duplicates++;
           if (verdict.verified) summary.verified++;
           else summary.unverified++;
         };
 
-        const accept = (offer: RawOffer, d: ChainDiag): boolean => {
-          if (offer.valid_to < today) {
-            d.rejected.push({ product: offer.product, reason: `akce skončila ${offer.valid_to}` });
-            return false;
-          }
-          if (offer.valid_to > addDays(today, 31)) {
-            d.rejected.push({ product: offer.product, reason: `nepravděpodobná platnost do ${offer.valid_to}` });
-            return false;
-          }
-          return true;
-        };
-
         for (const chain of chainIds) {
-          const todo = todoByChain.get(chain) ?? [];
           const d: ChainDiag = {
-            chain, name: CHAINS[chain].name, cached: todo.length === 0,
-            pages: [], ai: [], offers: [], rejected: [], errors: [],
+            chain, name: CHAINS[chain].name, cached: false,
+            sources: [], pages: [], ai: [], offers: [], rejected: [], errors: [],
           };
           summary.diag.push(d);
-          if (todo.length === 0) continue;
+          const keys = new Map(products.map((p) => [productKey(p), p]));
+
+          // 1) Zdroje řetězce: aktuální letáky a data (zdarma, bez AI).
+          const src = await loadSources(chain, fetchImpl, today);
+          for (const l of src.log) d.pages.push({ url: l.url, status: l.status, chars: l.chars, matched: [], note: l.note });
+          const key = flyersKey(src);
+          const sourceOk = src.flyers.length > 0 || src.offers.length > 0;
+          if (!sourceOk) d.errors.push("aktuální leták ani data obchodu se nepodařilo stáhnout");
+
+          // 2) Mezipaměť: stejný produkt + stejné letáky už se nečtou znovu.
+          const done = force || !sourceOk
+            ? new Map<string, { status: string; day: string }>()
+            : await db.scanned(chain, [...keys.keys()], addDays(today, -21));
+          const todo = [...keys.entries()].filter(([k]) => done.get(k)?.status !== `ok:${key}`);
+          summary.cached += keys.size - todo.length;
           const names = todo.map(([, p]) => p);
-          let complete = true; // vše proběhlo bez chyby → smí do mezipaměti
-          let found = 0;
-
-          // 1) Oficiální stránky řetězce + Gemini jen čte text (zdarma).
-          const pages = pagesByChain.get(chain) ?? [];
-          let pageOk = false;
-          for (const page of pages) {
-            const { excerpt, matched } = page.text ? excerptsFor(page.text, names) : { excerpt: "", matched: [] };
-            d.pages.push({ url: page.url, status: page.status, chars: page.text.length, matched, note: page.note });
-            if (page.text) pageOk = true;
-            if (!excerpt) continue;
-            if (!gemini.configured) {
-              d.errors.push("chybí klíč Gemini – stránku nemá kdo přečíst");
-              complete = false;
-              break;
-            }
-            if (!canAsk(gemini)) {
-              d.errors.push("denní limit Gemini vyčerpán");
-              complete = false;
-              break;
-            }
-            gemini.usedToday++;
-            summary.provider = "gemini";
-            try {
-              const prompt = extractPrompt(chain, matched, today, page.url, excerpt, validityHints(page.text));
-              const r = await extractFromPage(env, prompt, page.url, fetchImpl);
-              d.ai.push(r.diag);
-              d.rejected.push(...r.rejected);
-              for (const offer of r.offers) {
-                found++;
-                if (!accept(offer, d)) continue;
-                const verdict = await verifyOffer(chain, offer, null, today, fetchImpl, page.text);
-                await save(chain, offer, verdict, "gemini", d);
-              }
-            } catch (e) {
-              const err = e as AiError;
-              d.ai.push({ mode: "stránka", model: env.geminiExtractModel, status: "chyba", code: err.code, error: err.message });
-              d.errors.push(err.message);
-              complete = false;
-            }
+          if (src.offers.length) {
+            d.sources.push({ kind: "data", title: `Akční položky na webu ${CHAINS[chain].name}`, url: src.offers[0].source_url.replace(/\/products\/.*/, "/nabidky"), valid_from: null, valid_to: null, size: src.offers.length, text: true, picked: [] });
           }
-          if (pages.length > 0 && !pageOk) d.errors.push("žádnou stránku akcí řetězce se nepodařilo stáhnout");
+          if (todo.length === 0) {
+            d.cached = true;
+            for (const f of src.flyers) d.sources.push({ kind: "leták", title: f.title, url: f.url, valid_from: f.validFrom, valid_to: f.validTo, size: f.pages.length, text: f.pages.some((p) => !!p.text), picked: [] });
+            continue;
+          }
+          let complete = sourceOk;
 
-          // 2) Vyhledávání Google – jen když ze stránek nic není a klíč ho zdarma umí.
-          if (found === 0) {
-            const provider = chooseProvider(providers);
-            const useSearch = provider && (provider.id === "openai" || !searchOff);
-            if (!provider) {
-              if (!gemini.configured) summary.errors.push("no_provider");
+          // 3) Strukturovaná data webu (Penny): přesné ceny bez AI.
+          let fromData = 0;
+          for (const offer of src.offers) {
+            const item = names.find((n) => productMatches(n, `${offer.product}`));
+            if (!item || offer.valid_to < today || (offer.valid_from && offer.valid_from > addDays(today, 7))) continue;
+            fromData++;
+            await save(chain, offer, item, { verified: true, method: "data", reason: "cena z dat oficiálního webu obchodu" }, "web", d);
+          }
+          if (src.offers.length) {
+            d.ai.push({ mode: "data", model: "bez AI", status: "ok", offers: fromData, pages: `${src.offers.length} akčních položek na webu`, note: "" });
+          }
+
+          // 4) Letáky: Gemini čte obrázky stran; cena se ověří textem strany nebo druhým čtením.
+          for (const flyer of src.flyers) {
+            const blind = !flyer.pages.some((p) => (p.text ?? "").length > 30);
+            const picked = pickPages(flyer, names, blind ? MAX_PAGES_BLIND : MAX_PAGES_TEXT);
+            d.sources.push({
+              kind: "leták", title: flyer.title, url: flyer.url, valid_from: flyer.validFrom, valid_to: flyer.validTo,
+              size: flyer.pages.length, text: !blind, picked: picked.map((p) => p.page.n),
+            });
+            if (!flyer.validTo) {
+              d.errors.push(`${flyer.title}: nepodařilo se zjistit platnost letáku`);
               complete = false;
-            } else if (useSearch) {
-              provider.usedToday++;
-              summary.provider = summary.provider ?? provider.id;
-              try {
-                const prompt = promptFor(chain, names, today);
-                const r = provider.id === "gemini"
-                  ? await askGemini(env, prompt, fetchImpl)
-                  : await askOpenAI(env, prompt, fetchImpl);
+              continue;
+            }
+            if (picked.length === 0) continue; // text letáku položky nezmiňuje – není co číst
+            const batches: { page: FlyerPage; items: string[] }[][] = [];
+            for (let i = 0; i < picked.length; i += BATCH) batches.push(picked.slice(i, i + BATCH));
+
+            const results = await inParallel(batches.map((batch) => async () => {
+              const label = `${flyer.title}, str. ${batch.map((b) => b.page.n).join(", ")}`;
+              const got = await Promise.all(batch.map((b) => fetchImage(chain, b.page.image, fetchImpl)));
+              const ok = batch.filter((_, i) => typeof got[i] !== "string");
+              const images = got.filter((g): g is Img => typeof g !== "string");
+              const bad = got.filter((g): g is string => typeof g === "string");
+              if (bad.length) {
+                d.errors.push(`${label}: ${bad.length}× ${bad[0]}`);
+                complete = false;
+              }
+              if (ok.length === 0) return [] as FlyerOffer[];
+              // Velké obrázky (COOP, JIP) rozdělit, aby se jedno čtení vešlo do limitu.
+              const groups: number[][] = [];
+              let size = 0;
+              ok.forEach((_, i) => {
+                const len = images[i].data.length;
+                if (groups.length === 0 || size + len > 7_500_000) {
+                  groups.push([]);
+                  size = 0;
+                }
+                groups[groups.length - 1].push(i);
+                size += len;
+              });
+              const found: FlyerOffer[] = [];
+              for (const g of groups) {
+                const part = g.map((i) => ok[i]);
+                const partLabel = `${flyer.title}, str. ${part.map((b) => b.page.n).join(", ")}`;
+                const items = [...new Set(part.flatMap((b) => b.items))];
+                const r = await ask(d, "leták", partLabel, () =>
+                  readFlyerPages(env, flyer, part.map((b) => b.page), g.map((i) => images[i]), items, today, fetchImpl, deadline));
+                if (!r) {
+                  complete = false;
+                  continue;
+                }
                 d.ai.push(r.diag);
                 d.rejected.push(...r.rejected);
-                for (const offer of r.offers) {
-                  found++;
-                  if (!accept(offer, d)) continue;
-                  const verdict = await verifyOffer(chain, offer, r.evidence, today, fetchImpl);
-                  await save(chain, offer, verdict, provider.id, d);
-                }
-              } catch (e) {
-                const err = e as AiError;
-                d.ai.push({
-                  mode: "vyhledávání",
-                  model: provider.id === "gemini" ? env.geminiModel : env.openaiModel,
-                  status: "chyba",
-                  code: err.code,
-                  error: err.message,
-                });
-                if (provider.id === "gemini" && ["model_unavailable", "search_not_free", "quota", "forbidden", "bad_key"].includes(err.code)) {
-                  searchOff = err.code;
-                }
-                // Selhání vyhledávání nevadí, pokud stránky proběhly v pořádku.
-                if (!pageOk) {
-                  d.errors.push(err.message);
-                  complete = false;
-                }
+                if (r.diag.note) complete = false;
+                found.push(...r.offers);
               }
-            } else {
-              d.ai.push({ mode: "vyhledávání", model: env.geminiModel, status: "chyba", code: searchOff, error: "přeskočeno – vyhledávání Google není pro tento klíč zdarma dostupné" });
-              if (!pageOk) complete = false;
+              return found;
+            }), 2);
+
+            // Ověření: nejdřív text téže strany, jinak kontrolní čtení strany.
+            const offers = results.flat().filter((o) => {
+              if (o.valid_to < today) {
+                d.rejected.push({ product: o.product, reason: `akce skončila ${o.valid_to}` });
+                return false;
+              }
+              return true;
+            });
+            const verdicts = new Map<FlyerOffer, Verdict>();
+            const byPage = new Map<number, FlyerOffer[]>();
+            for (const o of offers) {
+              const page = flyer.pages.find((p) => p.n === o.page)!;
+              if (verifiedByText(page, o.product, o.price)) {
+                verdicts.set(o, { verified: true, method: "leták-text", reason: `cena stojí v textu letáku u názvu zboží (str. ${o.page})` });
+              } else {
+                byPage.set(o.page, [...(byPage.get(o.page) ?? []), o]);
+              }
+            }
+            await inParallel([...byPage.entries()].map(([n, list]) => async () => {
+              const page = flyer.pages.find((p) => p.n === n)!;
+              const label = `${flyer.title}, str. ${n}`;
+              const fail = (reason: string) => {
+                for (const o of list) verdicts.set(o, { verified: false, method: "", reason });
+              };
+              const img = await fetchImage(chain, page.zoom ?? page.image, fetchImpl);
+              if (typeof img === "string") return fail(`kontrolní čtení se nepovedlo (${img})`);
+              const asked = list.map((o, i) => ({ id: i + 1, product: o.product, label: o.label ?? "", conditions: o.conditions ?? "" }));
+              const prices = await ask(d, "kontrola", label, () => checkFlyerPage(env, flyer, page, img, asked, fetchImpl, deadline));
+              if (!prices) {
+                complete = false;
+                return fail("kontrolní čtení letáku neproběhlo");
+              }
+              let agreed = 0;
+              list.forEach((o, i) => {
+                const p = prices.get(i + 1);
+                if (typeof p === "number" && Math.abs(p - o.price) < 0.005) {
+                  agreed++;
+                  verdicts.set(o, { verified: true, method: "leták-2×", reason: `cenu potvrdilo druhé nezávislé čtení letáku (str. ${n})` });
+                } else {
+                  verdicts.set(o, {
+                    verified: false, method: "",
+                    reason: typeof p === "number"
+                      ? `druhé čtení letáku vyšlo jinak (${String(p).replace(".", ",")} Kč)`
+                      : "druhé čtení letáku cenu nenašlo",
+                  });
+                }
+              });
+              d.ai.push({ mode: "kontrola", model: env.geminiExtractModel, status: "ok", pages: label, offers: agreed, note: agreed === list.length ? "" : `shoda ${agreed} z ${list.length}` });
+            }), 2);
+            for (const o of offers) {
+              await save(chain, o, o.item, verdicts.get(o) ?? { verified: false, method: "", reason: "neověřeno" }, "gemini", d);
             }
           }
 
-          summary.found += found;
           summary.scanned += todo.length;
           summary.rejected += d.rejected.length;
           for (const e of d.errors) summary.errors.push(`${chain}: ${e}`);
-          if (complete) {
-            await db.markScanned(chain, todo.map(([k]) => k), today, summary.provider ?? "", "ok", found)
+          if (complete && d.errors.length === 0) {
+            await db.markScanned(chain, todo.map(([k]) => k), today, summary.provider ?? "web", `ok:${key}`, d.offers.length)
               .catch(() => {});
           }
         }
 
-        if (gemini.usedToday !== startUsage.gemini) await db.setUsage("gemini", today, gemini.usedToday).catch(() => {});
-        if (providers[1].usedToday !== startUsage.openai) {
-          await db.setUsage("openai", today, providers[1].usedToday).catch(() => {});
-        }
-        if (searchOff) summary.errors.push(`search:${searchOff}`);
+        if (gemini.usedToday !== startUsage) await db.setUsage("gemini", today, gemini.usedToday).catch(() => {});
+        if (!env.geminiKey) summary.errors.push("no_provider");
         return reply(200, summary);
       }
 
@@ -1201,6 +2006,10 @@ export async function handle(
   }
 }
 
+const VERSION = "letaky-2";
+const NO_KEY = "chybí klíč Gemini (GEMINI_API_KEY) – leták nemá kdo přečíst";
+const NO_TIME = "nestihlo se dočíst všechny strany – spusťte hledání znovu, pokračuje se tam, kde se skončilo";
+
 export function serviceKeyFrom(get: (name: string) => string | undefined): string {
   const legacy = get("SUPABASE_SERVICE_ROLE_KEY");
   if (legacy) return legacy;
@@ -1219,27 +2028,17 @@ export function serviceKeyFrom(get: (name: string) => string | undefined): strin
 
 export function envFromDeno(get: (name: string) => string | undefined): Env {
   const limit = Number(get("GEMINI_DAILY_LIMIT") ?? "");
-  let pages: Record<string, string[]> | undefined;
-  try {
-    const p = JSON.parse(get("PRICES_PAGES") ?? "");
-    if (p && typeof p === "object") pages = p;
-  } catch {
-    // výchozí stránky
-  }
   return {
     supabaseUrl: (get("SUPABASE_URL") ?? "").replace(/\/+$/, ""),
     anonKey: get("SUPABASE_ANON_KEY") ?? "",
     serviceKey: serviceKeyFrom(get),
     geminiKey: get("GEMINI_API_KEY") ?? "",
-    // Vyhledávání Google je zdarma (500 dotazů/den) jen u modelů 2.5;
-    // nové klíče k nim Google nepouští – pak se použijí jen stránky.
     geminiModel: get("GEMINI_MODEL") || "gemini-2.5-flash-lite",
     geminiExtractModel: get("GEMINI_EXTRACT_MODEL") || "gemini-3.5-flash-lite",
     geminiDailyLimit: Number.isFinite(limit) && limit > 0 ? limit : 400,
     openaiKey: get("OPENAI_API_KEY") ?? "",
     openaiModel: get("OPENAI_PRICES_MODEL") || "gpt-5-mini",
     allowPaid: (get("PRICES_ALLOW_PAID") ?? "").toLowerCase() === "true",
-    pages,
   };
 }
 
