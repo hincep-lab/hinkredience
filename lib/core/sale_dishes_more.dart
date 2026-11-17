@@ -345,7 +345,7 @@ const moreSaleDishes = <Dish>[
       'Maso zalijte asi 3 litry studené vody, přiveďte k varu a sbírejte pěnu.',
       'Přidejte cibuli rozpůlenou a opečenou nasucho, kořenovou zeleninu, pepř a nové koření, osolte.',
       'Vařte zvolna 2 hodiny, voda se má jen lehce vlnit.',
-      'Vývar sceďte, maso obero a zeleninu nakrájejte. Nudle uvařte zvlášť a vše vraťte do polévky.',
+      'Vývar sceďte, maso oberte a zeleninu nakrájejte. Nudle uvařte zvlášť a vše vraťte do polévky.',
     ],
   ),
   Dish(
@@ -795,7 +795,7 @@ const moreSaleDishes = <Dish>[
     steps: [
       'Brambory na kostky a houby vařte v 1,2 litru osolené vody s kmínem 20 minut.',
       'Smetanu rozmíchejte s moukou a vlijte do polévky, 5 minut povařte.',
-      'Do mírně vroucí polévky opatrně vklepněte vejce a nechte 3–4 minuty ztuhnout (vejce se ztracenými žloutky).',
+      'Do mírně vroucí polévky opatrně vklepněte vejce a nechte je 3–4 minuty ztuhnout (ztracená vejce).',
       'Dochuťte octem, solí a nasekaným koprem, na závěr přidejte máslo.',
     ],
   ),
