@@ -228,6 +228,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               SizedBox(
                 height: 116,
                 child: ListView(
+                  key: const PageStorageKey('home-features-row'),
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   children: [
@@ -619,6 +620,7 @@ class _PrepRow extends StatelessWidget {
     return SizedBox(
       height: 40,
       child: ListView.separated(
+        key: const PageStorageKey('home-prep-row'),
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: PrepMethod.values.length,
@@ -685,6 +687,7 @@ class _FilterRow extends StatelessWidget {
           child: SizedBox(
             height: 40,
             child: ListView.separated(
+              key: PageStorageKey('home-filter-row-$title'),
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.only(left: 16, right: 28),
               itemCount: children.length,
@@ -1132,6 +1135,7 @@ class _Recommended extends StatelessWidget {
         SizedBox(
           height: 214,
           child: ListView.separated(
+            key: const PageStorageKey('home-recommended-row'),
             scrollDirection: Axis.horizontal,
             clipBehavior: Clip.none,
             itemCount: items.length,

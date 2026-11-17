@@ -480,6 +480,7 @@ class FavoritesStrip extends StatelessWidget {
     return SizedBox(
       height: 196,
       child: ListView.separated(
+        key: const PageStorageKey('home-favorites-row'),
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: recipes.length,
