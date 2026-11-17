@@ -93,7 +93,7 @@ void main() {
   test('popisek platnosti akce', () {
     expect(validityLabel(DateTime(2026, 11, 17), today), 'akce končí dnes');
     expect(validityLabel(DateTime(2026, 11, 18), today), 'akce končí zítra');
-    expect(validityLabel(DateTime(2026, 11, 20), today), 'akce do čt 20. 11.');
+    expect(validityLabel(DateTime(2026, 11, 20), today), 'akce do pá 20. 11.');
   });
 
   test('neověřené a prošlé akce se nepočítají', () {
