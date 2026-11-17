@@ -138,14 +138,7 @@ class LocalNotificationAlerts implements CookAlerts {
             title: 'Časovač doběhl',
             body: timer.label,
             scheduledDate: tz.TZDateTime.from(endsAt.toUtc(), tz.UTC),
-            notificationDetails: const NotificationDetails(
-              android: _channel,
-              iOS: DarwinNotificationDetails(
-                presentAlert: true,
-                presentSound: true,
-                interruptionLevel: InterruptionLevel.timeSensitive,
-              ),
-            ),
+            notificationDetails: _details,
             androidScheduleMode: mode,
           )
           .timeout(_patience);
