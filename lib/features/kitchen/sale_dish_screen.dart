@@ -79,7 +79,7 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
           ],
           const SizedBox(height: 6),
           Text(
-            '${dish.minutes} min · ${Dish.servings} porce'
+            '${dish.minutes > 0 ? '${dish.minutes} min · ' : ''}${Dish.servings} porce'
             '${dish.temperature == null ? '' : ' · trouba ${dish.temperature} °C'}'
             ' · v akci ${onSale.length} z ${widget.item.total} surovin',
             style: const TextStyle(color: AppColors.copperGold),

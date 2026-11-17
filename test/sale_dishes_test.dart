@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hinkredience/core/best_buy.dart';
 import 'package:hinkredience/core/sale_dishes.dart';
+import 'package:hinkredience/core/sale_ideas.dart';
 
 PriceOffer offer(
   String chain,
@@ -115,5 +116,54 @@ void main() {
       {recipe.id, ...recipe.ingredients.map((i) => i.id)}.length,
       1 + recipe.ingredients.length,
     );
+  });
+
+  test('návrh od Gemini ukáže jen skutečné akce', () {
+    final ideas = SaleIdeas.fromJson({
+      'model': 'gemini-3.5-flash-lite',
+      'rejected': ['Palačinky: nevyužívá žádnou akci'],
+      'ideas': [
+        {
+          'title': 'Vepřová pečeně na cibulce',
+          'category': 'Maso',
+          'minutes': 120,
+          'temperature_c': 170,
+          'ingredients': [
+            {
+              'name': 'Vepřová pečeně',
+              'quantity': 1,
+              'unit': 'kg',
+              'offer': {
+                'id': '1',
+                'chain': 'tesco',
+                'product': 'Vepřová pečeně bez kosti',
+                'price': 79.9,
+                'regular_price': 198.9,
+                'valid_to': '2026-11-17',
+              },
+            },
+            {'name': 'Cibule', 'quantity': 3, 'unit': 'ks', 'offer': null},
+            {'name': 'Sůl', 'quantity': null, 'unit': ''},
+          ],
+          'steps': ['Maso osolte.', 'Pečte.'],
+        },
+        {
+          'title': 'Bez akce',
+          'ingredients': [
+            {'name': 'Mouka'},
+          ],
+          'steps': ['Nic.'],
+        },
+      ],
+    });
+    expect(ideas.ideas.length, 1);
+    final idea = ideas.ideas.first;
+    expect(idea.onSale.length, 1);
+    expect(idea.onSale.values.first.price, 79.9);
+    expect(idea.onSale.values.first.verified, isTrue);
+    expect(idea.savings, closeTo(119, 0.01));
+    expect(idea.dish.temperature, 170);
+    expect(idea.dish.ingredients.length, 3);
+    expect(ideas.rejected.length, 1);
   });
 }

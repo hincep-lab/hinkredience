@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/best_buy.dart';
+import '../core/sale_ideas.dart';
 
 /// Výsledek hledání akcí na serveru včetně diagnostiky (co se stáhlo, co
 /// vrátila AI, co a proč bylo odmítnuto a co se uložilo).
@@ -117,6 +118,27 @@ class PriceService {
     } catch (_) {
       return cached();
     }
+  }
+
+  /// Nechá Gemini (zdarma) vymyslet recepty z uložených ověřených akcí.
+  Future<SaleIdeas> suggestRecipes({
+    String wish = '',
+    List<String> avoid = const [],
+    int count = 3,
+  }) async {
+    final response = await _client.functions.invoke(
+      'sale-ideas',
+      body: {
+        'action': 'suggest',
+        'count': count,
+        if (wish.trim().isNotEmpty) 'wish': wish.trim(),
+        if (avoid.isNotEmpty) 'avoid': avoid,
+      },
+    );
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? SaleIdeas.fromJson(data)
+        : const SaleIdeas(error: 'Server nevrátil návrhy.');
   }
 
   List<PriceOffer> cached() {

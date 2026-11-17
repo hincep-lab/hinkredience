@@ -28,6 +28,49 @@ class SaleRecipesScreen extends ConsumerStatefulWidget {
 class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
   bool _busy = false;
   PriceRefresh? _last;
+  bool _thinking = false;
+  final _ideas = <DishOnSale>[];
+  String _ideasNote = '';
+  final _wish = TextEditingController();
+
+  @override
+  void dispose() {
+    _wish.dispose();
+    super.dispose();
+  }
+
+  /// Gemini (zdarma) vymyslí další recepty z uložených ověřených akcí;
+  /// už navržená jídla se posílají, aby se neopakovala.
+  Future<void> _invent() async {
+    final service = ref.read(priceServiceProvider);
+    if (service == null) {
+      showMessage(context, 'Návrhy receptů potřebují přihlášení k účtu.');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _thinking = true;
+      _ideasNote = '';
+    });
+    try {
+      final result = await service.suggestRecipes(
+        wish: _wish.text,
+        avoid: [for (final d in _ideas) d.dish.title],
+      );
+      if (!mounted) return;
+      setState(() {
+        _ideas.insertAll(0, result.ideas);
+        _ideasNote = result.ideas.isEmpty
+            ? result.error
+            : 'Nové návrhy: ${result.ideas.length}'
+                  '${result.rejected.isEmpty ? '' : ' · zahozeno ${result.rejected.length} (bez skutečné akce)'}';
+      });
+    } catch (error) {
+      if (mounted) setState(() => _ideasNote = 'Návrh se nepovedl: $error');
+    } finally {
+      if (mounted) setState(() => _thinking = false);
+    }
+  }
 
   Future<void> _search({bool force = false}) async {
     final service = ref.read(priceServiceProvider);
@@ -168,6 +211,57 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
               ),
               const SizedBox(height: 8),
             ],
+            const SectionTitle('Vymyslet recept z akcí'),
+            HkCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Gemini (zdarma) vymyslí recepty z ověřených akcí. Ceny '
+                    'a obchody doplní aplikace jen ze skutečných akcí.',
+                    style: muted,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _wish,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _thinking ? null : _invent(),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Přání (nepovinné)',
+                      hintText: 'např. něco rychlého, zapečené, bez knedlíků',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  FilledButton.tonalIcon(
+                    onPressed: _thinking ? null : _invent,
+                    icon: _thinking
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_awesome_outlined),
+                    label: Text(
+                      _thinking
+                          ? 'Vymýšlím… (do minuty)'
+                          : _ideas.isEmpty
+                          ? 'Vymyslet recepty'
+                          : 'Vymyslet další',
+                    ),
+                  ),
+                  if (_ideasNote.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(_ideasNote, style: muted),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final d in _ideas)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _DishCard(item: d),
+              ),
             const SectionTitle('Co z toho uvařit'),
             if (dishes.isEmpty)
               const Text(
@@ -237,7 +331,10 @@ class _DishCard extends StatelessWidget {
               ),
             ],
           ),
-          Text('${dish.minutes} min · ${Dish.servings} porce', style: muted),
+          Text(
+            '${dish.minutes > 0 ? '${dish.minutes} min · ' : ''}${Dish.servings} porce',
+            style: muted,
+          ),
           const SizedBox(height: 4),
           for (final entry in item.onSale.entries)
             Text(
