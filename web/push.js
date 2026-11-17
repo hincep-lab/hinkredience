@@ -187,6 +187,27 @@
     },
   };
 
+  // ---------------------------------------------------- aktualizace
+
+  window.hinkUpdate = {
+    /** Text z adresy bez mezipaměti prohlížeče (null = nedostupné). */
+    async fetchText(url) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        return res.ok ? await res.text() : null;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    /** Načte novou verzi (obejde mezipaměť stránky). */
+    reload() {
+      const url = new URL(location.href);
+      url.searchParams.set('v', Date.now().toString(36));
+      location.replace(url.toString());
+    },
+  };
+
   // Když už jsou oznámení povolená, ať je service worker vždy připravený.
   if (supported() && Notification.permission === 'granted') {
     registration().catch(() => {});

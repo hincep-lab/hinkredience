@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
@@ -116,46 +115,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  if (ref.watch(appUpdateProvider).value
-                      case final update?) ...[
-                    HkCard(
-                      onTap: () => launchUrl(
-                        Uri.parse(update.apkUrl),
-                        mode: LaunchMode.externalApplication,
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.system_update_rounded,
-                            color: AppColors.copperGold,
-                            size: 30,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Je k dispozici nová verze',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
-                                ),
-                                Text(
-                                  'Sestavení ${update.build} · klepněte, '
-                                  'stáhne se a pak ho otevřete',
-                                  style: const TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 12.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Icon(Icons.download_rounded),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                  ],
+                  const UpdateCard(),
                   if (open != null && open.recipeId != null) ...[
                     HkCard(
                       onTap: () => context.push(Routes.cook(open.recipeId!)),
@@ -508,6 +468,108 @@ class _Recommended extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Karta chytré aktualizace: stahování na pozadí, „Nainstalovat“, nebo
+/// u webové verze „Načíst novou verzi“. Bez nové verze se nezobrazí.
+class UpdateCard extends ConsumerWidget {
+  const UpdateCard({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final update = ref.watch(appUpdaterProvider);
+    final updater = ref.read(appUpdaterProvider.notifier);
+    String mb(int bytes) => '${(bytes / 1048576).toStringAsFixed(0)} MB';
+    final (
+      String title,
+      String detail,
+      IconData icon,
+      VoidCallback? onTap,
+    ) = switch (update.phase) {
+      UpdatePhase.none => ('', '', Icons.check, null),
+      UpdatePhase.waitingForWifi => (
+        'Nová verze ${update.build}',
+        'Stáhne se sama na Wi-Fi'
+            '${update.size > 0 ? ' (${mb(update.size)})' : ''}'
+            ' · klepnutím stáhnete hned',
+        Icons.wifi_rounded,
+        updater.downloadNow,
+      ),
+      UpdatePhase.downloading => (
+        'Stahuji novou verzi ${update.build}…',
+        update.progress == null
+            ? 'na pozadí, aplikaci můžete dál používat'
+            : '${(update.progress! * 100).round()} % · na pozadí',
+        Icons.downloading_rounded,
+        null,
+      ),
+      UpdatePhase.ready => (
+        'Nová verze ${update.build} je připravená',
+        update.message.isNotEmpty
+            ? update.message
+            : 'Klepněte na Nainstalovat a potvrďte instalaci',
+        Icons.system_update_rounded,
+        updater.install,
+      ),
+      UpdatePhase.failed => (
+        'Novou verzi se nepodařilo stáhnout',
+        update.message,
+        Icons.error_outline_rounded,
+        updater.downloadNow,
+      ),
+      UpdatePhase.webReload => (
+        'Je venku nová verze ${update.build}',
+        'Načte se sama při dalším návratu do aplikace · klepnutím hned',
+        Icons.refresh_rounded,
+        updater.reloadNow,
+      ),
+    };
+    if (update.phase == UpdatePhase.none) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: HkCard(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: AppColors.copperGold, size: 30),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        detail,
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (update.phase == UpdatePhase.ready)
+                  FilledButton(
+                    onPressed: updater.install,
+                    child: const Text('Nainstalovat'),
+                  ),
+              ],
+            ),
+            if (update.phase == UpdatePhase.downloading) ...[
+              const SizedBox(height: 10),
+              LinearProgressIndicator(value: update.progress),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

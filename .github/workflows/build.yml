@@ -157,8 +157,11 @@ jobs:
           path: build/web
       - name: Informace o nejnovější verzi pro aplikaci
         run: |
-          printf '{"build": %s, "apk": "hinkredience.apk", "branch": "%s", "commit": "%s"}\n' \
-            "${{ github.run_number }}" "${{ github.ref_name }}" "${{ github.sha }}" > build/web/apk.json
+          # Kontrolní součet a velikost: aplikace si staženou verzi ověří.
+          sha=$(sha256sum build/web/hinkredience.apk | cut -d' ' -f1)
+          size=$(stat -c %s build/web/hinkredience.apk)
+          printf '{"build": %s, "apk": "hinkredience.apk", "sha256": "%s", "size": %s, "branch": "%s", "commit": "%s"}\n' \
+            "${{ github.run_number }}" "$sha" "$size" "${{ github.ref_name }}" "${{ github.sha }}" > build/web/apk.json
           cat build/web/apk.json
       - name: Kontrola – žádné tajné klíče v sestavení
         run: |
