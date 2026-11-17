@@ -1,0 +1,839 @@
+/// „Uvař z akcí“: aplikace projde letáky v Sušici na základní suroviny
+/// (maso, smetana, brambory, sýr…) a z toho, co je zrovna v akci, nabídne
+/// osvědčená česká jídla – třeba zapečené maso s bramborami a smetanou.
+///
+/// Bez AI a zdarma: jídla jsou vestavěná, ceny jen ověřené z letáků.
+library;
+
+import '../data/recipe.dart';
+import 'best_buy.dart' show PriceOffer;
+import 'kitchen_math.dart' show foldText;
+import 'sale_recipes.dart' show usableOffers;
+
+/// Skupina surovin, kterou hlídáme v letácích.
+class SaleGroup {
+  const SaleGroup(
+    this.id,
+    this.label,
+    this.keys, {
+    this.exclude = const [],
+    this.search = const [],
+  });
+
+  final String id;
+
+  /// Jak skupinu ukázat („Vepřové maso“).
+  final String label;
+
+  /// Kusy slov (bez diakritiky), podle kterých se položka z letáku pozná.
+  final List<String> keys;
+
+  /// Když název obsahuje některé z těchto slov, do skupiny nepatří
+  /// (např. kuřecí šunka není kuřecí maso).
+  final List<String> exclude;
+
+  /// Co se posílá k hledání do letáků.
+  final List<String> search;
+}
+
+/// Co nikdy není surovina na vaření (krmiva, hotovky, pomazánky…).
+const _never = [
+  'krmiv',
+  'pro psy',
+  'pro kocky',
+  'granul',
+  'kapsick',
+  'pomazank',
+  'chips',
+  'bujon',
+  'polevk',
+  'hotov',
+  'instant',
+  'zmrzlin',
+  'jogurt',
+  'dezert',
+  'pudink',
+  'cokolad',
+  'susenk',
+  'oplat',
+  'spray',
+];
+
+const _meatProducts = [
+  'sunk',
+  'salam',
+  'park',
+  'pastik',
+  'nugget',
+  'klobas',
+  'spekac',
+  'uzen',
+  'slanin',
+  'debrec',
+  'vurt',
+  'kabanos',
+  'jatr',
+  'jater',
+];
+
+const saleGroups = <SaleGroup>[
+  SaleGroup(
+    'kure',
+    'Kuřecí maso',
+    ['kurec', 'kure '],
+    exclude: _meatProducts,
+    search: ['kuřecí'],
+  ),
+  SaleGroup(
+    'veprove',
+    'Vepřové maso',
+    ['vepr', 'krkovic', 'kotlet', 'bucek', 'panenk'],
+    exclude: [..._meatProducts, 'mlet', 'sadlo', 'skvarky', 'kolen'],
+    search: ['vepřové'],
+  ),
+  SaleGroup(
+    'hovezi',
+    'Hovězí maso',
+    ['hovezi'],
+    exclude: [..._meatProducts, 'mlet', 'vyvar', 'konzerv'],
+    search: ['hovězí'],
+  ),
+  SaleGroup(
+    'mlete',
+    'Mleté maso',
+    ['mlete', 'mlety', 'mleta'],
+    exclude: ['kava', 'mak', 'orech', 'pepr', 'paprika', 'kmin'],
+    search: ['mleté maso'],
+  ),
+  SaleGroup('slanina', 'Slanina', ['slanin'], search: ['slanina']),
+  SaleGroup(
+    'klobasa',
+    'Klobása',
+    ['klobas', 'klobask', 'spekac'],
+    search: ['klobása'],
+  ),
+  SaleGroup('sunka', 'Šunka', ['sunk'], search: ['šunka']),
+  SaleGroup(
+    'smetana',
+    'Smetana',
+    ['smetan'],
+    exclude: ['zmrzlin', 'jogurt', 'kava', 'syr', 'tavene'],
+    search: ['smetana'],
+  ),
+  SaleGroup(
+    'syr',
+    'Sýr',
+    ['syr', 'eidam', 'gouda', 'emental', 'mozzarel', 'parmez', 'gran pad'],
+    exclude: ['tvaroh', 'cottage', 'tyncin', 'krem', 'pivo'],
+    search: ['sýr', 'eidam'],
+  ),
+  SaleGroup(
+    'maslo',
+    'Máslo',
+    ['maslo'],
+    exclude: ['arasid', 'kakao', 'bylink', 'cesnek'],
+    search: ['máslo'],
+  ),
+  SaleGroup(
+    'mleko',
+    'Mléko',
+    ['mleko'],
+    exclude: [
+      'kondenz',
+      'kokos',
+      'mandl',
+      'ovesn',
+      'sojov',
+      'cokolad',
+      'kakao',
+    ],
+    search: ['mléko'],
+  ),
+  SaleGroup(
+    'vejce',
+    'Vejce',
+    ['vejce'],
+    exclude: ['cokolad', 'kinder', 'nudle', 'testovin'],
+    search: ['vejce'],
+  ),
+  SaleGroup(
+    'brambory',
+    'Brambory',
+    ['brambor'],
+    exclude: [
+      'chips',
+      'hranolk',
+      'kase',
+      'knedl',
+      'krokety',
+      'lupinky',
+      'plack',
+      'pure',
+    ],
+    search: ['brambory'],
+  ),
+  SaleGroup(
+    'testoviny',
+    'Těstoviny',
+    [
+      'testovin',
+      'spaget',
+      'penne',
+      'vreten',
+      'kolinka',
+      'fusilli',
+      'tagliatel',
+      'farfalle',
+      'mrizk',
+    ],
+    exclude: ['hotov', 'salat'],
+    search: ['těstoviny', 'špagety'],
+  ),
+  SaleGroup(
+    'ryze',
+    'Rýže',
+    ['ryze'],
+    exclude: ['chleb', 'chlebic', 'nudle', 'mleko', 'ocet'],
+    search: ['rýže'],
+  ),
+  SaleGroup(
+    'zampiony',
+    'Žampiony',
+    ['zampion'],
+    exclude: ['konzerv', 'omack'],
+    search: ['žampiony'],
+  ),
+  SaleGroup(
+    'cibule',
+    'Cibule',
+    ['cibul'],
+    exclude: ['krouzk', 'smazen', 'susen'],
+    search: ['cibule'],
+  ),
+  SaleGroup(
+    'mrkev',
+    'Mrkev',
+    ['mrkev', 'mrkve'],
+    exclude: ['stav', 'dzus', 'salat'],
+    search: ['mrkev'],
+  ),
+];
+
+SaleGroup? saleGroupById(String id) {
+  for (final g in saleGroups) {
+    if (g.id == id) return g;
+  }
+  return null;
+}
+
+/// Co poslat do hledání v letácích (server jich najednou zvládne 20).
+List<String> saleSearchTerms() =>
+    [for (final g in saleGroups) ...g.search].take(20).toList();
+
+/// Do které skupiny položka z letáku patří (nebo null).
+String? groupOf(String product) {
+  final name = ' ${foldText(product)} ';
+  if (_never.any(name.contains)) return null;
+  for (final g in saleGroups) {
+    if (!g.keys.any(name.contains)) continue;
+    if (g.exclude.any(name.contains)) continue;
+    return g.id;
+  }
+  return null;
+}
+
+/// Nejlevnější platné ověřené akce podle skupin (nejlevnější první).
+Map<String, List<PriceOffer>> offersByGroup(
+  List<PriceOffer> offers,
+  DateTime today,
+) {
+  final out = <String, List<PriceOffer>>{};
+  for (final o in usableOffers(offers, today)) {
+    final group = groupOf(o.product);
+    if (group == null) continue;
+    (out[group] ??= []).add(o);
+  }
+  for (final list in out.values) {
+    list.sort((a, b) => a.price.compareTo(b.price));
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ jídla
+
+class DishIngredient {
+  const DishIngredient(this.name, this.quantity, this.unit, [this.group]);
+
+  final String name;
+  final double? quantity;
+  final String unit;
+
+  /// Skupina surovin z letáků, nebo null u věcí, které bývají doma
+  /// (sůl, mouka, koření…).
+  final String? group;
+}
+
+class Dish {
+  const Dish({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.minutes,
+    required this.ingredients,
+    required this.steps,
+    this.description = '',
+    this.temperature,
+    this.main = const [],
+  });
+
+  final String id;
+  final String title;
+  final String description;
+  final String category;
+  final int minutes;
+  final int? temperature;
+  final List<DishIngredient> ingredients;
+  final List<String> steps;
+
+  /// Hlavní suroviny – jídlo se nabídne, jen když je v akci aspoň jedna
+  /// z nich (aby se kvůli levné cibuli nenabízelo celé menu).
+  final List<String> main;
+
+  Set<String> get groups => {
+    for (final i in ingredients)
+      if (i.group != null) i.group!,
+  };
+
+  static const servings = 4;
+}
+
+/// Jídlo s tím, co z něj je teď v akci.
+class DishOnSale {
+  const DishOnSale(this.dish, this.onSale);
+
+  final Dish dish;
+
+  /// Skupina → nejlevnější ověřená akce.
+  final Map<String, PriceOffer> onSale;
+
+  int get total => dish.groups.length;
+
+  double get savings {
+    var sum = 0.0;
+    for (final o in onSale.values) {
+      final regular = o.regularPrice;
+      if (regular != null && regular > o.price) sum += regular - o.price;
+    }
+    return sum;
+  }
+}
+
+/// Jídla, ke kterým je teď v akci hlavní surovina; nejdřív ta s nejvíc
+/// surovinami v akci, pak s větší úsporou.
+List<DishOnSale> dishesFromSales(
+  List<PriceOffer> offers,
+  DateTime today, {
+  List<Dish> dishes = saleDishes,
+}) {
+  final groups = offersByGroup(offers, today);
+  if (groups.isEmpty) return const [];
+  final out = <DishOnSale>[];
+  for (final dish in dishes) {
+    final onSale = <String, PriceOffer>{
+      for (final g in dish.groups)
+        if (groups[g] case final list? when list.isNotEmpty) g: list.first,
+    };
+    final mainOnSale = dish.main.isEmpty
+        ? onSale.isNotEmpty
+        : dish.main.any(onSale.containsKey);
+    if (!mainOnSale) continue;
+    out.add(DishOnSale(dish, onSale));
+  }
+  out.sort((a, b) {
+    final byCount = b.onSale.length.compareTo(a.onSale.length);
+    if (byCount != 0) return byCount;
+    final byShare = (b.onSale.length / b.total).compareTo(
+      a.onSale.length / a.total,
+    );
+    if (byShare != 0) return byShare;
+    final bySavings = b.savings.compareTo(a.savings);
+    if (bySavings != 0) return bySavings;
+    return a.dish.title.compareTo(b.dish.title);
+  });
+  return out;
+}
+
+/// Jídlo jako recept do kuchařky (nové id pro recept, suroviny i kroky).
+Recipe dishToRecipe(
+  Dish dish, {
+  required String Function() newId,
+  required DateTime now,
+  String? ownerId,
+}) => Recipe(
+  id: newId(),
+  title: dish.title,
+  description: dish.description,
+  category: dish.category,
+  servings: Dish.servings.toDouble(),
+  totalMinutes: dish.minutes,
+  temperatures: [if (dish.temperature != null) 'Trouba ${dish.temperature} °C'],
+  notes: 'Navrženo z akcí v Sušici.',
+  createdAt: now,
+  updatedAt: now,
+  ownerId: ownerId,
+  ingredients: [
+    for (final i in dish.ingredients)
+      Ingredient(id: newId(), name: i.name, quantity: i.quantity, unit: i.unit),
+  ],
+  steps: [
+    for (final step in dish.steps) RecipeStep(id: newId(), instruction: step),
+  ],
+);
+
+const _i = DishIngredient.new;
+
+/// Vestavěná osvědčená jídla pro 4 osoby.
+const saleDishes = <Dish>[
+  Dish(
+    id: 'zapecene-veprove',
+    title: 'Zapečené vepřové s bramborami a smetanou',
+    description: 'Maso, brambory a cibule zapečené pod smetanou a sýrem.',
+    category: 'Maso',
+    minutes: 90,
+    temperature: 180,
+    main: ['veprove'],
+    ingredients: [
+      _i('Vepřová plec nebo krkovice', 700, 'g', 'veprove'),
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Smetana ke šlehání', 250, 'ml', 'smetana'),
+      _i('Sýr eidam strouhaný', 150, 'g', 'syr'),
+      _i('Cibule', 2, 'ks', 'cibule'),
+      _i('Česnek', 3, 'stroužky'),
+      _i('Sůl, pepř, kmín', null, ''),
+      _i('Olej nebo sádlo', 2, 'lžíce'),
+    ],
+    steps: [
+      'Maso nakrájejte na plátky asi 1 cm, lehce naklepejte, osolte, opepřete a posypte kmínem.',
+      'Na oleji maso krátce z obou stran opečte do zlatova a vyndejte.',
+      'Brambory oloupejte a nakrájejte na tenká kolečka, cibuli na půlkolečka.',
+      'Do vymazaného pekáče dejte polovinu brambor, osolte, navrstvěte maso a cibuli, zakryjte zbytkem brambor a osolte.',
+      'Smetanu smíchejte s prolisovaným česnekem a polijte jí brambory.',
+      'Zakryté pečte 50 minut na 180 °C.',
+      'Odkryjte, posypte sýrem a pečte dalších 15–20 minut, dokud brambory nezměknou a sýr nezezlátne.',
+    ],
+  ),
+  Dish(
+    id: 'kure-zampiony-smetana',
+    title: 'Kuřecí na žampionech se smetanou a rýží',
+    description: 'Rychlé kuřecí v krémové žampionové omáčce.',
+    category: 'Drůbež',
+    minutes: 35,
+    main: ['kure'],
+    ingredients: [
+      _i('Kuřecí prsa', 600, 'g', 'kure'),
+      _i('Žampiony', 300, 'g', 'zampiony'),
+      _i('Smetana na vaření nebo ke šlehání', 250, 'ml', 'smetana'),
+      _i('Rýže', 300, 'g', 'ryze'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Máslo', 20, 'g', 'maslo'),
+      _i('Sůl, pepř', null, ''),
+      _i('Petrželka', null, ''),
+    ],
+    steps: [
+      'Rýži propláchněte a uvařte podle návodu na obalu.',
+      'Kuřecí maso nakrájejte na nudličky, osolte a opepřete.',
+      'Na másle orestujte nadrobno nakrájenou cibuli, přidejte maso a opékejte, až zbělá.',
+      'Přidejte nakrájené žampiony a duste 8–10 minut, dokud nepustí vodu a ta se nevyvaří.',
+      'Zalijte smetanou, 3 minuty povařte, dochuťte solí a pepřem a posypte petrželkou.',
+      'Podávejte s rýží.',
+    ],
+  ),
+  Dish(
+    id: 'kure-paprika',
+    title: 'Kuře na paprice s těstovinami',
+    description: 'Klasika se sladkou paprikou a smetanou.',
+    category: 'Drůbež',
+    minutes: 45,
+    main: ['kure'],
+    ingredients: [
+      _i('Kuřecí stehna nebo prsa', 800, 'g', 'kure'),
+      _i('Cibule', 2, 'ks', 'cibule'),
+      _i('Smetana ke šlehání', 200, 'ml', 'smetana'),
+      _i('Těstoviny nebo noky', 400, 'g', 'testoviny'),
+      _i('Sladká mletá paprika', 2, 'lžíce'),
+      _i('Hladká mouka', 1, 'lžíce'),
+      _i('Olej', 2, 'lžíce'),
+      _i('Sůl', null, ''),
+    ],
+    steps: [
+      'Na oleji zpěňte nadrobno nakrájenou cibuli do zlatova.',
+      'Přidejte maso nakrájené na kousky, osolte a ze všech stran opečte.',
+      'Stáhněte z plotny, vmíchejte papriku (nesmí se připálit) a podlijte asi 300 ml vody.',
+      'Pod pokličkou duste do měkka – prsa 15 minut, stehna 35 minut.',
+      'Smetanu rozmíchejte s moukou, vlijte do omáčky a 5 minut povařte.',
+      'Mezitím uvařte těstoviny a podávejte s omáčkou.',
+    ],
+  ),
+  Dish(
+    id: 'kureci-stehna-pecena',
+    title: 'Pečená kuřecí stehna s bramborami',
+    description: 'Všechno na jednom plechu, skoro bez práce.',
+    category: 'Drůbež',
+    minutes: 70,
+    temperature: 200,
+    main: ['kure'],
+    ingredients: [
+      _i('Kuřecí stehna', 4, 'ks', 'kure'),
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Cibule', 2, 'ks', 'cibule'),
+      _i('Mrkev', 2, 'ks', 'mrkev'),
+      _i('Česnek', 4, 'stroužky'),
+      _i('Olej', 3, 'lžíce'),
+      _i('Sůl, kmín, sladká paprika', null, ''),
+    ],
+    steps: [
+      'Stehna osolte a potřete olejem smíchaným s paprikou a prolisovaným česnekem.',
+      'Brambory nakrájejte na měsíčky, cibuli na čtvrtky a mrkev na špalíčky; osolte, posypte kmínem a promíchejte s trochou oleje.',
+      'Zeleninu rozložte na plech, navrch dejte stehna kůží nahoru.',
+      'Pečte 50–60 minut na 200 °C, dokud kůže nezezlátne a brambory nezměknou.',
+    ],
+  ),
+  Dish(
+    id: 'kureci-rizky-salat',
+    title: 'Kuřecí řízky s bramborovým salátem',
+    description: 'Smažené řízky a poctivý bramborový salát.',
+    category: 'Drůbež',
+    minutes: 80,
+    main: ['kure', 'brambory'],
+    ingredients: [
+      _i('Kuřecí prsa', 600, 'g', 'kure'),
+      _i('Vejce', 4, 'ks', 'vejce'),
+      _i('Brambory varné typu A', 1, 'kg', 'brambory'),
+      _i('Mrkev', 1, 'ks', 'mrkev'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Sterilované okurky', 4, 'ks'),
+      _i('Majonéza', 150, 'g'),
+      _i('Hladká mouka, strouhanka', null, ''),
+      _i('Olej na smažení', null, ''),
+      _i('Sůl, pepř, hořčice', null, ''),
+    ],
+    steps: [
+      'Brambory uvařte ve slupce doměkka, mrkev uvařte zvlášť. Nechte vychladnout.',
+      'Dvě vejce uvařte natvrdo.',
+      'Brambory oloupejte a nakrájejte na kostičky, přidejte mrkev, okurky, cibuli a vejce nakrájené nadrobno.',
+      'Vmíchejte majonézu, lžičku hořčice, trochu nálevu z okurek, osolte a opepřete. Nechte uležet.',
+      'Maso nakrájejte na plátky, naklepejte a osolte. Obalte v mouce, rozšlehaných vejcích a strouhance.',
+      'Smažte na oleji asi 3–4 minuty z každé strany do zlatova.',
+    ],
+  ),
+  Dish(
+    id: 'krkovice-pecena',
+    title: 'Pečená krkovice s bramborami a cibulí',
+    description: 'Šťavnaté maso pečené na cibulovém loži.',
+    category: 'Maso',
+    minutes: 120,
+    temperature: 170,
+    main: ['veprove'],
+    ingredients: [
+      _i('Vepřová krkovice', 1, 'kg', 'veprove'),
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Cibule', 3, 'ks', 'cibule'),
+      _i('Česnek', 4, 'stroužky'),
+      _i('Hořčice', 1, 'lžíce'),
+      _i('Sůl, pepř, kmín', null, ''),
+    ],
+    steps: [
+      'Maso potřete solí, pepřem, kmínem, hořčicí a prolisovaným česnekem; nejlépe nechte přes noc v lednici.',
+      'Na dno pekáče dejte cibuli nakrájenou na měsíčky, na ni maso, podlijte 200 ml vody.',
+      'Zakryté pečte 70 minut na 170 °C, občas podlijte.',
+      'Přidejte brambory nakrájené na měsíčky, osolte, odkryjte a pečte dalších 40 minut, maso přelévejte výpekem.',
+    ],
+  ),
+  Dish(
+    id: 'veprove-platky-zampiony',
+    title: 'Vepřové plátky na žampionech',
+    description: 'Plátky v žampionové omáčce s rýží nebo bramborem.',
+    category: 'Maso',
+    minutes: 45,
+    main: ['veprove'],
+    ingredients: [
+      _i('Vepřová kýta nebo plec', 600, 'g', 'veprove'),
+      _i('Žampiony', 300, 'g', 'zampiony'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Smetana ke šlehání', 200, 'ml', 'smetana'),
+      _i('Rýže', 300, 'g', 'ryze'),
+      _i('Hladká mouka', 1, 'lžíce'),
+      _i('Olej', 2, 'lžíce'),
+      _i('Sůl, pepř', null, ''),
+    ],
+    steps: [
+      'Plátky naklepejte, osolte, opepřete a jednu stranu obalte v mouce.',
+      'Na oleji je zprudka opečte z obou stran a vyndejte.',
+      'Na výpeku orestujte cibuli, přidejte nakrájené žampiony a 5 minut duste.',
+      'Vraťte maso, podlijte 200 ml vody a pod pokličkou duste 25 minut doměkka.',
+      'Přilijte smetanu, povařte a dochuťte. Mezitím uvařte rýži.',
+    ],
+  ),
+  Dish(
+    id: 'hovezi-gulas',
+    title: 'Hovězí guláš',
+    description: 'Poctivý guláš s cibulí a paprikou, k chlebu nebo knedlíku.',
+    category: 'Maso',
+    minutes: 150,
+    main: ['hovezi'],
+    ingredients: [
+      _i('Hovězí kližka nebo plec', 1, 'kg', 'hovezi'),
+      _i('Cibule', 800, 'g', 'cibule'),
+      _i('Sladká mletá paprika', 3, 'lžíce'),
+      _i('Rajčatový protlak', 2, 'lžíce'),
+      _i('Česnek', 4, 'stroužky'),
+      _i('Sádlo nebo olej', 3, 'lžíce'),
+      _i('Majoránka, kmín, sůl, pepř', null, ''),
+    ],
+    steps: [
+      'Na sádle pomalu osmahněte nakrájenou cibuli dozlatova (asi 20 minut).',
+      'Přidejte maso nakrájené na kostky, osolte a opékejte, až se zatáhne.',
+      'Stáhněte z plotny, vmíchejte papriku a protlak, podlijte vodou tak, aby maso bylo skoro ponořené.',
+      'Přidejte kmín a pod pokličkou duste 2 hodiny doměkka, průběžně podlévejte.',
+      'Nakonec přidejte česnek a majoránku, dochuťte a nechte zhoustnout.',
+    ],
+  ),
+  Dish(
+    id: 'bolonske-spagety',
+    title: 'Špagety po boloňsku',
+    description: 'Masová omáčka s rajčaty a strouhaným sýrem.',
+    category: 'Těsta',
+    minutes: 60,
+    main: ['mlete'],
+    ingredients: [
+      _i('Mleté maso', 500, 'g', 'mlete'),
+      _i('Špagety', 400, 'g', 'testoviny'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Mrkev', 1, 'ks', 'mrkev'),
+      _i('Rajčata z plechovky (krájená)', 400, 'g'),
+      _i('Rajčatový protlak', 2, 'lžíce'),
+      _i('Sýr na posypání', 80, 'g', 'syr'),
+      _i('Česnek', 2, 'stroužky'),
+      _i('Olej, sůl, pepř, oregano', null, ''),
+    ],
+    steps: [
+      'Na oleji orestujte nadrobno nakrájenou cibuli a nastrouhanou mrkev.',
+      'Přidejte mleté maso a opékejte, až se rozpadne a zbarví.',
+      'Vmíchejte protlak, česnek, rajčata a oregano, osolte a opepřete.',
+      'Duste na mírném ohni 30 minut, podle potřeby podlijte vodou.',
+      'Uvařte špagety a podávejte s omáčkou a sýrem.',
+    ],
+  ),
+  Dish(
+    id: 'karbanatky-kase',
+    title: 'Karbanátky s bramborovou kaší',
+    description: 'Domácí karbanátky a máslová kaše.',
+    category: 'Maso',
+    minutes: 60,
+    main: ['mlete'],
+    ingredients: [
+      _i('Mleté maso', 600, 'g', 'mlete'),
+      _i('Vejce', 1, 'ks', 'vejce'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Rohlík', 1, 'ks'),
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Mléko', 200, 'ml', 'mleko'),
+      _i('Máslo', 50, 'g', 'maslo'),
+      _i('Strouhanka, olej', null, ''),
+      _i('Česnek, majoránka, sůl, pepř', null, ''),
+    ],
+    steps: [
+      'Rohlík namočte do trochy mléka a vymačkejte.',
+      'Maso smíchejte s vejcem, rohlíkem, najemno nakrájenou cibulí, česnekem, majoránkou, solí a pepřem.',
+      'Vytvarujte placičky, obalte ve strouhance a smažte na oleji asi 4 minuty z každé strany.',
+      'Brambory uvařte v osolené vodě, sceďte a rozšťouchejte s horkým mlékem a máslem.',
+    ],
+  ),
+  Dish(
+    id: 'francouzske-brambory',
+    title: 'Francouzské brambory',
+    description: 'Zapečené brambory s vejci, uzeninou a smetanou.',
+    category: 'Pečení',
+    minutes: 70,
+    temperature: 180,
+    main: ['brambory', 'slanina'],
+    ingredients: [
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Slanina nebo šunka', 250, 'g', 'slanina'),
+      _i('Vejce', 6, 'ks', 'vejce'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Zakysaná smetana', 200, 'ml', 'smetana'),
+      _i('Sýr eidam', 100, 'g', 'syr'),
+      _i('Máslo na vymazání', 20, 'g', 'maslo'),
+      _i('Sůl, pepř', null, ''),
+    ],
+    steps: [
+      'Brambory uvařte ve slupce doměkka, 4 vejce natvrdo. Obojí oloupejte a nakrájejte na kolečka.',
+      'Slaninu nakrájejte na kostičky a orestujte s cibulí.',
+      'Do vymazaného pekáče vrstvěte brambory, slaninu s cibulí a vejce; vrstvy osolte. Nahoře budou brambory.',
+      'Smetanu rozšlehejte se 2 vejci, osolte, opepřete a zalijte.',
+      'Posypte sýrem a pečte 30 minut na 180 °C dozlatova.',
+    ],
+  ),
+  Dish(
+    id: 'bramborovy-gulas',
+    title: 'Bramborový guláš s klobásou',
+    description: 'Levné a syté jídlo z jednoho hrnce.',
+    category: 'Polévky',
+    minutes: 50,
+    main: ['klobasa', 'brambory'],
+    ingredients: [
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Klobása nebo špekáčky', 300, 'g', 'klobasa'),
+      _i('Cibule', 2, 'ks', 'cibule'),
+      _i('Sladká mletá paprika', 2, 'lžíce'),
+      _i('Česnek', 3, 'stroužky'),
+      _i('Olej', 2, 'lžíce'),
+      _i('Majoránka, kmín, sůl', null, ''),
+    ],
+    steps: [
+      'Na oleji orestujte cibuli, přidejte klobásu nakrájenou na kolečka a opečte.',
+      'Vmíchejte papriku, hned přidejte brambory na kostky, kmín a sůl.',
+      'Zalijte vodou tak, aby byly brambory skoro ponořené, a vařte 25 minut doměkka.',
+      'Část brambor rozmačkejte, aby guláš zhoustl, přidejte česnek a majoránku.',
+    ],
+  ),
+  Dish(
+    id: 'carbonara',
+    title: 'Těstoviny carbonara',
+    description: 'Těstoviny se slaninou, vejci a sýrem, hotové za 20 minut.',
+    category: 'Těsta',
+    minutes: 20,
+    main: ['slanina', 'testoviny'],
+    ingredients: [
+      _i('Špagety', 400, 'g', 'testoviny'),
+      _i('Slanina', 200, 'g', 'slanina'),
+      _i('Vejce', 4, 'ks', 'vejce'),
+      _i('Tvrdý sýr (parmazán, grana)', 80, 'g', 'syr'),
+      _i('Pepř, sůl', null, ''),
+    ],
+    steps: [
+      'Uvařte špagety v osolené vodě; hrnek vody z vaření si nechte.',
+      'Slaninu nakrájejte a nasucho opečte do křupava.',
+      'Vejce rozšlehejte s nastrouhaným sýrem a hodně pepře.',
+      'Pánev stáhněte z ohně, přidejte scezené špagety, vejce se sýrem a trochu vody z vaření; rychle míchejte, aby vznikl krém a vejce se nesrazila.',
+    ],
+  ),
+  Dish(
+    id: 'kureci-rizoto',
+    title: 'Kuřecí rizoto se zeleninou',
+    description: 'Jednoduché rizoto s kuřecím, žampiony a mrkví.',
+    category: 'Drůbež',
+    minutes: 40,
+    main: ['kure'],
+    ingredients: [
+      _i('Kuřecí prsa', 500, 'g', 'kure'),
+      _i('Rýže', 300, 'g', 'ryze'),
+      _i('Žampiony', 200, 'g', 'zampiony'),
+      _i('Mrkev', 2, 'ks', 'mrkev'),
+      _i('Cibule', 1, 'ks', 'cibule'),
+      _i('Sýr na posypání', 80, 'g', 'syr'),
+      _i('Hrášek mražený', 150, 'g'),
+      _i('Olej, sůl, pepř', null, ''),
+    ],
+    steps: [
+      'Na oleji orestujte cibuli a maso nakrájené na kostky.',
+      'Přidejte mrkev na kolečka a žampiony, chvíli duste.',
+      'Přisypte propláchnutou rýži, krátce osmahněte a zalijte 700 ml vody, osolte.',
+      'Pod pokličkou duste 18 minut, posledních 5 minut s hráškem.',
+      'Podávejte posypané sýrem.',
+    ],
+  ),
+  Dish(
+    id: 'zapecene-testoviny',
+    title: 'Zapečené těstoviny se šunkou a sýrem',
+    description: 'Šunkofleky po domácku.',
+    category: 'Pečení',
+    minutes: 50,
+    temperature: 190,
+    main: ['sunka', 'testoviny'],
+    ingredients: [
+      _i('Těstoviny (fleky, kolínka)', 400, 'g', 'testoviny'),
+      _i('Šunka', 250, 'g', 'sunka'),
+      _i('Vejce', 3, 'ks', 'vejce'),
+      _i('Mléko', 200, 'ml', 'mleko'),
+      _i('Smetana', 100, 'ml', 'smetana'),
+      _i('Sýr eidam', 100, 'g', 'syr'),
+      _i('Máslo', 20, 'g', 'maslo'),
+      _i('Sůl, pepř, muškátový oříšek', null, ''),
+    ],
+    steps: [
+      'Těstoviny uvařte o 2 minuty kratší dobu, než uvádí obal, a sceďte.',
+      'Smíchejte je s nakrájenou šunkou a dejte do vymazaného pekáče.',
+      'Vejce rozšlehejte s mlékem a smetanou, osolte, opepřete a zalijte těstoviny.',
+      'Posypte sýrem a pečte 30 minut na 190 °C, dokud vejce neztuhnou.',
+    ],
+  ),
+  Dish(
+    id: 'smazeny-syr',
+    title: 'Smažený sýr s vařenými brambory',
+    description: 'Česká klasika s tatarkou.',
+    category: 'Přílohy',
+    minutes: 35,
+    main: ['syr'],
+    ingredients: [
+      _i('Sýr eidam v bloku', 600, 'g', 'syr'),
+      _i('Vejce', 2, 'ks', 'vejce'),
+      _i('Brambory', 1, 'kg', 'brambory'),
+      _i('Máslo', 30, 'g', 'maslo'),
+      _i('Hladká mouka, strouhanka', null, ''),
+      _i('Olej na smažení', null, ''),
+      _i('Tatarská omáčka', null, ''),
+    ],
+    steps: [
+      'Brambory oloupejte a uvařte v osolené vodě, pak je pomastěte máslem.',
+      'Sýr nakrájejte na plátky 1,5 cm silné.',
+      'Obalte v mouce, rozšlehaných vejcích a strouhance; vejce a strouhanku zopakujte, aby sýr nevytekl.',
+      'Smažte v rozpáleném oleji krátce, asi 1 minutu z každé strany, dozlatova.',
+    ],
+  ),
+  Dish(
+    id: 'hovezi-na-cibulce',
+    title: 'Hovězí na cibulce s rýží',
+    description: 'Dušené hovězí v cibulové šťávě.',
+    category: 'Maso',
+    minutes: 120,
+    main: ['hovezi'],
+    ingredients: [
+      _i('Hovězí plec', 800, 'g', 'hovezi'),
+      _i('Cibule', 4, 'ks', 'cibule'),
+      _i('Rýže', 300, 'g', 'ryze'),
+      _i('Hladká mouka', 1, 'lžíce'),
+      _i('Olej', 3, 'lžíce'),
+      _i('Sůl, pepř, bobkový list', null, ''),
+    ],
+    steps: [
+      'Maso nakrájejte na plátky, naklepejte, osolte a opepřete.',
+      'Zprudka je opečte na oleji a vyndejte.',
+      'Na výpeku osmahněte cibuli na proužky dozlatova, vraťte maso, přidejte bobkový list a podlijte vodou.',
+      'Duste pod pokličkou 90 minut doměkka, průběžně podlévejte.',
+      'Šťávu zahustěte moukou rozmíchanou ve vodě a povařte. Podávejte s rýží.',
+    ],
+  ),
+  Dish(
+    id: 'omeleta',
+    title: 'Omeleta se šunkou a sýrem',
+    description: 'Rychlá večeře za 10 minut.',
+    category: 'Přílohy',
+    minutes: 10,
+    main: ['vejce', 'sunka'],
+    ingredients: [
+      _i('Vejce', 8, 'ks', 'vejce'),
+      _i('Šunka', 150, 'g', 'sunka'),
+      _i('Sýr eidam', 100, 'g', 'syr'),
+      _i('Mléko', 4, 'lžíce', 'mleko'),
+      _i('Máslo', 20, 'g', 'maslo'),
+      _i('Sůl, pepř, pažitka', null, ''),
+    ],
+    steps: [
+      'Vejce rozšlehejte s mlékem, solí a pepřem.',
+      'Na pánvi rozpusťte máslo, vlijte čtvrtinu vajec a na mírném ohni nechte ztuhnout.',
+      'Na půlku dejte šunku a sýr, přeložte a nechte sýr rozpustit. Opakujte pro další porce.',
+    ],
+  ),
+];

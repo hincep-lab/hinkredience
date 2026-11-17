@@ -5,15 +5,19 @@ import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
+import '../../core/best_buy.dart' show PriceOffer;
 import '../../core/material.dart';
+import '../../core/sale_dishes.dart';
 import '../../core/sale_recipes.dart';
 import '../../core/stores.dart';
 import '../../core/widgets.dart';
 import '../../data/price_service.dart';
 import 'best_buy_panel.dart' show PriceDiagnostics, kc, refreshMessage;
+import 'sale_dish_screen.dart';
 
-/// „Recepty z akcí“: které recepty z kuchařky teď vyjdou levně, protože
-/// jejich suroviny jsou v akci v Sušici (jen ověřené ceny z letáků).
+/// „Recepty z akcí“: co je teď v Sušici v akci (maso, smetana, brambory…),
+/// co z toho uvařit a které recepty z kuchařky teď vyjdou levně.
+/// Jen ověřené ceny z letáků, bez AI a zdarma.
 class SaleRecipesScreen extends ConsumerStatefulWidget {
   const SaleRecipesScreen({super.key});
 
@@ -32,10 +36,12 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
       return;
     }
     final recipes = ref.read(allRecipesProvider).value ?? const [];
-    final products = ingredientsWorthSearching(recipes);
-    if (products.isEmpty) {
-      showMessage(context, 'V receptech nejsou suroviny k hledání.');
-      return;
+    // Základní suroviny pro „Co z toho uvařit“ mají přednost, zbytek místa
+    // (server prohledá 20 najednou) dostanou nejčastější suroviny z kuchařky.
+    final products = <String>[...saleSearchTerms()];
+    for (final name in ingredientsWorthSearching(recipes)) {
+      if (products.length >= 20) break;
+      if (groupOf(name) == null) products.add(name);
     }
     setState(() => _busy = true);
     try {
@@ -81,6 +87,8 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
     final today = DateTime.now();
     final list = recipesFromSales(recipes, offers, today);
     final usable = usableOffers(offers, today).length;
+    final groups = offersByGroup(offers, today);
+    final dishes = dishesFromSales(offers, today);
     const muted = TextStyle(color: AppColors.textSecondary, fontSize: 12.5);
 
     return Scaffold(
@@ -110,9 +118,10 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Hledá se v aktuálních letácích Tesco, Penny, Lidl, '
-                  'Albert, JIP a COOP podle nejčastějších surovin ve vašich '
-                  'receptech. Počítají se jen ověřené ceny. Zdarma.',
+                  'Projdu aktuální letáky Tesco, Penny, Lidl, Albert, JIP '
+                  'a COOP: maso, smetanu, brambory, sýr, těstoviny a další '
+                  'základ. Z toho, co je v akci, navrhnu jídla. Počítají se '
+                  'jen ověřené ceny. Zdarma.',
                   style: muted,
                 ),
                 const SizedBox(height: 10),
@@ -132,63 +141,163 @@ class _SaleRecipesScreenState extends ConsumerState<SaleRecipesScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          if (list.isEmpty)
-            EmptyState(
+          if (usable == 0)
+            const EmptyState(
               icon: Icons.local_offer_outlined,
-              title: usable == 0
-                  ? 'Klepněte na Najít akce'
-                  : 'Žádný recept teď není v akci',
-              message: usable == 0
-                  ? 'Aplikace projde letáky a ukáže recepty, které teď '
-                        'vyjdou levněji.'
-                  : 'Suroviny z vašich receptů tento týden v akci nejsou.',
+              title: 'Klepněte na Najít akce',
+              message: 'Aplikace projde letáky a navrhne, co z akcí uvařit.',
             )
-          else
-            for (final r in list.take(40))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: HkCard(
-                  onTap: () => context.push(Routes.recipe(r.recipe.id)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              r.recipe.title,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            '${r.hits.length}/${r.ingredientCount} v akci',
-                            style: const TextStyle(color: AppColors.copperGold),
-                          ),
-                        ],
+          else ...[
+            if (groups.isNotEmpty) ...[
+              const SectionTitle('V akci teď'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final g in saleGroups)
+                    if (groups[g.id] case final list?)
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '${g.label} od ${kc(list.first.price)} · '
+                          '${chainById(list.first.chain)?.name ?? list.first.chain}',
+                          style: const TextStyle(fontSize: 12.5),
+                        ),
                       ),
-                      for (final h in r.hits)
-                        Text(
-                          '• ${h.ingredient.name}: ${kc(h.offer.price)} '
-                          '${chainById(h.offer.chain)?.name ?? h.offer.chain}'
-                          '${h.offer.conditions.isEmpty ? '' : ' (${h.offer.conditions})'}'
-                          ' · do ${h.offer.validTo.day}. ${h.offer.validTo.month}.',
-                          style: muted,
-                        ),
-                      if (r.savings > 0)
-                        Text(
-                          'Ušetříte asi ${kc(r.savings)} proti běžné ceně',
-                          style: const TextStyle(
-                            color: AppColors.success,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                    ],
-                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            const SectionTitle('Co z toho uvařit'),
+            if (dishes.isEmpty)
+              const Text(
+                'Z hlavních surovin (maso, brambory, sýr…) teď nic v akci '
+                'není. Zkuste to po vydání nových letáků, obvykle ve středu '
+                'a ve čtvrtek.',
+                style: muted,
+              )
+            else
+              for (final d in dishes.take(12))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _DishCard(item: d),
+                ),
+            const SizedBox(height: 8),
+            const SectionTitle('Z vaší kuchařky'),
+            if (list.isEmpty)
+              const Text(
+                'Suroviny z vašich receptů teď v ověřených akcích nejsou.',
+                style: muted,
+              )
+            else
+              for (final r in list.take(40))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _RecipeCard(item: r),
+                ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String offerLine(PriceOffer o) =>
+    '${kc(o.price)} ${chainById(o.chain)?.name ?? o.chain}'
+    '${o.conditions.isEmpty ? '' : ' (${o.conditions})'}'
+    ' · do ${o.validTo.day}. ${o.validTo.month}.';
+
+class _DishCard extends StatelessWidget {
+  const _DishCard({required this.item});
+
+  final DishOnSale item;
+
+  @override
+  Widget build(BuildContext context) {
+    const muted = TextStyle(color: AppColors.textSecondary, fontSize: 12.5);
+    final dish = item.dish;
+    return HkCard(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => SaleDishScreen(item: item)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  dish.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
+              Text(
+                '${item.onSale.length}/${item.total} v akci',
+                style: const TextStyle(color: AppColors.copperGold),
+              ),
+            ],
+          ),
+          Text('${dish.minutes} min · ${Dish.servings} porce', style: muted),
+          const SizedBox(height: 4),
+          for (final entry in item.onSale.entries)
+            Text(
+              '• ${entry.value.product}: ${offerLine(entry.value)}',
+              style: muted,
+            ),
+          if (item.savings > 0)
+            Text(
+              'Ušetříte asi ${kc(item.savings)} proti běžné ceně',
+              style: const TextStyle(
+                color: AppColors.success,
+                fontWeight: FontWeight.w600,
+                fontSize: 12.5,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecipeCard extends StatelessWidget {
+  const _RecipeCard({required this.item});
+
+  final SaleRecipe item;
+
+  @override
+  Widget build(BuildContext context) {
+    const muted = TextStyle(color: AppColors.textSecondary, fontSize: 12.5);
+    final r = item;
+    return HkCard(
+      onTap: () => context.push(Routes.recipe(r.recipe.id)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  r.recipe.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              Text(
+                '${r.hits.length}/${r.ingredientCount} v akci',
+                style: const TextStyle(color: AppColors.copperGold),
+              ),
+            ],
+          ),
+          for (final h in r.hits)
+            Text('• ${h.ingredient.name}: ${offerLine(h.offer)}', style: muted),
+          if (r.savings > 0)
+            Text(
+              'Ušetříte asi ${kc(r.savings)} proti běžné ceně',
+              style: const TextStyle(
+                color: AppColors.success,
+                fontWeight: FontWeight.w600,
+                fontSize: 12.5,
+              ),
+            ),
         ],
       ),
     );
