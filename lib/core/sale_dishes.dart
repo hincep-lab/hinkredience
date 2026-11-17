@@ -396,6 +396,69 @@ int compareDishes(DishOnSale a, DishOnSale b) {
   return (a.chain ?? '').compareTo(b.chain ?? '');
 }
 
+/// Kolik balení akce se koupí na jednu surovinu.
+class SaleLine {
+  const SaleLine(this.ingredient, this.offer, this.packs);
+
+  final DishIngredient ingredient;
+  final PriceOffer offer;
+  final int packs;
+
+  double get price => offer.price * packs;
+}
+
+/// Co se z akcí koupí na recept pro [servings] porcí: celá balení, která se
+/// zaplatí u pokladny (počítají se jen zlevněné věci z akcí).
+class SaleCost {
+  const SaleCost(this.lines);
+
+  final List<SaleLine> lines;
+
+  double get total => lines.fold(0, (sum, l) => sum + l.price);
+}
+
+/// Množství v základní jednotce (g, ml, ks), nebo null, když nejde převést.
+(double, String)? _base(double? qty, String unit) {
+  if (qty == null || qty <= 0) return null;
+  final u = foldText(unit.trim()).replaceAll('.', '');
+  return switch (u) {
+    'g' => (qty, 'g'),
+    'kg' => (qty * 1000, 'g'),
+    'ml' => (qty, 'ml'),
+    'l' => (qty * 1000, 'ml'),
+    'ks' || 'kus' || 'kusy' || 'kusu' || '' => (qty, 'ks'),
+    _ => null,
+  };
+}
+
+/// Kolik balení je potřeba: podle množství v receptu a velikosti balení;
+/// když se jednotky nedají porovnat, počítá se jedno balení.
+int packsNeeded(double? qty, String unit, PriceOffer offer) {
+  final need = _base(qty, unit);
+  final pack = _base(offer.packQty, offer.packUnit);
+  if (need == null || pack == null || need.$2 != pack.$2) return 1;
+  final packs = (need.$1 / pack.$1 - 0.05).ceil();
+  return packs < 1 ? 1 : packs;
+}
+
+/// Cena zlevněných věcí na recept pro [servings] porcí (jídla jsou na 4).
+SaleCost saleCost(DishOnSale item, {double servings = 4}) {
+  final factor = servings / Dish.servings;
+  return SaleCost([
+    for (final i in item.dish.ingredients)
+      if (item.onSale[i.group] case final offer?)
+        SaleLine(
+          i,
+          offer,
+          packsNeeded(
+            i.quantity == null ? null : i.quantity! * factor,
+            i.unit,
+            offer,
+          ),
+        ),
+  ]);
+}
+
 const _weekdays = ['po', 'út', 'st', 'čt', 'pá', 'so', 'ne'];
 
 /// „končí dnes“, „končí zítra“, nebo „akce do čt 20. 11.“.

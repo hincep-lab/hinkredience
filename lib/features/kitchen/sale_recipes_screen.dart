@@ -403,6 +403,11 @@ class _DishCard extends StatelessWidget {
               '• ${entry.value.product}: ${offerLine(entry.value)}',
               style: muted,
             ),
+          Text(
+            'Zlevněné zboží na recept (4 porce): '
+            '${kc(saleCost(item).total)}',
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
           if (item.savings > 0)
             Text(
               'Ušetříte asi ${kc(item.savings)} proti běžné ceně',

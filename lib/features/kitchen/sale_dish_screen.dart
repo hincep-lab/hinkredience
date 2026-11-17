@@ -95,6 +95,11 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
               ].join(' · '),
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
+          Text(
+            'Zlevněné zboží na recept (4 porce): '
+            '${kc(saleCost(widget.item).total)}',
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          ),
           if (widget.item.savings > 0)
             Text(
               'Ušetříte asi ${kc(widget.item.savings)} proti běžné ceně',
@@ -164,7 +169,8 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
                         ),
                         if (onSale[i.group] case final offer?)
                           Text(
-                            'V akci: ${offer.product} – ${offerLine(offer)}',
+                            'V akci: ${packsNeeded(i.quantity, i.unit, offer)}× '
+                            '${offer.product} – ${offerLine(offer)}',
                             style: const TextStyle(
                               color: AppColors.success,
                               fontSize: 12.5,

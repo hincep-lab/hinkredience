@@ -263,6 +263,10 @@ class _WeekMenuScreenState extends ConsumerState<WeekMenuScreen> {
               'Vaří se ${menu.cooks.length}× · nákup: $chains',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
+            Text(
+              'Zlevněné zboží na celý týden: ${kc(menu.cooks.fold<double>(0, (sum, c) => sum + saleCost(c.item, servings: menu.portions.toDouble()).total))}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
             if (menu.savings > 0)
               Text(
                 'Na akcích ušetříte asi ${kc(menu.savings * menu.portions / Dish.servings)}',
@@ -277,6 +281,7 @@ class _WeekMenuScreenState extends ConsumerState<WeekMenuScreen> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _CookCard(
                   cook: cook,
+                  portions: menu.portions,
                   today: _today,
                   onSwap: () => _swap(index),
                 ),
@@ -316,11 +321,13 @@ class _WeekMenuScreenState extends ConsumerState<WeekMenuScreen> {
 class _CookCard extends StatelessWidget {
   const _CookCard({
     required this.cook,
+    required this.portions,
     required this.today,
     required this.onSwap,
   });
 
   final MenuCook cook;
+  final int portions;
   final DateTime today;
   final VoidCallback onSwap;
 
@@ -365,8 +372,19 @@ class _CookCard extends StatelessWidget {
             ].join(' · '),
             style: muted,
           ),
-          for (final o in item.onSale.values)
-            Text('• ${o.product}: ${offerLine(o)}', style: muted),
+          for (final line in saleCost(
+            item,
+            servings: portions.toDouble(),
+          ).lines)
+            Text(
+              '• ${line.packs}× ${line.offer.product}: ${offerLine(line.offer)}',
+              style: muted,
+            ),
+          Text(
+            'Zlevněné zboží na $portions porcí: '
+            '${kc(saleCost(item, servings: portions.toDouble()).total)}',
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
         ],
       ),
     );

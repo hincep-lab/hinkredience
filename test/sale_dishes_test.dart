@@ -193,4 +193,41 @@ void main() {
     expect(idea.dish.ingredients.length, 3);
     expect(ideas.rejected.length, 1);
   });
+
+  test('cena zlevněného zboží na recept za celá balení', () {
+    PriceOffer pack(String product, double price, double qty, String unit) =>
+        PriceOffer(
+          id: product,
+          chain: 'tesco',
+          product: product,
+          price: price,
+          packQty: qty,
+          packUnit: unit,
+          validTo: DateTime(2026, 11, 22),
+          sourceUrl: '',
+          verified: true,
+        );
+    final maso = pack('Vepřová pečeně bez kosti', 79.9, 1, 'kg');
+    final brambory = pack('Brambory', 29.9, 2, 'kg');
+    final smetana = pack('Smetana ke šlehání', 24.9, 200, 'ml');
+    expect(packsNeeded(700, 'g', maso), 1);
+    expect(packsNeeded(1050, 'g', maso), 2);
+    expect(packsNeeded(1, 'kg', brambory), 1);
+    expect(packsNeeded(250, 'ml', smetana), 2);
+    expect(packsNeeded(null, '', smetana), 1);
+    expect(packsNeeded(2, 'lžíce', smetana), 1);
+
+    final item = dishesFromSales([
+      maso,
+      brambory,
+      smetana,
+    ], today).firstWhere((d) => d.dish.id == 'zapecene-veprove');
+    // 4 porce: 700 g masa (1 kg), 1 kg brambor (2 kg), 250 ml smetany (2×200 ml).
+    expect(saleCost(item).total, closeTo(79.9 + 29.9 + 2 * 24.9, 0.001));
+    // 6 porcí: 1050 g masa → 2 balení, 1,5 kg brambor → 1 balení, 375 ml → 2.
+    expect(
+      saleCost(item, servings: 6).total,
+      closeTo(2 * 79.9 + 29.9 + 2 * 24.9, 0.001),
+    );
+  });
 }
