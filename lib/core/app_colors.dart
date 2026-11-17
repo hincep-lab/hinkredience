@@ -1,17 +1,18 @@
 import 'material.dart';
 
-/// Barevná paleta HINKredience° (kap. 2 zadání).
+/// Barevná paleta HINKredience°: téměř černé pozadí, oranžový akcent
+/// (podle vizuální předlohy redesignu).
 abstract final class AppColors {
   static const background = Color(0xFF0B0B0D);
-  static const backgroundSecondary = Color(0xFF171719);
-  static const card = Color(0xFF211A17);
-  static const copper = Color(0xFFC87935);
-  static const copperGold = Color(0xFFE8A45D);
+  static const backgroundSecondary = Color(0xFF151516);
+  static const card = Color(0xFF1C1C1E);
+  static const copper = Color(0xFFF28C1E);
+  static const copperGold = Color(0xFFF7A43A);
   static const text = Color(0xFFFFFFFF);
-  static const textSecondary = Color(0xFFB8B4B0);
+  static const textSecondary = Color(0xFFB5B5B8);
 
-  /// Jemný měděný obrys karet.
-  static const outline = Color(0xFF4A3424);
+  /// Jemný obrys karet a tlačítek.
+  static const outline = Color(0xFF3A3A3C);
   static const danger = Color(0xFFE5645A);
   static const success = Color(0xFF7BC47F);
 
@@ -24,6 +25,6 @@ abstract final class AppColors {
   static const cardGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF2A201B), Color(0xFF1A1513)],
+    colors: [Color(0xFF222224), Color(0xFF19191B)],
   );
 }

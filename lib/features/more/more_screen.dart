@@ -122,7 +122,7 @@ class MoreScreen extends ConsumerWidget {
     const divider = Divider(indent: 16, endIndent: 16);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Více')),
+      appBar: AppBar(title: const Text('Nabídka')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [

@@ -114,6 +114,7 @@ class SupabaseRemoteStore implements RemoteStore {
       'total_minutes': recipe.totalMinutes,
       'temperatures': recipe.temperatures,
       'equipment': recipe.equipment,
+      'tags': recipe.tags,
       'notes': recipe.notes,
       'rating': recipe.rating,
       'is_favorite': recipe.isFavorite,
@@ -145,7 +146,8 @@ class SupabaseRemoteStore implements RemoteStore {
     if (legacy) {
       row
         ..remove('yield_unit')
-        ..remove('rest_minutes');
+        ..remove('rest_minutes')
+        ..remove('tags');
     }
     try {
       await writeRow();
@@ -155,7 +157,8 @@ class SupabaseRemoteStore implements RemoteStore {
       legacy = _legacySchema = true;
       row
         ..remove('yield_unit')
-        ..remove('rest_minutes');
+        ..remove('rest_minutes')
+        ..remove('tags');
       await writeRow();
     }
 

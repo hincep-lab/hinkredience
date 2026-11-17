@@ -17,6 +17,7 @@ import '../features/more/chatgpt_screen.dart';
 import '../features/more/connection_screen.dart';
 import '../features/more/kitchen_screen.dart';
 import '../features/more/more_screen.dart';
+import '../features/recipes/tags_screen.dart';
 import '../features/more/trash_screen.dart';
 import '../features/recipes/recipe_detail_screen.dart';
 import '../features/recipes/recipe_edit_screen.dart';
@@ -54,6 +55,7 @@ abstract final class Routes {
   static const draft = '/ai/draft';
   static const shopping = '/shopping';
   static const plan = '/plan';
+  static const tags = '/tags';
   static const diary = '/diary';
   static const family = '/more/family';
   static const timer = '/more/timer';
@@ -105,10 +107,17 @@ abstract final class Routes {
   static String editRecipe(String id) => '/recipe/$id/edit';
   static String recipePhotos(String id) => '/recipe/$id/photos';
 
-  static String recipesWith({String? query, String? category}) {
+  static String recipesWith({
+    String? query,
+    String? category,
+    String? group,
+    String? tag,
+  }) {
     final parameters = {
       if (query != null && query.isNotEmpty) 'q': query,
       if (category != null && category.isNotEmpty) 'category': category,
+      if (group != null && group.isNotEmpty) 'group': group,
+      if (tag != null && tag.isNotEmpty) 'tag': tag,
     };
     return Uri(
       path: recipes,
@@ -166,6 +175,8 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                   RecipesScreen(
                     initialQuery: state.uri.queryParameters['q'] ?? '',
                     initialCategory: state.uri.queryParameters['category'],
+                    initialGroup: state.uri.queryParameters['group'],
+                    initialTag: state.uri.queryParameters['tag'],
                   ),
                 ),
               ),
@@ -193,6 +204,14 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
           StatefulShellBranch(
             routes: [
               GoRoute(
+                path: Routes.plan,
+                pageBuilder: (context, state) => tab(state, const PlanScreen()),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
                 path: Routes.favorites,
                 pageBuilder: (context, state) =>
                     tab(state, const RecipesScreen(favoritesOnly: true)),
@@ -202,72 +221,71 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: Routes.more,
-                pageBuilder: (context, state) => tab(state, const MoreScreen()),
-                routes: [
-                  GoRoute(
-                    path: 'trash',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const TrashScreen()),
-                  ),
-                  GoRoute(
-                    path: 'connection',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const ConnectionScreen()),
-                  ),
-                  GoRoute(
-                    path: 'chatgpt',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const ChatGptScreen()),
-                  ),
-                  GoRoute(
-                    path: 'family',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const FamilyScreen()),
-                  ),
-                  GoRoute(
-                    path: 'kitchen',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const KitchenScreen()),
-                  ),
-                  GoRoute(
-                    path: 'temperatures',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const TemperaturesScreen()),
-                  ),
-                  GoRoute(
-                    path: 'timer',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const TimerScreen()),
-                  ),
-                  GoRoute(
-                    path: 'convert',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const ConverterScreen()),
-                  ),
-                  GoRoute(
-                    path: 'pantry',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const PantryScreen()),
-                  ),
-                  GoRoute(
-                    path: 'sales',
-                    parentNavigatorKey: rootKey,
-                    pageBuilder: (context, state) =>
-                        page(state, const SaleRecipesScreen()),
-                  ),
-                ],
+                path: Routes.tags,
+                pageBuilder: (context, state) => tab(state, const TagsScreen()),
               ),
             ],
+          ),
+        ],
+      ),
+      GoRoute(
+        path: Routes.more,
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(state, const MoreScreen()),
+        routes: [
+          GoRoute(
+            path: 'trash',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const TrashScreen()),
+          ),
+          GoRoute(
+            path: 'connection',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) =>
+                page(state, const ConnectionScreen()),
+          ),
+          GoRoute(
+            path: 'chatgpt',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const ChatGptScreen()),
+          ),
+          GoRoute(
+            path: 'family',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const FamilyScreen()),
+          ),
+          GoRoute(
+            path: 'kitchen',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const KitchenScreen()),
+          ),
+          GoRoute(
+            path: 'temperatures',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) =>
+                page(state, const TemperaturesScreen()),
+          ),
+          GoRoute(
+            path: 'timer',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const TimerScreen()),
+          ),
+          GoRoute(
+            path: 'convert',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) =>
+                page(state, const ConverterScreen()),
+          ),
+          GoRoute(
+            path: 'pantry',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(state, const PantryScreen()),
+          ),
+          GoRoute(
+            path: 'sales',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) =>
+                page(state, const SaleRecipesScreen()),
           ),
         ],
       ),
@@ -319,11 +337,6 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
             },
           ),
         ],
-      ),
-      GoRoute(
-        path: Routes.plan,
-        parentNavigatorKey: rootKey,
-        pageBuilder: (context, state) => page(state, const PlanScreen()),
       ),
       GoRoute(
         path: Routes.diary,

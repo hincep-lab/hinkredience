@@ -111,16 +111,27 @@ void main() {
     await pumpApp(tester, location: Routes.home);
 
     expect(find.text('Ahoj Pájo 👋'), findsOneWidget);
-    expect(find.text('Co dnes společně uvaříme?'), findsOneWidget);
-    expect(find.text('Co dnes uvaříme?'), findsOneWidget);
-    expect(find.text('AI kuchař'), findsOneWidget);
+    expect(find.text('Co dobrého dnes uvaříme?'), findsOneWidget);
+    expect(find.text('Hledat recept, surovinu nebo štítek…'), findsOneWidget);
+    expect(find.text('HINKredience°'), findsOneWidget);
+    expect(find.text('Moje kuchařka'), findsOneWidget);
+    expect(find.text('Kategorie receptů'), findsOneWidget);
     await tester.dragUntilVisible(
       find.text('Přidej první recept'),
-      find.byType(CustomScrollView),
+      find.byKey(const Key('home-scroll')),
       const Offset(0, -200),
     );
     expect(find.text('Přidej první recept'), findsOneWidget);
-    expect(find.text('Domů'), findsOneWidget);
+    for (final label in [
+      'Domů',
+      'Recepty',
+      'Nákupní seznam',
+      'Plánování',
+      'Oblíbené',
+      'Štítky',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
   });
 
   testWidgets('oslovení se bere z nastavení', (tester) async {
@@ -132,25 +143,95 @@ void main() {
     expect(find.text('Ahoj Martinko 👋'), findsOneWidget);
   });
 
-  testWidgets('hlavní obrazovka doporučuje uložené recepty', (tester) async {
+  testWidgets('kategorie na hlavní obrazovce mají skutečné počty receptů', (
+    tester,
+  ) async {
     await pumpApp(
       tester,
       location: Routes.home,
       recipes: [
         sampleRecipe(),
         sampleRecipe(id: 'r2', title: 'Svíčková'),
+        sampleRecipe(
+          id: 'r3',
+          title: 'Bramborová polévka',
+          category: 'Polévky',
+        ).copyWith(isFavorite: true),
       ],
     );
-    expect(find.text('Moje sbírka · 2'), findsOneWidget);
+    expect(find.text('Vepřové maso'), findsOneWidget);
+    expect(find.text('Hovězí maso'), findsOneWidget);
+    expect(find.text('Polévky'), findsOneWidget);
+    expect(find.text('1 recept'), findsNWidgets(3));
+    expect(find.text('0 receptů'), findsNWidgets(8));
+
+    await tester.dragUntilVisible(
+      find.text('Oblíbené recepty'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Bramborová polévka'), findsWidgets);
+
     await tester.dragUntilVisible(
       find.text('Doporučujeme dnes'),
-      find.byType(CustomScrollView),
+      find.byKey(const Key('home-scroll')),
       const Offset(0, -200),
     );
     await tester.pumpAndSettle();
     expect(find.text('Doporučujeme dnes'), findsOneWidget);
-    expect(find.text('Žebra BBQ'), findsOneWidget);
     expect(find.text('Přidej první recept'), findsNothing);
+  });
+
+  testWidgets('hledání a filtry na hlavní obrazovce se kombinují', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.home,
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(id: 'r2', title: 'Svíčková na smetaně'),
+        Recipe(
+          id: 'r3',
+          title: 'Rychlá omeleta',
+          category: 'Bezmasá jídla',
+          prepMinutes: 5,
+          cookMinutes: 10,
+          tags: const ['Rychlá večeře'],
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+          ingredients: const [Ingredient(id: 'i', name: 'Vejce')],
+          steps: const [
+            RecipeStep(id: 's', instruction: 'Na pánvi usmažte vejce.'),
+          ],
+        ),
+      ],
+    );
+    await tester.enterText(find.byType(TextField), 'smetan');
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+    expect(find.text('Svíčková na smetaně'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Vymazat hledání'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pánev'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+    expect(find.text('Rychlá omeleta'), findsOneWidget);
+
+    // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
+    await tester.tap(find.text('Trouba'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
+    await tester.tap(find.text('Do 30 min'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
+    expect(find.text('Rychlá omeleta'), findsOneWidget);
+
+    await tester.tap(find.text('Zrušit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Kategorie receptů'), findsOneWidget);
   });
 
   testWidgets('plán, nákup a deník jsou funkční, AI je poctivě vypnutá', (
@@ -158,13 +239,37 @@ void main() {
   ) async {
     await pumpApp(tester, location: Routes.home);
     expect(find.text('Brzy'), findsNothing);
+    await tester.dragUntilVisible(
+      find.text('Další funkce'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     // AI je placená a ve výchozím stavu vypnutá (import funguje i bez ní).
     expect(find.text('Vypnuto'), findsNWidgets(2));
 
-    await tester.tap(find.text('Plán vaření'));
+    await tester.tap(find.text('Plánování'));
     await tester.pumpAndSettle();
     expect(find.text('Snídaně'), findsWidgets);
     expect(find.byTooltip('Nakoupit na tento týden'), findsOneWidget);
+  });
+
+  testWidgets('záložka Štítky ukazuje příležitosti a způsoby přípravy', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.tags,
+      recipes: [
+        sampleRecipe().copyWith(tags: const ['Pro děti', 'Grilovačka']),
+      ],
+    );
+    expect(find.text('Pro děti · 1'), findsOneWidget);
+    expect(find.text('Trouba · 1'), findsOneWidget);
+    expect(find.text('Grilovačka · 1'), findsOneWidget);
+    await tester.tap(find.text('Pro děti · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Žebra BBQ'), findsOneWidget);
   });
 
   testWidgets('seznam receptů: kategorie, hledání bez diakritiky', (
@@ -183,9 +288,9 @@ void main() {
       ],
     );
 
-    // Výchozí pohled: dlaždice kategorií.
-    expect(find.text('Maso'), findsOneWidget);
-    expect(find.text('Zavařování'), findsOneWidget);
+    // Výchozí pohled: fotografické karty 11 skupin.
+    expect(find.text('Vepřové maso'), findsOneWidget);
+    expect(find.text('Pečivo a těsta'), findsOneWidget);
     expect(find.text('Žebra BBQ'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'svickova');
@@ -211,7 +316,7 @@ void main() {
         ),
       ],
     );
-    await tester.tap(find.text('Maso'));
+    await tester.tap(find.text('Vepřové maso'));
     await tester.pumpAndSettle();
     expect(find.text('Žebra BBQ'), findsOneWidget);
     expect(find.text('Svíčková na smetaně'), findsNothing);

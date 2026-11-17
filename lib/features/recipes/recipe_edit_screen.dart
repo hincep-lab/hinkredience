@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
+import '../../core/recipe_groups.dart' show suggestedTags;
 import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
@@ -104,6 +105,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   var _photos = <RecipePhoto>[];
   var _temperatures = <String>[];
   var _equipment = <String>[];
+  var _tags = <String>[];
   String _category = '';
   double? _rating;
 
@@ -151,6 +153,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
         _photos = [...recipe.photos];
         _temperatures = [...recipe.temperatures];
         _equipment = [...recipe.equipment];
+        _tags = [...recipe.tags];
         for (final item in recipe.ingredients) {
           _ingredients.add(
             _IngredientDraft(
@@ -341,6 +344,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       totalMinutes: int.tryParse(_total.text.trim()) ?? 0,
       temperatures: _temperatures,
       equipment: _equipment,
+      tags: _tags,
       notes: _notes.text.trim(),
       rating: _rating,
       photos: _photos,
@@ -666,6 +670,44 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                 hint: 'např. Trouba, litinový hrnec',
                 onChanged: (values) => setState(() {
                   _equipment = values;
+                  _dirty = true;
+                }),
+              ),
+
+              const SectionTitle('Štítky'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final tag in suggestedTags)
+                    FilterChip(
+                      label: Text(tag),
+                      selected: _tags.contains(tag),
+                      onSelected: (on) => setState(() {
+                        _tags = on
+                            ? [..._tags, tag]
+                            : [
+                                for (final t in _tags)
+                                  if (t != tag) t,
+                              ];
+                        _dirty = true;
+                      }),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _TagEditor(
+                values: [
+                  for (final t in _tags)
+                    if (!suggestedTags.contains(t)) t,
+                ],
+                hint: 'vlastní štítek, např. Vánoce, Grilovačka',
+                onChanged: (values) => setState(() {
+                  _tags = [
+                    for (final t in _tags)
+                      if (suggestedTags.contains(t)) t,
+                    ...values,
+                  ];
                   _dirty = true;
                 }),
               ),

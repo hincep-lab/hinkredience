@@ -77,6 +77,13 @@ jobs:
         run: flutter analyze --no-fatal-infos
       - name: Testy
         run: flutter test
+      - name: Snímky obrazovky pro vizuální kontrolu
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: ignore
       - name: Sestavení APK
         run: >
           flutter build apk --release --split-per-abi
