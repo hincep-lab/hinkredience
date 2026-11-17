@@ -333,6 +333,8 @@ class _Header extends StatelessWidget {
                 ),
                 Text(
                   'Moje kuchařka',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 13.5,

@@ -39,14 +39,17 @@ class HomeSectionHeader extends StatelessWidget {
           Icon(icon, color: AppColors.copper, size: 24),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 19,
-                fontWeight: FontWeight.w800,
-                color: AppColors.text,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                title,
+                maxLines: 1,
+                style: const TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.text,
+                ),
               ),
             ),
           ),
@@ -64,7 +67,7 @@ class HomeSectionHeader extends StatelessWidget {
                   Text(
                     actionLabel!,
                     style: const TextStyle(
-                      fontSize: 14.5,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -285,25 +288,47 @@ class GroupGrid extends StatelessWidget {
             : constraints.maxWidth >= 600
             ? 3
             : 2;
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
+        const gap = 12.0;
+        final width = constraints.maxWidth - 32;
+        final cardWidth = (width - gap * (columns - 1)) / columns;
+        final height = cardWidth / 1.32;
+        final rows = <List<RecipeGroup>>[
+          for (var i = 0; i < recipeGroups.length; i += columns)
+            recipeGroups.sublist(
+              i,
+              (i + columns).clamp(0, recipeGroups.length),
+            ),
+        ];
+        return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columns,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 1.32,
+          child: Column(
+            children: [
+              for (final (index, row) in rows.indexed)
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == rows.length - 1 ? 0 : gap,
+                  ),
+                  child: SizedBox(
+                    height: height,
+                    // Neúplná poslední řada se roztáhne na celou šířku.
+                    child: Row(
+                      children: [
+                        for (final (i, group) in row.indexed) ...[
+                          if (i > 0) const SizedBox(width: gap),
+                          Expanded(
+                            child: GroupCard(
+                              group: group,
+                              recipes: byGroup[group.id]!,
+                              onTap: () => onSelected(group),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
-          itemCount: recipeGroups.length,
-          itemBuilder: (context, index) {
-            final group = recipeGroups[index];
-            return GroupCard(
-              group: group,
-              recipes: byGroup[group.id]!,
-              onTap: () => onSelected(group),
-            );
-          },
         );
       },
     );

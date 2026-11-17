@@ -125,7 +125,7 @@ class HkBottomNav extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.only(bottom: bottom),
         child: SizedBox(
-          height: 64,
+          height: 66,
           child: Row(
             children: [
               for (final (index, item) in _navItems.indexed)
@@ -173,21 +173,19 @@ class _NavButton extends StatelessWidget {
               Icon(
                 selected ? item.activeIcon : item.icon,
                 color: color,
-                size: 26,
+                size: 25,
               ),
-              const SizedBox(height: 4),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  item.label,
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: selected
-                        ? AppColors.copper
-                        : const Color(0xFFD0D0D3),
-                    fontSize: 12,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
+              const SizedBox(height: 3),
+              Text(
+                item.label,
+                maxLines: 2,
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? AppColors.copper : const Color(0xFFD0D0D3),
+                  fontSize: 11.5,
+                  height: 1.05,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 ),
               ),
             ],
