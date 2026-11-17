@@ -85,6 +85,12 @@ Future<void> scrollTo(WidgetTester tester, Finder finder) async {
 void main() {
   testWidgets('bez účtu AI kuchař vysvětlí, co je potřeba', (tester) async {
     await pumpAiApp(tester, location: Routes.home);
+    await tester.dragUntilVisible(
+      find.text('AI kuchař'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('AI kuchař'));
     await tester.pumpAndSettle();
     expect(find.text('AI kuchař potřebuje účet'), findsOneWidget);
@@ -308,6 +314,12 @@ void main() {
     tester,
   ) async {
     await pumpAiApp(tester, location: Routes.home, aiEnabled: false);
+    await tester.dragUntilVisible(
+      find.text('Další funkce'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     // Import receptu funguje i bez AI, označené jsou jen AI kuchař a hledání.
     expect(find.text('Vypnuto'), findsNWidgets(2));
     expect(find.text('Recepty'), findsWidgets);
@@ -317,6 +329,13 @@ void main() {
     tester,
   ) async {
     await pumpAiApp(tester, location: Routes.home);
+    await tester.dragUntilVisible(
+      find.text('Další funkce'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('AI kuchař'), findsOneWidget);
     expect(find.text('Vypnuto'), findsNothing);
   });
 

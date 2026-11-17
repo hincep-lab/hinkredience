@@ -41,80 +41,87 @@ class TagsScreen extends ConsumerWidget {
     };
     return Scaffold(
       appBar: AppBar(title: const Text('Štítky')),
-      body: ListView(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.only(bottom: 24),
-        children: [
-          const HomeSectionHeader(
-            icon: Icons.star_outline_rounded,
-            title: 'Podle příležitosti',
-          ),
-          _Wrap(
-            children: [
-              for (final o in occasionTags)
-                FilterPill(
-                  label: '$o · ${occasionCounts[o]}',
-                  selected: false,
-                  onTap: () => _open(context, o, RecipeFilters(occasions: {o})),
-                ),
-            ],
-          ),
-          if (occasionCounts.values.every((n) => n == 0))
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Text(
-                'Příležitosti přidáte v úpravě receptu v části Štítky. '
-                'Aplikace je sama nedomýšlí.',
-                style: TextStyle(color: AppColors.textSecondary),
-              ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const HomeSectionHeader(
+              icon: Icons.star_outline_rounded,
+              title: 'Podle příležitosti',
             ),
-          const HomeSectionHeader(
-            icon: Icons.local_fire_department_outlined,
-            title: 'Podle přípravy',
-          ),
-          _Wrap(
-            children: [
-              for (final p in PrepMethod.values)
-                FilterPill(
-                  icon: p.icon,
-                  label: '${p.label} · ${prepCounts[p]}',
-                  selected: false,
-                  onTap: () =>
-                      _open(context, p.label, RecipeFilters(prep: {p})),
-                ),
-            ],
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-            child: Text(
-              'Způsob přípravy se pozná z postupu, teplot a vybavení receptu.',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
-            ),
-          ),
-          const HomeSectionHeader(
-            icon: Icons.sell_outlined,
-            title: 'Vlastní štítky',
-          ),
-          if (custom.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: EmptyHint(
-                'Zatím žádné vlastní štítky. Přidáte je v úpravě receptu.',
-              ),
-            )
-          else
             _Wrap(
               children: [
-                for (final t in custom)
+                for (final o in occasionTags)
                   FilterPill(
-                    icon: Icons.sell_outlined,
-                    label: '${t.key} · ${t.value}',
+                    label: '$o · ${occasionCounts[o]}',
                     selected: false,
                     onTap: () =>
-                        _open(context, t.key, RecipeFilters(tag: t.key)),
+                        _open(context, o, RecipeFilters(occasions: {o})),
                   ),
               ],
             ),
-        ],
+            if (occasionCounts.values.every((n) => n == 0))
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: Text(
+                  'Příležitosti přidáte v úpravě receptu v části Štítky. '
+                  'Aplikace je sama nedomýšlí.',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
+              ),
+            const HomeSectionHeader(
+              icon: Icons.local_fire_department_outlined,
+              title: 'Podle přípravy',
+            ),
+            _Wrap(
+              children: [
+                for (final p in PrepMethod.values)
+                  FilterPill(
+                    icon: p.icon,
+                    label: '${p.label} · ${prepCounts[p]}',
+                    selected: false,
+                    onTap: () =>
+                        _open(context, p.label, RecipeFilters(prep: {p})),
+                  ),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Text(
+                'Způsob přípravy se pozná z postupu, teplot a vybavení receptu.',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+            const HomeSectionHeader(
+              icon: Icons.sell_outlined,
+              title: 'Vlastní štítky',
+            ),
+            if (custom.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: EmptyHint(
+                  'Zatím žádné vlastní štítky. Přidáte je v úpravě receptu.',
+                ),
+              )
+            else
+              _Wrap(
+                children: [
+                  for (final t in custom)
+                    FilterPill(
+                      icon: Icons.sell_outlined,
+                      label: '${t.key} · ${t.value}',
+                      selected: false,
+                      onTap: () =>
+                          _open(context, t.key, RecipeFilters(tag: t.key)),
+                    ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }

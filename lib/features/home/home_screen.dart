@@ -196,18 +196,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   children: [
                     for (final tile in [
                       _FeatureTile(
-                        icon: Icons.add_rounded,
-                        title: 'Nový recept',
-                        subtitle: 'Napsat vlastní',
-                        onTap: () => context.push(Routes.newRecipe),
-                      ),
-                      _FeatureTile(
-                        icon: Icons.download_rounded,
-                        title: 'Import receptu',
-                        subtitle: 'Text, odkaz, video, fotka',
-                        onTap: () => context.push(Routes.importRecipe),
-                      ),
-                      _FeatureTile(
                         icon: Icons.auto_awesome_rounded,
                         title: 'AI kuchař',
                         badge: aiBadge,
@@ -220,6 +208,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         badge: aiBadge,
                         subtitle: 'Na internetu, se zdroji',
                         onTap: () => context.push(Routes.webSearch),
+                      ),
+                      _FeatureTile(
+                        icon: Icons.add_rounded,
+                        title: 'Nový recept',
+                        subtitle: 'Napsat vlastní',
+                        onTap: () => context.push(Routes.newRecipe),
+                      ),
+                      _FeatureTile(
+                        icon: Icons.download_rounded,
+                        title: 'Import receptu',
+                        subtitle: 'Text, odkaz, video, fotka',
+                        onTap: () => context.push(Routes.importRecipe),
                       ),
                       _FeatureTile(
                         icon: Icons.local_offer_outlined,
