@@ -210,12 +210,12 @@ void main() {
     final maso = pack('Vepřová pečeně bez kosti', 79.9, 1, 'kg');
     final brambory = pack('Brambory', 29.9, 2, 'kg');
     final smetana = pack('Smetana ke šlehání', 24.9, 200, 'ml');
-    expect(packsNeeded(700, 'g', maso), 1);
-    expect(packsNeeded(1050, 'g', maso), 2);
-    expect(packsNeeded(1, 'kg', brambory), 1);
-    expect(packsNeeded(250, 'ml', smetana), 2);
-    expect(packsNeeded(null, '', smetana), 1);
-    expect(packsNeeded(2, 'lžíce', smetana), 1);
+    expect(salePacks(700, 'g', maso), 1);
+    expect(salePacks(1050, 'g', maso), 2);
+    expect(salePacks(1, 'kg', brambory), 1);
+    expect(salePacks(250, 'ml', smetana), 2);
+    expect(salePacks(null, '', smetana), 1);
+    expect(salePacks(2, 'lžíce', smetana), 1);
 
     final item = dishesFromSales([
       maso,

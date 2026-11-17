@@ -433,7 +433,7 @@ class SaleCost {
 
 /// Kolik balení je potřeba: podle množství v receptu a velikosti balení;
 /// když se jednotky nedají porovnat, počítá se jedno balení.
-int packsNeeded(double? qty, String unit, PriceOffer offer) {
+int salePacks(double? qty, String unit, PriceOffer offer) {
   final need = _base(qty, unit);
   final pack = _base(offer.packQty, offer.packUnit);
   if (need == null || pack == null || need.$2 != pack.$2) return 1;
@@ -450,7 +450,7 @@ SaleCost saleCost(DishOnSale item, {double servings = 4}) {
         SaleLine(
           i,
           offer,
-          packsNeeded(
+          salePacks(
             i.quantity == null ? null : i.quantity! * factor,
             i.unit,
             offer,

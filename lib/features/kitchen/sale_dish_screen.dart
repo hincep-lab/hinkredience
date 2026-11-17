@@ -169,7 +169,7 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
                         ),
                         if (onSale[i.group] case final offer?)
                           Text(
-                            'V akci: ${packsNeeded(i.quantity, i.unit, offer)}× '
+                            'V akci: ${salePacks(i.quantity, i.unit, offer)}× '
                             '${offer.product} – ${offerLine(offer)}',
                             style: const TextStyle(
                               color: AppColors.success,
