@@ -16,6 +16,7 @@ import 'package:hinkredience/data/kitchen_docs.dart';
 import 'package:hinkredience/data/photo_store.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
+import 'package:hinkredience/features/kitchen/wishes.dart';
 import 'package:hinkredience/features/photos/photo_editor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1007,5 +1008,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Na co mám chuť'), findsOneWidget);
     expect(find.byKey(const Key('add-wish')), findsOneWidget);
+  });
+
+  testWidgets('přání „Mám chuť“ jde smazat viditelným tlačítkem', (
+    tester,
+  ) async {
+    final wish = MealWish(
+      id: 'w1',
+      title: 'Domácí máslové rohlíky',
+      authorName: 'Marti',
+      createdAt: DateTime.utc(2026, 11, 15),
+      updatedAt: DateTime.utc(2026, 11, 15),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          wishesProvider.overrideWith((ref) => Stream.value([wish])),
+          householdProvider.overrideWith((ref) async => null),
+        ],
+        child: const MaterialApp(home: Scaffold(body: WishesSection())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Domácí máslové rohlíky'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('delete-wish-w1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Smazat přání?'), findsOneWidget);
+    await tester.tap(find.text('Zrušit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Smazat přání?'), findsNothing);
   });
 }

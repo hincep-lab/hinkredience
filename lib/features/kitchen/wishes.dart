@@ -280,10 +280,40 @@ Future<void> _wishOptions(
     case 'open':
       context.push(Routes.recipe(wish.recipeId!));
     case 'delete':
-      final docs = await ref.read(docsRepositoryProvider.future);
-      await docs.deleteWish(wish.id);
-      ref.read(syncProvider.notifier).schedule(const Duration(seconds: 1));
+      await deleteWish(context, ref, wish);
   }
+}
+
+/// Smaže přání (po potvrzení). Smazání se synchronizuje celé rodině.
+Future<void> deleteWish(
+  BuildContext context,
+  WidgetRef ref,
+  MealWish wish,
+) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Smazat přání?'),
+      content: Text('„${wish.title}“ zmizí ze seznamu „Mám chuť“ i u rodiny.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Zrušit'),
+        ),
+        FilledButton(
+          key: const Key('confirm-delete-wish'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Smazat'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  final docs = await ref.read(docsRepositoryProvider.future);
+  await docs.deleteWish(wish.id);
+  ref.read(syncProvider.notifier).schedule(const Duration(seconds: 1));
+  if (context.mounted)
+    showMessage(context, 'Přání „${wish.title}“ je smazané.');
 }
 
 /// Sekce v plánu vaření: na co má rodina chuť + tlačítko „Mám chuť na…“.
@@ -365,13 +395,23 @@ class WishesSection extends ConsumerWidget {
                     if (wish.note.isNotEmpty) wish.note,
                   ].join(' · '),
                 ),
-                trailing: wish.isPlanned
-                    ? null
-                    : IconButton(
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!wish.isPlanned)
+                      IconButton(
                         tooltip: 'Naplánovat',
                         icon: const Icon(Icons.event_rounded),
                         onPressed: () => planWish(context, ref, wish),
                       ),
+                    IconButton(
+                      key: Key('delete-wish-${wish.id}'),
+                      tooltip: 'Smazat přání',
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      onPressed: () => deleteWish(context, ref, wish),
+                    ),
+                  ],
+                ),
                 onTap: () => _wishOptions(context, ref, wish),
               ),
           ],
