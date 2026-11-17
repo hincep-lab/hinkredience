@@ -8,6 +8,7 @@ library;
 import '../data/recipe.dart';
 import 'best_buy.dart' show PriceOffer;
 import 'kitchen_math.dart' show foldText;
+import 'sale_dishes_more.dart';
 import 'sale_recipes.dart' show usableOffers;
 
 /// Skupina surovin, kterou hlídáme v letácích.
@@ -356,7 +357,7 @@ class DishOnSale {
 List<DishOnSale> dishesFromSales(
   List<PriceOffer> offers,
   DateTime today, {
-  List<Dish> dishes = saleDishes,
+  List<Dish> dishes = allSaleDishes,
 }) {
   final byChain = <String, List<PriceOffer>>{};
   for (final o in usableOffers(offers, today)) {
@@ -497,6 +498,9 @@ Recipe dishToRecipe(
     for (final step in dish.steps) RecipeStep(id: newId(), instruction: step),
   ],
 );
+
+/// Všechna vestavěná jídla (základní + další osvědčená).
+const allSaleDishes = <Dish>[...saleDishes, ...moreSaleDishes];
 
 /// Vestavěná osvědčená jídla pro 4 osoby.
 const saleDishes = <Dish>[

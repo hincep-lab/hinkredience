@@ -116,7 +116,14 @@ void main() {
     final terms = saleSearchTerms();
     expect(terms.length, lessThanOrEqualTo(20));
     expect(terms, containsAll(['vepřové', 'smetana', 'brambory', 'kuřecí']));
-    for (final dish in saleDishes) {
+    expect(allSaleDishes.length, greaterThanOrEqualTo(55));
+    expect(allSaleDishes.map((d) => d.id).toSet().length, allSaleDishes.length);
+    expect(
+      allSaleDishes.map((d) => d.title).toSet().length,
+      allSaleDishes.length,
+    );
+    for (final dish in allSaleDishes) {
+      expect(dish.main, isNotEmpty, reason: dish.title);
       expect(dish.steps, isNotEmpty, reason: dish.title);
       for (final g in [...dish.groups, ...dish.main]) {
         expect(saleGroupById(g), isNotNull, reason: '${dish.title}: $g');
