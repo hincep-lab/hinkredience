@@ -175,6 +175,20 @@ export function cleanTags(value: unknown): string[] {
   return out;
 }
 
+/** Štítky receptu rozdělené na způsob přípravy, příležitosti a vlastní. */
+export function describeTags(row: any) {
+  const tags = cleanTags(Array.isArray(row?.tags) ? row.tags : []);
+  return {
+    recipe_id: row?.id,
+    title: row?.title ?? "",
+    category: row?.category ?? "",
+    tags,
+    preparation: tags.filter((t) => PREP_TAGS.includes(t)),
+    occasions: tags.filter((t) => OCCASION_TAGS.includes(t)),
+    custom: tags.filter((t) => !PREP_TAGS.includes(t) && !OCCASION_TAGS.includes(t)),
+  };
+}
+
 const STEP_KINDS = ["active", "cook", "passive"];
 
 /** „ks“ pro kusy, jinak „porce“. */
@@ -2982,6 +2996,133 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "get_recipe_tags",
+    title: "Štítky receptů",
+    description:
+      "Načte štítky receptů: způsob přípravy (" + PREP_TAGS.join(", ") + ") a příležitosti (" +
+      OCCASION_TAGS.join(", ") + "), případně vlastní štítky. S recipe_id vrátí štítky jednoho " +
+      "receptu, bez něj přehled všech receptů. untagged_only=true vrátí recepty, které ještě nemají " +
+      "způsob přípravy nebo příležitost – hodí se při postupném přiřazování štítků.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        recipe_id: { ...idProperty, description: "Nepovinné: štítky jen tohoto receptu." },
+        tag: { type: "string", description: "Nepovinné: jen recepty s tímto štítkem." },
+        untagged_only: {
+          type: "boolean",
+          description: "Jen recepty bez způsobu přípravy nebo bez příležitosti.",
+        },
+        limit: { type: "integer", description: "Max. počet receptů (výchozí 200, nejvýše 500)." },
+      },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const known = { preparation: PREP_TAGS, occasions: OCCASION_TAGS };
+      if (args?.recipe_id !== undefined && args?.recipe_id !== null && args?.recipe_id !== "") {
+        const id = requireId(args.recipe_id);
+        const rows = await db.select(`recipes?select=id,title,category,tags&id=eq.${id}&deleted_at=is.null&limit=1`);
+        if (!rows.length) throw new ToolError("Recept nenalezen. Zkontrolujte id přes get_recipes.");
+        return { recipe: describeTags(rows[0]), available_tags: known };
+      }
+      const rows = await db.select(
+        `recipes?select=id,title,category,tags&deleted_at=is.null&order=title.asc&limit=${limitOf(args?.limit, 200, 500)}`,
+      );
+      let recipes = rows.map(describeTags);
+      const wanted = text(args?.tag, 40);
+      if (wanted) recipes = recipes.filter((r) => r.tags.some((t) => fold(t) === fold(wanted)));
+      if (args?.untagged_only === true) {
+        recipes = recipes.filter((r) => !r.preparation.length || !r.occasions.length);
+      }
+      const counts: Record<string, number> = {};
+      for (const r of rows.map(describeTags)) for (const t of r.tags) counts[t] = (counts[t] ?? 0) + 1;
+      return { count: recipes.length, recipes, tag_counts: counts, available_tags: known };
+    },
+  },
+  {
+    name: "update_recipe_tags",
+    title: "Upravit štítky receptu",
+    description:
+      "Přidá, odebere nebo nahradí štítky receptu – bez nové verze receptu, okamžitě se " +
+      "synchronizuje do aplikace (filtry Trouba, Pánev, Sous-vide, Pro děti…). Jeden recept může mít " +
+      "víc štítků. add = přidat, remove = odebrat, set = nahradit celý seznam (pak add/remove neuváděj). " +
+      "Pro více receptů najednou pošli pole items (každá položka má recipe_id a add/remove/set). " +
+      "Způsoby přípravy: " + PREP_TAGS.join(", ") + ". Příležitosti: " + OCCASION_TAGS.join(", ") + ".",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        recipe_id: idProperty,
+        add: { type: "array", items: { type: "string" }, description: "Štítky k přidání." },
+        remove: { type: "array", items: { type: "string" }, description: "Štítky k odebrání." },
+        set: {
+          type: "array",
+          items: { type: "string" },
+          description: "Nahradí všechny štítky receptu tímto seznamem (prázdný = smazat všechny).",
+        },
+        items: {
+          type: "array",
+          description: "Hromadná úprava – nejvýše 50 receptů najednou.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["recipe_id"],
+            properties: {
+              recipe_id: idProperty,
+              add: { type: "array", items: { type: "string" } },
+              remove: { type: "array", items: { type: "string" } },
+              set: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const changes: any[] = Array.isArray(args?.items) ? args.items : [args];
+      if (!changes.length) throw new ToolError("Neuvedli jste žádný recept.");
+      if (changes.length > 50) throw new ToolError("Najednou lze upravit nejvýše 50 receptů.");
+      const results = [];
+      for (const change of changes) {
+        const id = requireId(change?.recipe_id);
+        const hasSet = Array.isArray(change?.set);
+        const add = Array.isArray(change?.add) ? cleanTags(change.add) : [];
+        const remove = Array.isArray(change?.remove) ? cleanTags(change.remove) : [];
+        if (!hasSet && !add.length && !remove.length) {
+          throw new ToolError(`U receptu ${id} uveďte add, remove nebo set.`);
+        }
+        if (hasSet && (add.length || remove.length)) {
+          throw new ToolError("Použijte buď set, nebo add/remove – ne obojí najednou.");
+        }
+        const rows = await db.select(`recipes?select=id,title,tags&id=eq.${id}&deleted_at=is.null&limit=1`);
+        if (!rows.length) throw new ToolError(`Recept ${id} nenalezen. Zkontrolujte id přes get_recipes.`);
+        const before = cleanTags(Array.isArray(rows[0].tags) ? rows[0].tags : []);
+        const next = hasSet ? cleanTags(change.set) : cleanTags([
+          ...before.filter((t) => !remove.some((r) => fold(r) === fold(t))),
+          ...add,
+        ]);
+        const unchanged = JSON.stringify(next) === JSON.stringify(before);
+        if (!unchanged) {
+          const saved = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+            tags: next,
+            updated_at: new Date().toISOString(),
+          });
+          if (!saved.length) throw new ToolError(`Štítky receptu „${rows[0].title}“ nejde uložit (oprávnění).`);
+        }
+        results.push({ ...describeTags({ ...rows[0], tags: next }), changed: !unchanged });
+      }
+      const changed = results.filter((r) => r.changed).length;
+      return {
+        saved: true,
+        changed_count: changed,
+        recipes: results,
+        message: changed
+          ? `Štítky upraveny u ${changed} ${changed === 1 ? "receptu" : "receptů"}. V aplikaci se projeví po synchronizaci (obvykle hned).`
+          : "Štítky už byly takto nastavené, nic se neměnilo.",
+      };
+    },
+  },
+  {
     name: "set_recipe_favorite",
     title: "Oblíbený recept",
     description: "Přidá recept mezi oblíbené (favorite=true), nebo ho z nich odebere.",
@@ -3242,6 +3383,8 @@ const instructions =
   "Plán vaření: get_meal_plan, plan_meal, update_meal_plan_entry, remove_meal_plan_entry, " +
   "shop_for_meal_plan (nákup na celý plán). Deník: log_cooking, get_cooking_history. " +
   "Oblíbené a hodnocení: set_recipe_favorite, rate_recipe. Koš: get_trash, restore_recipe. " +
+  "Štítky (filtry v aplikaci – způsob přípravy a příležitosti): get_recipe_tags, update_recipe_tags; " +
+  "přiřazuj je podle postupu, vybavení a surovin, jeden recept může mít víc štítků. " +
   "Rodina a sdílení: get_family, set_recipe_sharing, share_all_recipes. Chutě: " +
   "update_taste_preferences; oslovení: set_greeting_name. Recept z odkazu bez AI: " +
   "import_recipe_from_url. Vždy zapisuj do databáze přes tyto nástroje, ne jen do odpovědi.";

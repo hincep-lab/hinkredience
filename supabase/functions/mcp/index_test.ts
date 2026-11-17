@@ -251,6 +251,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
+    "get_recipe_tags",
     "get_recipe_versions",
     "get_recipes",
     "get_shopping_list",
@@ -277,6 +278,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "update_kitchen_equipment",
     "update_meal_plan_entry",
     "update_recipe",
+    "update_recipe_tags",
     "update_shopping_item",
     "update_taste_preferences",
     "upload_recipe_photo",
@@ -292,6 +294,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
+    "get_recipe_tags",
     "get_recipe_versions",
     "get_recipes",
     "get_shopping_list",
@@ -305,7 +308,7 @@ Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtec�
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 48);
+  assertEquals(tools.length, 50);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");
@@ -715,4 +718,53 @@ Deno.test("štítky: posílají se jen když je klient uvedl, známé v přesné
     "Grilovačka",
   ]);
   assertEquals(cleanTags(["Pánev", 5, "pomale vareni"]), ["Pánev", "Pomalé vaření"]);
+});
+
+Deno.test("štítky: get_recipe_tags přehled, jeden recept i bez štítků", async () => {
+  const w = world({
+    recipes: [
+      { ...svickova, tags: ["Trouba", "Slavnostní jídlo", "Vánoce"] },
+      { ...gulas, tags: [] },
+    ],
+  });
+  const one = (await call(w, "get_recipe_tags", { recipe_id: ID1 })).structuredContent;
+  assertEquals(one.recipe.preparation, ["Trouba"]);
+  assertEquals(one.recipe.occasions, ["Slavnostní jídlo"]);
+  assertEquals(one.recipe.custom, ["Vánoce"]);
+  assert(one.available_tags.occasions.includes("Pro děti"));
+  const all = (await call(w, "get_recipe_tags", {})).structuredContent;
+  assertEquals(all.count, 2);
+  assertEquals(all.tag_counts["Trouba"], 1);
+  const untagged = (await call(w, "get_recipe_tags", { untagged_only: true })).structuredContent;
+  assertEquals(untagged.recipes.map((r: any) => r.title), ["Hovězí guláš"]);
+  const byTag = (await call(w, "get_recipe_tags", { tag: "trouba" })).structuredContent;
+  assertEquals(byTag.count, 1);
+});
+
+Deno.test("štítky: update_recipe_tags přidá, odebere, nahradí a hromadně", async () => {
+  const w = world({ recipes: [{ ...svickova, tags: ["Trouba", "Vánoce"] }, { ...gulas, tags: [] }] });
+  const added = (await call(w, "update_recipe_tags", {
+    recipe_id: ID1,
+    add: ["pro deti", "Pánev", "Trouba"],
+    remove: ["vánoce"],
+  })).structuredContent;
+  assertEquals(added.recipes[0].tags, ["Trouba", "Pro děti", "Pánev"]);
+  const patch = w.calls.find((c) => c.method === "PATCH" && c.url.includes("/rest/v1/recipes"))!;
+  assertEquals(patch.body.tags, ["Trouba", "Pro děti", "Pánev"]);
+  assert(typeof patch.body.updated_at === "string", "posune čas úpravy kvůli synchronizaci");
+  assert(!w.calls.some((c) => c.url.includes("api_save_recipe")), "bez nové verze receptu");
+
+  const batch = (await call(w, "update_recipe_tags", {
+    items: [
+      { recipe_id: ID1, set: ["Sous-vide"] },
+      { recipe_id: ID2, add: ["Pomalé vaření", "Na více dní"] },
+    ],
+  })).structuredContent;
+  assertEquals(batch.changed_count, 2);
+  assertEquals(batch.recipes[1].preparation, ["Pomalé vaření"]);
+  assertEquals(batch.recipes[1].occasions, ["Na více dní"]);
+
+  assert((await call(w, "update_recipe_tags", { recipe_id: ID1 })).isError);
+  assert((await call(w, "update_recipe_tags", { recipe_id: ID1, set: [], add: ["Gril"] })).isError);
+  assert((await call(w, "update_recipe_tags", { recipe_id: "spatne", add: ["Gril"] })).isError);
 });

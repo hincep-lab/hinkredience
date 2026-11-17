@@ -189,7 +189,7 @@ Deno.test("nové nástroje mají správné příznaky", () => {
   const byName = (n: string) => tools.find((t) => t.name === n)!;
   for (const n of ["get_meal_plan", "get_trash", "get_family"]) assert(byName(n).readOnly, n);
   for (const n of ["remove_meal_plan_entry"]) assert(byName(n).destructive, n);
-  assertEquals(tools.length, 48);
+  assertEquals(tools.length, 50);
 });
 
 Deno.test("ceny: akci ověřuje serverová funkce prices s tokenem uživatele", async () => {
