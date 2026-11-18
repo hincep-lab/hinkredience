@@ -417,6 +417,7 @@ class _SaleAlertsTile extends ConsumerStatefulWidget {
 class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
   late bool _on = saleAlertsEnabled(ref.read(sharedPreferencesProvider));
   late List<WatchItem> _watch = watchItems(ref.read(sharedPreferencesProvider));
+  late bool _tip = weekTipEnabled(ref.read(sharedPreferencesProvider));
 
   Future<void> _set(bool value) async {
     setState(() => _on = value);
@@ -521,6 +522,18 @@ class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
         value: _on,
         onChanged: _set,
       ),
+      if (_on)
+        SwitchListTile(
+          key: const ValueKey('week-tip'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Čtvrteční tip: 3 jídla z akcí na týden'),
+          value: _tip,
+          onChanged: (v) async {
+            setState(() => _tip = v);
+            await ref.read(sharedPreferencesProvider).setBool(weekTipKey, v);
+          },
+        ),
       if (_on)
         Wrap(
           spacing: 6,

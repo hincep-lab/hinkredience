@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'best_buy.dart';
+import 'sale_dishes.dart';
 import 'stores.dart';
 
 /// Hlídané zboží: název a volitelně cena balení, pod kterou chci vědět.
@@ -118,3 +119,31 @@ String _num(double v) =>
     (v == v.roundToDouble() ? v.toStringAsFixed(0) : '$v').replaceAll('.', ',');
 
 String _kc(double v) => '${v.toStringAsFixed(2).replaceAll('.', ',')} Kč';
+
+/// Čtvrteční tip: tři jídla, která se tento týden nejvíc vyplatí uvařit
+/// z akcí – každé s nákupem v jednom obchodě, různá hlavní surovina, cena
+/// zlevněného zboží na [servings] porcí (jedno vaření = 3 jídla po 2+1).
+({String title, String body})? weekTip(
+  List<PriceOffer> offers,
+  DateTime today, {
+  double servings = 6,
+}) {
+  final picks = <DishOnSale>[];
+  final mains = <String>{};
+  for (final d in dishesFromSales(offers, today)) {
+    if (d.chain == null || !mains.add(d.mainGroup)) continue;
+    picks.add(d);
+    if (picks.length == 3) break;
+  }
+  if (picks.isEmpty) return null;
+  final lines = [
+    for (final d in picks)
+      '${d.dish.title} – ${chainById(d.chain!)?.name ?? d.chain}, '
+          'zlevněné zboží ${_kc(saleCost(d, servings: servings).total)}',
+  ];
+  return (
+    title: 'Tento týden se vyplatí uvařit',
+    body:
+        '${lines.join('; ')}. Na ${_num(servings)} porcí, nákup vždy v jednom obchodě.',
+  );
+}

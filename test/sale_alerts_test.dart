@@ -166,4 +166,25 @@ void main() {
     list = [...list, offer('n', 'lidl', 'Kuřecí stehna XXL', 49.9)];
     expect(await run(DateTime(2026, 11, 18, 11)), 0, reason: 'vypnuto');
   });
+
+  test('čtvrteční tip: jednou týdně od čtvrtka 6:00', () {
+    expect(weekTipDue(DateTime(2026, 11, 18, 9), null), isFalse, reason: 'st');
+    expect(weekTipDue(DateTime(2026, 11, 19, 5), null), isFalse);
+    expect(weekTipDue(DateTime(2026, 11, 19, 6), null), isTrue);
+    expect(weekTipDue(DateTime(2026, 11, 21, 10), '2026-11-16'), isFalse);
+    expect(weekTipDue(DateTime(2026, 11, 26, 7), '2026-11-16'), isTrue);
+  });
+
+  test('čtvrteční tip: tři jídla z akcí, různé maso, v jednom obchodě', () {
+    final tip = weekTip([
+      offer('a', 'lidl', 'Kuřecí stehna', 59.9, pack: 1, unit: 'kg'),
+      offer('b', 'penny', 'Vepřová krkovice', 99.9, pack: 1, unit: 'kg'),
+      offer('c', 'albert', 'Hovězí zadní', 239.9, pack: 1, unit: 'kg'),
+    ], today);
+    expect(tip, isNotNull);
+    expect(tip!.title, 'Tento týden se vyplatí uvařit');
+    expect(tip.body, contains('Na 6 porcí, nákup vždy v jednom obchodě.'));
+    expect('; '.allMatches(tip.body).length, lessThanOrEqualTo(2));
+    expect(weekTip(const [], today), isNull);
+  });
 }

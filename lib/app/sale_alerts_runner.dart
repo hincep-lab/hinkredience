@@ -12,6 +12,24 @@ const saleWatchKey = 'sale_watch';
 const _seenKey = 'sale_alerts_seen';
 const _lastKey = 'sale_alerts_last';
 const _shoppingKey = 'sale_alerts_shopping';
+const weekTipKey = 'week_tip';
+const _weekTipSentKey = 'week_tip_sent';
+
+bool weekTipEnabled(SharedPreferences prefs) =>
+    prefs.getBool(weekTipKey) ?? true;
+
+/// Čtvrteční tip se pošle jednou za týden: ve čtvrtek od 6 hodin nebo kdykoli
+/// později v týdnu, když ve čtvrtek telefon nekontroloval.
+bool weekTipDue(DateTime now, String? sentWeek) {
+  if (now.weekday < DateTime.thursday) return false;
+  if (now.weekday == DateTime.thursday && now.hour < 6) return false;
+  return sentWeek != _weekKey(now);
+}
+
+String _weekKey(DateTime d) {
+  final monday = DateTime(d.year, d.month, d.day - (d.weekday - 1));
+  return '${monday.year}-${monday.month}-${monday.day}';
+}
 
 bool saleAlertsEnabled(SharedPreferences prefs) =>
     prefs.getBool(saleAlertsKey) ?? true;
@@ -63,14 +81,23 @@ Future<int> runSaleAlerts({
     );
     // Pamatovat jen platné akce (prošlé samy vypadnou).
     await prefs.setStringList(_seenKey, [for (final o in offers) o.id]);
-    if (first || found.isEmpty) return 0;
+    final notes = [...first ? const <({String title, String body})>[] : found];
+    if (weekTipEnabled(prefs) &&
+        weekTipDue(now, prefs.getString(_weekTipSentKey))) {
+      final tip = weekTip(offers, now);
+      if (tip != null) {
+        notes.add(tip);
+        await prefs.setString(_weekTipSentKey, _weekKey(now));
+      }
+    }
+    if (notes.isEmpty) return 0;
     if (askPermission &&
         !(prefs.getBool('family_notifications_asked') ?? false)) {
       await prefs.setBool('family_notifications_asked', true);
       await alerts.requestPermission();
     }
-    await alerts.show(found);
-    return found.length;
+    await alerts.show(notes);
+    return notes.length;
   } catch (error) {
     debugPrint('Upozornění na akce se nepodařilo: $error');
     return 0;
