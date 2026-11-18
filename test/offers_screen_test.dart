@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hinkredience/app/kitchen_providers.dart';
@@ -110,7 +111,12 @@ void main() {
           ),
           shoppingListsProvider.overrideWith((ref) => Stream.value(const [])),
         ],
-        child: const MaterialApp(home: OffersScreen()),
+        child: const MaterialApp(
+          locale: Locale('cs'),
+          supportedLocales: [Locale('cs')],
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
+          home: OffersScreen(),
+        ),
       ),
     );
     await tester.pumpAndSettle();
