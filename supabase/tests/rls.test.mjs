@@ -775,6 +775,11 @@ test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async
   await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified)
     values ('penny', 'Máslo 250 g', 'maslo', 39.9, '2026-11-20', 'https://www.penny.cz/nabidky', 'gemini', true)`);
   assert.equal((await as(CIZI, `select product from public.price_offers`)).rows[0].product, 'Máslo 250 g');
+  // Akce z přehledu letáků kupi.cz (zdroj „kupi“) server uložit smí.
+  await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified, verify_method)
+    values ('lidl', 'Máslo Milkpol', 'maslo milkp', 29.9, '2026-11-22', 'https://www.kupi.cz/letak/lidl-letak-153', 'kupi', true, 'kupi')`);
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'nekdo')`));
   await denied(as(PAVEL, `update public.price_offers set price = 1`));
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
     values ('penny', 'X', 0, '2026-11-20', 'https://www.penny.cz/', 'manual')`));

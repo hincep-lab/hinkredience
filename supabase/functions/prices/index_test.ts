@@ -388,6 +388,8 @@ const ENV = {
   openaiKey: "sk-test",
   openaiModel: "gpt-5-mini",
   allowPaid: false,
+  // kupi.cz má vlastní testy (kupi_test.ts); tady jen oficiální zdroje.
+  kupi: false,
 };
 
 function req(body: unknown, token = "tok") {

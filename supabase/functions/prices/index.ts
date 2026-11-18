@@ -36,6 +36,8 @@ export interface Env {
   allowPaid: boolean;
   /** Nejdelší doba jednoho hledání v ms (výchozí 110 s). */
   budgetMs?: number;
+  /** Brát akce i z přehledu kupi.cz (výchozí ano; vypne PRICES_KUPI=0). */
+  kupi?: boolean;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -1144,6 +1146,235 @@ async function coopSources(fetchImpl: FetchLike, today: string): Promise<Sources
   return { flyers, offers: [], log };
 }
 
+// ---- kupi.cz: přehled akcí z letáků (strukturovaná stránka, bez AI)
+//
+// Kupi.cz přepisuje akční letáky řetězců do přehledu „produkt → obchod →
+// cena, balení, platnost, odkaz do letáku“. Server stáhne stránku hledání
+// pro položku seznamu (jen „v akci“), vybere nabídky sušických řetězců a
+// uloží je jako akce. AI se nepoužívá, cena je přesně ta ze stránky.
+
+/** Obchody na kupi.cz → náš řetězec; [only] = leták musí být pro Sušici (regionální letáky). */
+export const KUPI_SHOPS: Record<string, { chain: string; only?: RegExp }> = {
+  "penny-market": { chain: "penny" },
+  penny: { chain: "penny" },
+  lidl: { chain: "lidl" },
+  tesco: { chain: "tesco" },
+  albert: { chain: "albert" },
+  jip: { chain: "jip", only: /susice/ },
+  coop: { chain: "coop", only: /susice|zkd|zapadoces/ },
+};
+
+export const KUPI_HOSTS = ["kupi.cz"];
+
+export interface KupiOffer extends RawOffer {
+  chain: string;
+  /** Obchod na kupi.cz (penny-market, coop …). */
+  shop: string;
+  /** Adresa letáku na kupi.cz (část za doménou). */
+  leaflet: string;
+}
+
+/** Den a měsíc bez roku („24. 11.“) → ISO datum nejblíž dnešku. */
+function kupiDay(d: number, m: number, today: string, y?: number): string | null {
+  const ty = Number(today.slice(0, 4)), tm = Number(today.slice(5, 7));
+  let year = y ?? ty;
+  if (!y && m < tm - 6) year = ty + 1;
+  if (!y && m > tm + 6) year = ty - 1;
+  return iso(year, m, d);
+}
+
+/** Platnost nabídky z textu („platí do úterý 24. 11.“, „čt 19. 11. – ne 22. 11.“, „zítra končí“). */
+export function kupiValidity(text: string, today: string): { from: string | null; to: string | null } {
+  const t = fold(text);
+  if (/dnes konci/.test(t)) return { from: null, to: today };
+  if (/zitra konci/.test(t)) return { from: null, to: addDays(today, 1) };
+  const za = t.match(/konci za (\d+) dn/);
+  if (za) return { from: null, to: addDays(today, Number(za[1])) };
+  const dates = [...text.matchAll(/(\d{1,2})\.\s*(\d{1,2})\.(?:\s*(\d{4}))?/g)]
+    .map((m) => kupiDay(Number(m[1]), Number(m[2]), today, m[3] ? Number(m[3]) : undefined))
+    .filter((d): d is string => !!d);
+  if (dates.length >= 2) {
+    let [from, to] = dates;
+    if (from > to) from = String(Number(from.slice(0, 4)) - 1) + from.slice(4);
+    return { from, to };
+  }
+  if (dates.length === 1) {
+    return /\bod\b/.test(t) && !/\bdo\b/.test(t) ? { from: dates[0], to: null } : { from: null, to: dates[0] };
+  }
+  return { from: null, to: null };
+}
+
+/** Balení „/ 250 g“, „/ 1,5 l“, „/ 100x 10 g“. */
+export function kupiPack(text: string): { qty: number | null; unit: string; label: string } {
+  const m = text.match(/\/\s*(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l|ks)(?![a-zá-ž])/i);
+  if (!m) return { qty: null, unit: "", label: "" };
+  const each = Number(m[2].replace(",", "."));
+  const times = m[1] ? Number(m[1]) : 1;
+  const qty = Math.round(each * times * 1000) / 1000;
+  return { qty, unit: m[3].toLowerCase(), label: `${m[1] ? `${m[1]}× ` : ""}${m[2]} ${m[3].toLowerCase()}` };
+}
+
+const KUPI_COND = [
+  /Platí pro členy klubu/i,
+  /Cena s\s+[^⟦]{2,40}?(?=\s+(?:platí|zítra|dnes|končí|od\s|do\s|(?:po|út|st|čt|pá|so|ne)\s+\d)|\s*⟦|$)/i,
+  /platí (?:pouze|jen) s [a-záčďéěíňóřšťúůýž ]{3,40}?(?=\s*⟦|\s+max\s|$)/i,
+  /s (?:kartou|aplikací|kupónem|kuponem) [^⟦]{0,30}?(?=\s*⟦|$)/i,
+  /max\.? \d+ ks\s*\/\s*osob\w*(?:\s*\/\s*den)?/i,
+];
+
+/** Převede HTML na text, ve kterém zůstanou odkazy jako ⟦adresa⟧. */
+function kupiText(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<a\b[^>]*?\bhref=["']([^"']+)["'][^>]*>/gi, (_, h) => ` ⟦${h.replace(/^https?:\/\/(?:www\.)?kupi\.cz/i, "")}⟧ `)
+      .replace(/<[^>]+>/g, " "),
+  ).replace(/\s+/g, " ");
+}
+
+/**
+ * Nabídky ze stránky hledání kupi.cz (…/hledej?f=máslo&vse=0). Jen sušické
+ * řetězce; nabídky „Doporučené akce“ (sponzorované) se objeví i v ceníku,
+ * proto se duplicity sloučí.
+ */
+export function kupiOffers(html: string, today: string): { offers: KupiOffer[]; rejected: Rejected[] } {
+  const text = kupiText(html);
+  const offers: KupiOffer[] = [];
+  const rejected: Rejected[] = [];
+  const seen = new Set<string>();
+  // Úseky produktů: od odkazu /sleva/… do dalšího jiného produktu.
+  const parts = text.split(/⟦\/sleva\/([a-z0-9-]+)[^⟧]*⟧/);
+  const products: { slug: string; body: string }[] = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    const slug = parts[i], body = parts[i + 1] ?? "";
+    const last = products[products.length - 1];
+    if (last && last.slug === slug) last.body += " " + body;
+    else products.push({ slug, body });
+  }
+  for (const { slug, body } of products) {
+    const head = body.split(/⟦|Přidat produkt|Běžná cena|Doporučené akce|Akce dle ceny/)[0].trim();
+    const name = head.replace(/\s+\d+(?:[.,]\d+)?\s*(?:kg|g|ml|l|ks)\s*$/i, "").replace(/\s+v akci za .*$/i, "").trim();
+    if (!name) continue;
+    // Nabídky: začínají odkazem na obchod ⟦/letaky/obchod⟧ a končí odkazem do letáku ⟦/letak/…⟧.
+    const tokens = body.split(/(⟦[^⟧]*⟧)/);
+    type Cur = { shop: string; text: string; leaflet: string };
+    const list: Cur[] = [];
+    let cur: Cur | null = null;
+    for (const tok of tokens) {
+      const link = tok.match(/^⟦([^⟧]*)⟧$/);
+      if (link) {
+        const href = link[1];
+        const shop = href.match(/^\/letaky\/([a-z0-9-]+)\/?$/)?.[1];
+        if (shop) {
+          if (!cur || cur.leaflet || /\d,\d{2}\s*Kč/.test(cur.text) || cur.shop !== shop) {
+            cur = { shop, text: "", leaflet: "" };
+            list.push(cur);
+          }
+          continue;
+        }
+        if (cur && !cur.leaflet && /^\/letak\//.test(href)) {
+          cur.leaflet = href;
+          continue;
+        }
+        if (cur) cur.text += " ⟦⟧ ";
+        continue;
+      }
+      if (cur) cur.text += tok;
+    }
+    for (const o of list) {
+      const known = KUPI_SHOPS[o.shop];
+      if (!known) continue;
+      const chain = known.chain;
+      const label = `${name} (${CHAINS[chain].name})`;
+      const priceM = o.text.match(/(\d{1,5}),(\d{2})\s*Kč/);
+      if (!priceM) {
+        rejected.push({ product: label, reason: "kupi.cz: u nabídky chybí cena" });
+        continue;
+      }
+      const leafletSlug = o.leaflet.replace(/^\/letak\//, "").replace(/\?.*$/, "");
+      if (known.only && !known.only.test(leafletSlug)) {
+        rejected.push({ product: label, reason: `kupi.cz: leták „${leafletSlug || "?"}“ není pro Sušici` });
+        continue;
+      }
+      // Platnost: text mezi cenou za jednotku a odkazem do letáku.
+      const when = kupiValidity(o.text.replace(/\d+(?:,\d+)?\s*Kč\s*\/\s*\d+\s*(?:g|kg|ml|l|ks)/gi, " "), today);
+      if (!when.to) {
+        rejected.push({ product: label, reason: "kupi.cz: nepodařilo se zjistit, do kdy akce platí" });
+        continue;
+      }
+      const pack = kupiPack(o.text);
+      const conditions = KUPI_COND
+        .map((re) => o.text.match(re)?.[0]?.replace(/\s*⟦⟧\s*/g, " ").trim())
+        .filter((c): c is string => !!c)
+        .join("; ");
+      const price = Number(`${priceM[1]}.${priceM[2]}`);
+      const key = `${chain}|${slug}|${price}|${pack.qty}|${pack.unit}|${when.to}|${conditions}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      offers.push({
+        chain,
+        shop: o.shop,
+        leaflet: o.leaflet,
+        product: name.slice(0, 160),
+        label: pack.label,
+        price,
+        pack_qty: pack.qty,
+        pack_unit: pack.unit,
+        regular_price: null,
+        conditions,
+        valid_from: when.from,
+        valid_to: when.to,
+        source_url: `https://www.kupi.cz${o.leaflet || `/sleva/${slug}`}`,
+      });
+    }
+  }
+  return { offers, rejected };
+}
+
+/** Adresa hledání na kupi.cz (jen zboží v akci). */
+export function kupiSearchUrl(item: string): string {
+  return `https://www.kupi.cz/hledej?f=${encodeURIComponent(item.trim())}&vse=0`;
+}
+
+/** Stáhne a přečte hledání na kupi.cz pro jednu položku. */
+export async function kupiSearch(
+  item: string,
+  fetchImpl: FetchLike,
+  today: string,
+): Promise<{ offers: KupiOffer[]; rejected: Rejected[]; log: FetchLog }> {
+  const url = kupiSearchUrl(item);
+  const log: FetchLog = { url, status: 0, chars: 0, note: "" };
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "Accept-Language": "cs-CZ,cs;q=0.9" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    log.note = `kupi.cz nedostupné (${(e as Error).name})`;
+    return { offers: [], rejected: [], log };
+  }
+  log.status = res.status;
+  if (!hostIn(res.url || url, KUPI_HOSTS)) {
+    await res.body?.cancel().catch(() => {});
+    log.note = "přesměrováno mimo kupi.cz";
+    return { offers: [], rejected: [], log };
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    log.note = `HTTP ${res.status}`;
+    return { offers: [], rejected: [], log };
+  }
+  const html = (await res.text()).slice(0, 3_000_000);
+  log.chars = html.length;
+  const r = kupiOffers(html, today);
+  log.note = `kupi.cz: ${r.offers.length} nabídek sušických obchodů`;
+  return { ...r, log };
+}
+
 const LOADERS: Record<string, (f: FetchLike, today: string) => Promise<Sources>> = {
   tesco: tescoSources,
   penny: pennySources,
@@ -1244,7 +1475,7 @@ export function verifiedByText(
 // ------------------------------------------------------------ Gemini: čtení stran letáku
 
 export interface AiDiag {
-  mode: "leták" | "kontrola" | "data";
+  mode: "leták" | "kontrola" | "data" | "kupi.cz";
   model: string;
   status: "ok" | "chyba";
   error?: string;
@@ -1645,6 +1876,21 @@ class Db {
       const q = (v: unknown) => encodeURIComponent(String(v));
       const filter = `chain=eq.${q(row.chain)}&product_key=eq.${q(row.product_key)}&price=eq.${q(row.price)}&valid_to=eq.${q(row.valid_to)}` +
         (row.store_id ? `&store_id=eq.${q(row.store_id)}` : "&store_id=is.null");
+      // kupi.cz je přepis letáku: ověří jen dosud neověřenou nabídku (např.
+      // čtení AI), nabídku z oficiálního zdroje nikdy nepřepíše.
+      if (row.verify_method === "kupi") {
+        await this.rest(`price_offers?${filter}&verified=is.false`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            conditions: row.conditions, kind: row.kind, loyalty: row.loyalty,
+            verified: true, verify_method: row.verify_method, verified_at: row.verified_at,
+            source_title: row.source_title, source_url: row.source_url, provider: row.provider,
+            pack_qty: row.pack_qty, pack_unit: row.pack_unit, valid_from: row.valid_from,
+          }),
+        }).catch(() => {});
+        return false;
+      }
       const patch: Record<string, unknown> = {
         conditions: row.conditions, kind: row.kind, loyalty: row.loyalty,
       };
@@ -1755,7 +2001,7 @@ export interface OfferDiag {
 }
 
 export interface SourceDiag {
-  kind: "leták" | "data";
+  kind: "leták" | "data" | "kupi.cz";
   title: string;
   url: string;
   valid_from: string | null;
@@ -1952,6 +2198,28 @@ export async function handle(
           else summary.unverified++;
         };
 
+        // kupi.cz: jedno hledání na položku, sdílené všemi řetězci.
+        const kupiRuns = new Map<string, ReturnType<typeof kupiSearch>>();
+        let kupiActive = 0;
+        const kupiQueue: (() => void)[] = [];
+        const kupiFor = (item: string) => {
+          let run = kupiRuns.get(item);
+          if (!run) {
+            run = (async () => {
+              if (kupiActive >= 4) await new Promise<void>((r) => kupiQueue.push(r));
+              kupiActive++;
+              try {
+                return await kupiSearch(item, fetchImpl, today);
+              } finally {
+                kupiActive--;
+                kupiQueue.shift()?.();
+              }
+            })();
+            kupiRuns.set(item, run);
+          }
+          return run;
+        };
+
         for (const chain of chainIds) {
           const d: ChainDiag = {
             chain, name: CHAINS[chain].name, cached: false,
@@ -2000,10 +2268,45 @@ export async function handle(
             d.ai.push({ mode: "data", model: "bez AI", status: "ok", offers: fromData, pages: `${src.offers.length} akčních položek na webu`, note: "" });
           }
 
+          // 3b) kupi.cz: přehled akcí z letáků, přesné ceny bez AI. Položky,
+          // které se tu najdou, už Gemini v letáku nehledá (šetří limit zdarma).
+          const viaKupi = new Set<string>();
+          if (env.kupi !== false && names.length) {
+            const runs = await Promise.all(names.map((n) => kupiFor(n).then((r) => ({ item: n, ...r }))));
+            const mine: (KupiOffer & { item: string })[] = [];
+            let failed = 0;
+            for (const r of runs) {
+              if (r.log.status !== 200) failed++;
+              if (chain === chainIds[0]) d.pages.push({ url: r.log.url, status: r.log.status, chars: r.log.chars, matched: [], note: r.log.note });
+              for (const rj of r.rejected) if (rj.product.endsWith(`(${CHAINS[chain].name})`)) d.rejected.push(rj);
+              for (const o of r.offers) {
+                if (o.chain !== chain) continue;
+                if (!productMatches(r.item, o.product)) continue;
+                mine.push({ ...o, item: r.item });
+              }
+            }
+            const norm = normalizeOffers(chain, mine);
+            d.rejected.push(...norm.dropped);
+            let fromKupi = 0;
+            for (const offer of norm.offers) {
+              if (offer.valid_to < today) {
+                d.rejected.push({ product: offer.product, reason: `akce skončila ${offer.valid_to}` });
+                continue;
+              }
+              if (offer.valid_from && offer.valid_from > addDays(today, 7)) continue;
+              fromKupi++;
+              viaKupi.add(offer.item);
+              await save(chain, offer, offer.item, { verified: true, method: "kupi", reason: "cena z kupi.cz (přepis akčního letáku obchodu), bez AI" }, "kupi", d);
+            }
+            d.sources.push({ kind: "kupi.cz", title: "Akce z letáků na kupi.cz", url: "https://www.kupi.cz/", valid_from: null, valid_to: null, size: mine.length, text: true, picked: [] });
+            d.ai.push({ mode: "kupi.cz", model: "bez AI", status: failed === runs.length ? "chyba" : "ok", offers: fromKupi, pages: `${runs.length} hledání na kupi.cz`, note: failed ? `${failed}× se stránka nestáhla` : "" });
+          }
+          const flyerNames = names.filter((n) => !viaKupi.has(n));
+
           // 4) Letáky: Gemini čte obrázky stran; cena se ověří textem strany nebo druhým čtením.
           for (const flyer of src.flyers) {
             const blind = !flyer.pages.some((p) => (p.text ?? "").length > 30);
-            const picked = pickPages(flyer, names, blind ? MAX_PAGES_BLIND : MAX_PAGES_TEXT);
+            const picked = pickPages(flyer, flyerNames, blind ? MAX_PAGES_BLIND : MAX_PAGES_TEXT);
             d.sources.push({
               kind: "leták", title: flyer.title, url: flyer.url, valid_from: flyer.validFrom, valid_to: flyer.validTo,
               size: flyer.pages.length, text: !blind, picked: picked.map((p) => p.page.n),
@@ -2218,6 +2521,7 @@ export function envFromDeno(get: (name: string) => string | undefined): Env {
     openaiKey: get("OPENAI_API_KEY") ?? "",
     openaiModel: get("OPENAI_PRICES_MODEL") || "gpt-5-mini",
     allowPaid: (get("PRICES_ALLOW_PAID") ?? "").toLowerCase() === "true",
+    kupi: !["0", "false", "ne"].includes((get("PRICES_KUPI") ?? "").toLowerCase()),
   };
 }
 

@@ -570,6 +570,7 @@ class OfferTag extends StatelessWidget {
 String _providerLabel(String p) => switch (p) {
   'gemini' => 'Google Gemini (čtení akčního letáku)',
   'web' => 'data z webu obchodu',
+  'kupi' => 'kupi.cz (přehled akčních letáků)',
   'openai' => 'OpenAI',
   'chatgpt' => 'ChatGPT',
   _ => 'ručně',
@@ -675,6 +676,7 @@ Future<void> showOfferDetail(
                         'stránka' => 'cena i gramáž jsou na oficiální stránce obchodu',
                         'data' => 'cena z dat oficiálního webu obchodu',
                         'leták-text' => 'cena i gramáž stojí v textu oficiálního letáku',
+                        'kupi' => 'cena z kupi.cz (přepis akčního letáku obchodu, bez AI)',
                         _ => 'z oficiálního zdroje obchodu',
                       }}.'
                     : 'Neověřeno${offer.sourceTitle.isEmpty ? '' : ' (${offer.sourceTitle})'} – do výpočtu nákupu se nepočítá.',
