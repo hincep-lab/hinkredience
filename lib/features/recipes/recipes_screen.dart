@@ -7,6 +7,7 @@ import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/material.dart';
 import '../../core/widgets.dart';
+import '../sync/sync_status.dart';
 import '../../data/recipe.dart';
 
 enum RecipeFilter { categories, all, favorites, newest }
@@ -112,6 +113,7 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.favoritesOnly ? 'Oblíbené' : 'Recepty'),
+        actions: const [SyncStatusButton(), SizedBox(width: 4)],
       ),
       floatingActionButton: FloatingActionButton(
         tooltip: 'Nový recept',

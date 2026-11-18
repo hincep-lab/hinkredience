@@ -83,7 +83,7 @@ void main() {
     expect(eggs.amountLabel(fromServings: 4, toServings: 8), '6 ks');
     expect(
       eggs.amountLabel(fromServings: 4, toServings: 2),
-      '2 ks (přesně 1,5)',
+      '1 ½ ks (1 celé + ½ rozšlehaného)',
     );
 
     const garlic = Ingredient(id: 'c', name: '2–3 stroužky česneku');

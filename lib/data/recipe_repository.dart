@@ -18,6 +18,47 @@ class PurgeResult {
   final List<String> orphanPhotoPaths;
 }
 
+/// Výsledek zapsání receptu ze serveru.
+enum RemoteApply { applied, skipped, conflict }
+
+/// Souběžná úprava: recept se změnil na serveru i v telefonu.
+class RecipeConflict {
+  const RecipeConflict({
+    required this.recipe,
+    required this.versions,
+    required this.detectedAt,
+    this.legacySchema = false,
+  });
+
+  /// Podoba receptu na serveru.
+  final Recipe recipe;
+  final List<RecipeVersion> versions;
+  final DateTime detectedAt;
+  final bool legacySchema;
+
+  factory RecipeConflict.fromJson(String id, Map<String, dynamic> json) =>
+      RecipeConflict(
+        recipe: Recipe.fromJson(
+          Map<String, dynamic>.from(json['recipe'] as Map),
+        ),
+        legacySchema: json['legacy_schema'] == true,
+        detectedAt:
+            DateTime.tryParse(json['detected_at'] as String? ?? '')?.toUtc() ??
+            DateTime.now().toUtc(),
+        versions: [
+          for (final v in (json['versions'] as List?) ?? const [])
+            RecipeVersion(
+              id: (v as Map)['id'] as String,
+              recipeId: id,
+              versionNumber: (v['version_number'] as num).toInt(),
+              snapshot: Map<String, dynamic>.from(v['snapshot'] as Map),
+              changeSummary: v['change_summary'] as String? ?? '',
+              createdAt: DateTime.parse(v['created_at'] as String).toUtc(),
+            ),
+        ],
+      );
+}
+
 /// Správa receptů nad místní databází.
 ///
 /// Každá změna označí recept jako „dirty“ (čeká na odeslání) a po úspěšné
@@ -144,48 +185,94 @@ class RecipeRepository {
   /// s originálem), se k smazání nenabídnou.
   Future<PurgeResult> purgeDeleted({Iterable<String>? ids}) async {
     final wanted = ids?.toSet();
+    late PurgeResult result;
+    await _db.transaction((txn) async {
+      result = await _purgeRows(
+        txn,
+        (r) => r.isDeleted && (wanted == null || wanted.contains(r.id)),
+        queueRemote: true,
+      );
+    });
+    if (result.recipes.isNotEmpty) _notify();
+    return result;
+  }
+
+  /// Recept natrvalo smazaný na jiném zařízení (náhrobek ze serveru).
+  /// Smaže se i tady – bez ohledu na to, jestli byl v koši – a server už
+  /// nic dalšího nepotřebuje.
+  Future<PurgeResult> applyTombstone(String id) async {
+    late PurgeResult result;
+    await _db.transaction((txn) async {
+      result = await _purgeRows(txn, (r) => r.id == id, queueRemote: false);
+      // Případné čekající smazání je tím vyřízené.
+      await txn.delete(
+        'meta',
+        where: 'key IN (?, ?, ?)',
+        whereArgs: [
+          '$_purgePrefix$id',
+          '$_conflictPrefix$id',
+          '$_basePrefix$id',
+        ],
+      );
+    });
+    if (result.recipes.isNotEmpty) _notify();
+    return result;
+  }
+
+  Future<PurgeResult> _purgeRows(
+    Transaction txn,
+    bool Function(Recipe) goes, {
+    required bool queueRemote,
+  }) async {
     final purged = <Recipe>[];
     final orphanLocal = <String>{};
-    await _db.transaction((txn) async {
-      final all = [for (final row in await txn.query('recipes')) _fromRow(row)];
-      bool goes(Recipe r) =>
-          r.isDeleted && (wanted == null || wanted.contains(r.id));
-      final keptLocal = <String>{};
-      final keptRemote = <String>{};
-      for (final recipe in all.where((r) => !goes(r))) {
-        for (final photo in recipe.photos) {
-          if (photo.localPath != null) keptLocal.add(photo.localPath!);
-          if (photo.remotePath != null) keptRemote.add(photo.remotePath!);
-        }
+    final all = [for (final row in await txn.query('recipes')) _fromRow(row)];
+    final keptLocal = <String>{};
+    final keptRemote = <String>{};
+    for (final recipe in all.where((r) => !goes(r))) {
+      for (final photo in recipe.photos) {
+        if (photo.localPath != null) keptLocal.add(photo.localPath!);
+        if (photo.remotePath != null) keptRemote.add(photo.remotePath!);
       }
-      for (final recipe in all.where(goes)) {
-        await txn.delete('recipes', where: 'id = ?', whereArgs: [recipe.id]);
-        await txn.delete(
-          'recipe_versions',
-          where: 'recipe_id = ?',
-          whereArgs: [recipe.id],
-        );
+    }
+    for (final recipe in all.where(goes)) {
+      await txn.delete('recipes', where: 'id = ?', whereArgs: [recipe.id]);
+      await txn.delete(
+        'recipe_versions',
+        where: 'recipe_id = ?',
+        whereArgs: [recipe.id],
+      );
+      await txn.delete(
+        'meta',
+        where: 'key IN (?, ?)',
+        whereArgs: ['$_conflictPrefix${recipe.id}', '$_basePrefix${recipe.id}'],
+      );
+      if (queueRemote) {
         await txn.insert('meta', {
           'key': '$_purgePrefix${recipe.id}',
           'value': jsonEncode([
             for (final photo in recipe.photos)
-              if (photo.remotePath != null &&
-                  !keptRemote.contains(photo.remotePath))
-                photo.remotePath,
+              for (final path in [photo.remotePath, photo.thumbPath])
+                if (path != null && !keptRemote.contains(photo.remotePath))
+                  path,
           ]),
         }, conflictAlgorithm: ConflictAlgorithm.replace);
-        for (final photo in recipe.photos) {
-          final path = photo.localPath;
-          if (path != null && !keptLocal.contains(path)) orphanLocal.add(path);
-        }
-        purged.add(recipe);
       }
-    });
-    if (purged.isNotEmpty) _notify();
+      for (final photo in recipe.photos) {
+        final path = photo.localPath;
+        if (path != null && !keptLocal.contains(path)) orphanLocal.add(path);
+      }
+      purged.add(recipe);
+    }
     return PurgeResult(recipes: purged, orphanPhotoPaths: orphanLocal.toList());
   }
 
   static const _purgePrefix = 'purge:';
+  static const _conflictPrefix = 'conflict:';
+
+  /// Čas poslední úpravy receptu, kterou známe ze serveru (základ pro
+  /// rozpoznání souběžných úprav na dvou místech).
+  static const _basePrefix = 'base:';
 
   /// Trvale smazané recepty, které je ještě potřeba smazat na serveru:
   /// id receptu → cesty jeho fotografií v úložišti.
@@ -260,6 +347,17 @@ class RecipeRepository {
     return [for (final row in rows) _fromRow(row)];
   }
 
+  /// Čeká recept na odeslání?
+  Future<bool> isDirty(String id) async {
+    final rows = await _db.query(
+      'recipes',
+      columns: ['dirty'],
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return rows.isNotEmpty && rows.first['dirty'] == 1;
+  }
+
   Future<int> dirtyCount() async {
     final result = await _db.rawQuery(
       'SELECT COUNT(*) AS c FROM recipes WHERE dirty = 1',
@@ -269,12 +367,50 @@ class RecipeRepository {
 
   /// Označí recept jako odeslaný – jen pokud se mezitím znovu nezměnil.
   Future<void> markClean(String id, DateTime updatedAt) async {
+    final stamp = updatedAt.toUtc().toIso8601String();
+    await _db.transaction((txn) async {
+      await txn.update(
+        'recipes',
+        {'dirty': 0},
+        where: 'id = ? AND updated_at = ?',
+        whereArgs: [id, stamp],
+      );
+      // Server teď má tuto podobu receptu.
+      await txn.insert('meta', {
+        'key': '$_basePrefix$id',
+        'value': stamp,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
+  /// Fotku stáhnutou do mezipaměti zapíše k receptu (bez nové verze, bez
+  /// odesílání na server – jde jen o cestu v tomto telefonu).
+  Future<void> saveCachedPhoto(
+    String recipeId,
+    String photoId,
+    String localPath,
+  ) async {
+    final current = await getById(recipeId);
+    if (current == null) return;
+    var changed = false;
+    final photos = [
+      for (final p in current.photos)
+        if (p.id == photoId && p.localPath != localPath)
+          () {
+            changed = true;
+            return p.copyWith(localPath: localPath);
+          }()
+        else
+          p,
+    ];
+    if (!changed) return;
     await _db.update(
       'recipes',
-      {'dirty': 0},
-      where: 'id = ? AND updated_at = ?',
-      whereArgs: [id, updatedAt.toUtc().toIso8601String()],
+      {'data': jsonEncode(current.copyWith(photos: photos).toJson())},
+      where: 'id = ?',
+      whereArgs: [recipeId],
     );
+    _notify();
   }
 
   /// Doplní fotkám cesty v úložišti, aniž by změnil čas úpravy receptu.
@@ -285,7 +421,10 @@ class RecipeRepository {
     final merged = [
       for (final p in current.photos)
         byId[p.id]?.remotePath != null
-            ? p.copyWith(remotePath: byId[p.id]!.remotePath)
+            ? p.copyWith(
+                remotePath: byId[p.id]!.remotePath,
+                thumbPath: byId[p.id]!.thumbPath,
+              )
             : p,
     ];
     await _db.update(
@@ -314,18 +453,22 @@ class RecipeRepository {
     );
   }
 
-  /// Zapíše stav ze serveru. Platí pravidlo „poslední úprava vyhrává“:
-  /// neodeslaná místní změna, která je novější, se nepřepíše.
-  /// Vrací `true`, pokud byl místní záznam změněn.
+  /// Zapíše stav ze serveru.
+  ///
+  /// - Recept bez neodeslaných změn se aktualizuje.
+  /// - Neodeslaná místní úprava se nikdy nepřepíše. Pokud se recept mezitím
+  ///   změnil i na serveru, vznikne konflikt, který rozhodne uživatel
+  ///   ([resolveConflict]); do té doby se recept neodesílá.
   ///
   /// [legacySchema] znamená, že server ještě nemá sloupce pro výtěžnost,
   /// čekání a druh kroků; místní hodnoty těchto polí se pak zachovají.
-  Future<bool> applyRemote(
+  Future<RemoteApply> applyRemote(
     Recipe remote, {
     List<RecipeVersion> versions = const [],
     bool legacySchema = false,
   }) async {
     var applied = false;
+    var conflict = false;
     await _db.transaction((txn) async {
       // Recept natrvalo smazaný v tomto telefonu se ze serveru nevrací.
       final purge = await txn.query(
@@ -339,41 +482,64 @@ class RecipeRepository {
         where: 'id = ?',
         whereArgs: [remote.id],
       );
+      Future<void> setBase() => txn.insert('meta', {
+        'key': '$_basePrefix${remote.id}',
+        'value': remote.updatedAt.toUtc().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
       if (rows.isEmpty) {
         await _put(txn, remote, dirty: false);
+        await setBase();
         applied = true;
       } else {
         final local = _fromRow(rows.first);
         final localDirty = rows.first['dirty'] == 1;
-        final localIsNewer = !remote.updatedAt.isAfter(local.updatedAt);
-        if (!(localDirty && localIsNewer)) {
-          // Cesty k fotkám v telefonu server nezná – zachováme je.
-          final localPaths = {for (final p in local.photos) p.id: p.localPath};
-          var merged = remote.copyWith(
-            photos: [
-              for (final p in remote.photos)
-                p.copyWith(localPath: localPaths[p.id]),
-            ],
-          );
-          if (legacySchema) {
-            final localSteps = {for (final s in local.steps) s.id: s};
-            merged = merged.copyWith(
-              yieldUnit: local.yieldUnit,
-              restMinutes: local.restMinutes,
-              steps: [
-                for (final s in merged.steps)
-                  RecipeStep(
-                    id: s.id,
-                    instruction: s.instruction,
-                    durationMinutes: s.durationMinutes,
-                    temperatureC: s.temperatureC,
-                    kind: localSteps[s.id]?.kind ?? s.kind,
-                    parallel: localSteps[s.id]?.parallel ?? s.parallel,
-                  ),
+        final baseRows = await txn.query(
+          'meta',
+          where: 'key = ?',
+          whereArgs: ['$_basePrefix${remote.id}'],
+        );
+        final base = baseRows.isEmpty
+            ? null
+            : DateTime.tryParse(baseRows.first['value'] as String);
+        final sameAsLocal = remote.updatedAt.isAtSameMomentAs(local.updatedAt);
+        final remoteUnchanged =
+            base != null && remote.updatedAt.isAtSameMomentAs(base);
+
+        if (localDirty && (sameAsLocal || remoteUnchanged)) {
+          // Server má jen to, co už známe – neodeslaná místní úprava platí.
+          await setBase();
+        } else if (localDirty) {
+          // Recept se změnil na serveru (ChatGPT, druhý telefon) a zároveň
+          // tady. Nic se nepřepíše: místní úprava zůstává, verze ze serveru
+          // se uloží stranou a uživatel rozhodne, kterou ponechat.
+          await txn.insert('meta', {
+            'key': '$_conflictPrefix${remote.id}',
+            'value': jsonEncode({
+              'recipe': remote.toJson(),
+              'legacy_schema': legacySchema,
+              'versions': [
+                for (final v in versions)
+                  {
+                    'id': v.id,
+                    'version_number': v.versionNumber,
+                    'snapshot': v.snapshot,
+                    'change_summary': v.changeSummary,
+                    'created_at': v.createdAt.toUtc().toIso8601String(),
+                  },
               ],
-            );
-          }
-          await _put(txn, merged, dirty: false);
+              'detected_at': _clock().toUtc().toIso8601String(),
+            }),
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+          conflict = true;
+          return;
+        } else {
+          await _put(
+            txn,
+            _mergeRemote(local, remote, legacySchema: legacySchema),
+            dirty: false,
+          );
+          await setBase();
           applied = true;
         }
       }
@@ -389,8 +555,164 @@ class RecipeRepository {
         }, conflictAlgorithm: ConflictAlgorithm.ignore);
       }
     });
-    if (applied) _notify();
-    return applied;
+    if (applied || conflict) _notify();
+    return conflict
+        ? RemoteApply.conflict
+        : (applied ? RemoteApply.applied : RemoteApply.skipped);
+  }
+
+  /// Spojí stav ze serveru s místními údaji, které server nezná.
+  Recipe _mergeRemote(
+    Recipe local,
+    Recipe remote, {
+    required bool legacySchema,
+  }) {
+    // Cesty k fotkám v telefonu server nezná – zachováme je.
+    final localPaths = {for (final p in local.photos) p.id: p.localPath};
+    var merged = remote.copyWith(
+      photos: [
+        for (final p in remote.photos) p.copyWith(localPath: localPaths[p.id]),
+      ],
+    );
+    if (legacySchema) {
+      final localSteps = {for (final s in local.steps) s.id: s};
+      merged = merged.copyWith(
+        yieldUnit: local.yieldUnit,
+        restMinutes: local.restMinutes,
+        steps: [
+          for (final s in merged.steps)
+            RecipeStep(
+              id: s.id,
+              instruction: s.instruction,
+              durationMinutes: s.durationMinutes,
+              temperatureC: s.temperatureC,
+              kind: localSteps[s.id]?.kind ?? s.kind,
+              parallel: localSteps[s.id]?.parallel ?? s.parallel,
+            ),
+        ],
+      );
+    }
+    return merged;
+  }
+
+  // -------------------------------------------------------------- konflikty
+
+  /// Recepty, u kterých čeká na rozhodnutí souběžná úprava ze serveru.
+  Future<Map<String, RecipeConflict>> conflicts() async {
+    final rows = await _db.query(
+      'meta',
+      where: 'key LIKE ?',
+      whereArgs: ['$_conflictPrefix%'],
+    );
+    final result = <String, RecipeConflict>{};
+    for (final row in rows) {
+      final id = (row['key'] as String).substring(_conflictPrefix.length);
+      try {
+        result[id] = RecipeConflict.fromJson(
+          id,
+          Map<String, dynamic>.from(jsonDecode(row['value'] as String) as Map),
+        );
+      } catch (_) {
+        // Poškozený záznam – raději ho zahodíme, než aby blokoval odesílání.
+        await _db.delete('meta', where: 'key = ?', whereArgs: [row['key']]);
+      }
+    }
+    return result;
+  }
+
+  /// Vyřeší souběžnou úpravu. Žádná z obou podob se neztratí: ta, která se
+  /// nepoužije, zůstane jako verze v historii receptu.
+  ///
+  /// [keepLocal] = ponechat úpravu z tohoto telefonu, jinak použít verzi
+  /// ze serveru.
+  Future<Recipe?> resolveConflict(String id, {required bool keepLocal}) async {
+    final conflict = (await conflicts())[id];
+    final local = await getById(id);
+    if (conflict == null || local == null) return local;
+    final now = _clock();
+    late Recipe result;
+    await _db.transaction((txn) async {
+      final localVersions = [
+        for (final row in await txn.query(
+          'recipe_versions',
+          where: 'recipe_id = ?',
+          whereArgs: [id],
+        ))
+          (row: row, version: _versionFromRow(row)),
+      ];
+      final remoteNumbers = {
+        for (final v in conflict.versions) v.versionNumber,
+      };
+      final remoteIds = {for (final v in conflict.versions) v.id};
+      var maxNumber = [
+        local.currentVersion,
+        conflict.recipe.currentVersion,
+        for (final v in conflict.versions) v.versionNumber,
+        for (final v in localVersions) v.version.versionNumber,
+      ].fold(0, (a, b) => a > b ? a : b);
+
+      // Neodeslané místní verze, jejichž čísla mezitím obsadil server,
+      // dostanou nová čísla – jinak by se při odeslání ztratily.
+      for (final entry in localVersions) {
+        final v = entry.version;
+        if (entry.row['dirty'] == 1 &&
+            remoteNumbers.contains(v.versionNumber) &&
+            !remoteIds.contains(v.id)) {
+          await txn.update(
+            'recipe_versions',
+            {'version_number': ++maxNumber},
+            where: 'id = ?',
+            whereArgs: [v.id],
+          );
+        }
+      }
+      for (final v in conflict.versions) {
+        await txn.insert('recipe_versions', {
+          'id': v.id,
+          'recipe_id': id,
+          'version_number': v.versionNumber,
+          'snapshot': jsonEncode(v.snapshot),
+          'change_summary': v.changeSummary,
+          'created_at': v.createdAt.toUtc().toIso8601String(),
+          'dirty': 0,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+
+      final remote = _mergeRemote(
+        local,
+        conflict.recipe,
+        legacySchema: conflict.legacySchema,
+      );
+      final (discarded, kept, discardedNote, keptNote) = keepLocal
+          ? (
+              remote,
+              local,
+              'Verze z jiného zařízení (nahrazena úpravou z telefonu)',
+              'Ponechána úprava z tohoto telefonu',
+            )
+          : (
+              local,
+              remote,
+              'Neodeslaná úprava z tohoto telefonu (nahrazena)',
+              'Použita verze z jiného zařízení',
+            );
+      await _putVersion(
+        txn,
+        discarded.copyWith(currentVersion: ++maxNumber),
+        discardedNote,
+        now,
+      );
+      result = kept.copyWith(currentVersion: ++maxNumber, updatedAt: now);
+      await _putVersion(txn, result, keptNote, now);
+      await _put(txn, result, dirty: true);
+      await txn.delete(
+        'meta',
+        where: 'key = ?',
+        whereArgs: ['$_conflictPrefix$id'],
+      );
+    });
+    _notify();
+    return result;
   }
 
   /// Převezme recepty z jiné místní databáze (např. vytvořené před přihlášením)

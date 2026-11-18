@@ -15,6 +15,8 @@ import '../features/more/more_screen.dart';
 import '../features/more/trash_screen.dart';
 import '../features/recipes/recipe_detail_screen.dart';
 import '../features/recipes/recipe_edit_screen.dart';
+import '../core/screen_wake.dart';
+import '../features/photos/recipe_photos_screen.dart';
 import '../features/recipes/recipes_screen.dart';
 import '../features/shell/main_shell.dart';
 import '../features/splash/splash_screen.dart';
@@ -61,6 +63,7 @@ abstract final class Routes {
 
   static String recipe(String id) => '/recipe/$id';
   static String editRecipe(String id) => '/recipe/$id/edit';
+  static String recipePhotos(String id) => '/recipe/$id/photos';
 
   static String recipesWith({String? query, String? category}) {
     final parameters = {
@@ -93,6 +96,7 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
   return GoRouter(
     navigatorKey: rootKey,
     initialLocation: initialLocation,
+    observers: [appRouteObserver],
     routes: [
       GoRoute(
         path: Routes.splash,
@@ -244,6 +248,14 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
             pageBuilder: (context, state) => page(
               state,
               RecipeEditScreen(recipeId: state.pathParameters['id']),
+            ),
+          ),
+          GoRoute(
+            path: 'photos',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(
+              state,
+              RecipePhotosScreen(recipeId: state.pathParameters['id']!),
             ),
           ),
         ],

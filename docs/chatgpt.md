@@ -37,6 +37,33 @@ aplikace za to žádné požadavky na AI neplatí.
 | `get_cooking_history` | kuchařský deník a poznámky | ne |
 | `get_kitchen_equipment` | vybavení a chuťové preference | ne |
 | `update_kitchen_equipment` | přidá, upraví nebo odebere vybavení | ano |
+| `list_recipes_with_photos` | recepty s fotkami a jejich hlavní fotka (okénko + obrázky) | ne |
+| `get_recipe_photos` | všechny fotky jednoho receptu, pořadí, hlavní fotka | ne |
+| `get_recipe_photo` | jedna fotka v plné kvalitě, aby ji ChatGPT mohl prohlédnout | ne |
+| `upload_recipe_photo` | uloží fotku poslanou do konverzace k receptu | ano |
+| `set_recipe_cover_photo` | nastaví hlavní fotku (např. „druhou“ = `position: 2`) | ano |
+| `reorder_recipe_photos` | změní pořadí fotek | ano |
+| `delete_recipe_photo` | odebere fotku z receptu (soubor zůstane, zná-li ho historie verzí) | ano |
+
+### Jak se přenášejí fotky
+
+Fotky jsou v soukromém úložišti Supabase. Server je čte a zapisuje vždy
+s přístupovým tokenem přihlášeného uživatele, takže platí stejná oprávnění
+(RLS) jako v aplikaci. Žádné veřejné odkazy nevznikají.
+
+- **Obrázek přímo v odpovědi** – nástroje vracejí fotky jako standardní MCP
+  obsah typu `image` (base64, JPEG/PNG/WebP). Pro přehledy se posílají
+  náhledy 480 px, pro `get_recipe_photo` plná fotka.
+- **Okénko s fotkami** – `list_recipes_with_photos` a `get_recipe_photos` mají
+  okénko podle standardu MCP Apps (`ui://hinkredience/photos.html`). Okénko
+  smí načítat obrázky jen z domény projektu Supabase a používá podepsané
+  odkazy platné 15 minut.
+- **Nahrání fotky z konverzace** – `upload_recipe_photo` má parametr `photo`
+  označený `_meta["openai/fileParams"]`; ChatGPT do něj předá dočasný odkaz na
+  soubor, který uživatel poslal. Server stáhne nejvýše 10 MB, ověří podle
+  obsahu, že jde o JPEG, PNG nebo WebP, a uloží ho do složky uživatele.
+  Odkazy smějí být jen `https` na veřejný server (ne IP adresy ani
+  `localhost`). Jiní MCP klienti mohou poslat `image_base64`.
 
 ## Co potřebuje váš účet ChatGPT
 
@@ -58,7 +85,10 @@ Kroky 1 a 2 jsou hotové, pokud je v [README](../README.md) uvedeno, že jsou
 migrace spuštěné a funkce `mcp` nasazená.
 
 1. **Migrace** – v SQL Editoru spusťte
-   [`20261114000006_recipe_api.sql`](../supabase/migrations/20261114000006_recipe_api.sql).
+   [`20261114000006_recipe_api.sql`](../supabase/migrations/20261114000006_recipe_api.sql),
+   [`20261114000007_yield_and_time.sql`](../supabase/migrations/20261114000007_yield_and_time.sql)
+   a [`20261115000008_sync_tombstones.sql`](../supabase/migrations/20261115000008_sync_tombstones.sql).
+   Všechny jen přidávají a dají se spustit opakovaně.
 2. **Funkce** – nasaďte `supabase/functions/mcp/index.ts` jako funkci `mcp`
    (Edge Functions → Deploy a new function → Via Editor, nebo
    `supabase functions deploy mcp --no-verify-jwt`).
@@ -109,6 +139,14 @@ Postupně v ChatGPT napište:
 4. V telefonu recept upravte, synchronizujte a v ChatGPT napište
    „Načti z HINKredience recept na kachnu a sniž teplotu na 150 °C.“
    → `get_recipe`, `update_recipe` → v aplikaci přibude verze 2.
+5. „Podívej se na fotky v mojí kuchařce.“ → `list_recipes_with_photos`.
+6. „Vidíš novou fotku lososa?“ → `search_recipes`, `get_recipe_photo`.
+7. Pošlete fotku a napište „Vlož ji ke králíkovi.“ → `upload_recipe_photo`
+   (schválit) → fotka se v aplikaci objeví sama do pár sekund.
+8. „Nastav druhou fotku palačinek jako hlavní.“ → `set_recipe_cover_photo`.
+
+Synchronizace v telefonu je automatická – ruční „Synchronizovat nyní“ už
+není potřeba.
 
 ## Odpojení
 
@@ -117,6 +155,12 @@ Postupně v ChatGPT napište:
   přestanou platit i jeho tokeny.
 
 ## Co je a není ověřeno
+
+**Fotky v ChatGPT nejsou zatím ověřené na skutečném účtu.** Podle zpráv
+vývojářů z roku 2026 ChatGPT obrázky typu `image` z MCP nástrojů nezobrazuje
+spolehlivě (někdy dorazí jen text). Proto server posílá fotky dvojí cestou:
+obrázky v odpovědi a okénko MCP Apps s podepsanými odkazy. Co z toho ChatGPT
+na vašem účtu skutečně ukáže, se ověří až po zapnutí přihlášení (kroky 3–6).
 
 Ověřeno automatickými testy (`deno test supabase/functions`,
 `cd supabase/tests && npm test`):

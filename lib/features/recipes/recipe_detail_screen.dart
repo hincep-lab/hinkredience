@@ -13,9 +13,11 @@ import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/screen_wake.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
+import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
 
@@ -51,6 +53,9 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   _Tab _tab = _Tab.recipe;
   double? _servings;
   final _checked = <String>{};
+
+  /// Odškrtnuté (hotové) kroky postupu – příprava na režim vaření.
+  final _doneSteps = <String>{};
   int _photoIndex = 0;
 
   Future<void> _toggleFavorite(Recipe recipe) async {
@@ -185,25 +190,28 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(recipeProvider(widget.recipeId));
-    return async.when(
-      loading: () => Scaffold(
-        appBar: AppBar(),
-        body: const Center(child: CircularProgressIndicator()),
+    // Při otevřeném receptu displej nezhasne (lze vypnout v nastavení).
+    return KeepScreenOn(
+      child: async.when(
+        loading: () => Scaffold(
+          appBar: AppBar(),
+          body: const Center(child: CircularProgressIndicator()),
+        ),
+        error: (error, stack) => Scaffold(
+          appBar: AppBar(),
+          body: ErrorState(error: error),
+        ),
+        data: (recipe) => recipe == null
+            ? Scaffold(
+                appBar: AppBar(),
+                body: const EmptyState(
+                  icon: Icons.search_off_rounded,
+                  title: 'Recept nenalezen',
+                  message: 'Tento recept v kuchařce není.',
+                ),
+              )
+            : _content(context, recipe),
       ),
-      error: (error, stack) => Scaffold(
-        appBar: AppBar(),
-        body: ErrorState(error: error),
-      ),
-      data: (recipe) => recipe == null
-          ? Scaffold(
-              appBar: AppBar(),
-              body: const EmptyState(
-                icon: Icons.search_off_rounded,
-                title: 'Recept nenalezen',
-                message: 'Tento recept v kuchařce není.',
-              ),
-            )
-          : _content(context, recipe),
     );
   }
 
@@ -243,6 +251,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 icon: const _CircleIcon(Icons.more_horiz_rounded),
                 onSelected: (value) => switch (value) {
                   'edit' => context.push(Routes.editRecipe(recipe.id)),
+                  'photos' => context.push(Routes.recipePhotos(recipe.id)),
                   'ai_improve' => _improve(recipe, withWeb: false),
                   'ai_web' => _improve(recipe, withWeb: true),
                   'ai_chat' => context.push(Routes.aiChat(recipeId: recipe.id)),
@@ -257,6 +266,11 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 itemBuilder: (context) => [
                   if (!recipe.isDeleted)
                     const PopupMenuItem(value: 'edit', child: Text('Upravit')),
+                  if (!recipe.isDeleted)
+                    const PopupMenuItem(
+                      value: 'photos',
+                      child: Text('Fotografie'),
+                    ),
                   if (!recipe.isDeleted && aiEnabled) ...const [
                     PopupMenuItem(
                       value: 'ai_improve',
@@ -341,6 +355,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                       ),
                   ],
                 ),
+                _ConflictBanner(recipe: recipe),
                 if (recipe.isDeleted) ...[
                   const SizedBox(height: 12),
                   const HkCard(
@@ -391,7 +406,13 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                           if (!_checked.remove(id)) _checked.add(id);
                         }),
                       ),
-                      _Tab.steps => _StepsTab(recipe: recipe),
+                      _Tab.steps => _StepsTab(
+                        recipe: recipe,
+                        done: _doneSteps,
+                        onToggle: (id) => setState(() {
+                          if (!_doneSteps.remove(id)) _doneSteps.add(id);
+                        }),
+                      ),
                       _Tab.notes => _NotesTab(
                         recipe: recipe,
                         servings: servings,
@@ -403,6 +424,84 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Upozornění na souběžnou úpravu (telefon i ChatGPT / druhý telefon).
+class _ConflictBanner extends ConsumerWidget {
+  const _ConflictBanner({required this.recipe});
+
+  final Recipe recipe;
+
+  Future<void> _resolve(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool keepLocal,
+  }) async {
+    final repository = await ref.read(recipeRepositoryProvider.future);
+    await repository.resolveConflict(recipe.id, keepLocal: keepLocal);
+    if (!context.mounted) return;
+    showMessage(
+      context,
+      keepLocal
+          ? 'Ponechána vaše úprava. Druhá podoba je v historii verzí.'
+          : 'Použita verze z jiného zařízení. Vaše úprava je v historii verzí.',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final conflict = ref.watch(recipeConflictProvider(recipe.id)).value;
+    if (conflict == null) return const SizedBox.shrink();
+    final other = conflict.recipe;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: HkCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.call_split_rounded, color: AppColors.danger),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Recept byl změněn v telefonu i jinde',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Na serveru je jiná podoba (ChatGPT nebo druhý telefon)'
+              '${other.title != recipe.title ? ': „${other.title}“' : ''}. '
+              'Vyberte, kterou ponechat. Ta druhá se uloží do historie '
+              'verzí, nic se neztratí.',
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton(
+                  onPressed: () => _resolve(context, ref, keepLocal: true),
+                  child: const Text('Ponechat moji úpravu'),
+                ),
+                OutlinedButton(
+                  onPressed: () => _resolve(context, ref, keepLocal: false),
+                  child: const Text('Použít verzi ze serveru'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -487,7 +586,14 @@ class _PhotoHeader extends StatelessWidget {
           PageView.builder(
             itemCount: photos.length,
             onPageChanged: onChanged,
-            itemBuilder: (context, i) => RecipePhotoView(photo: photos[i]),
+            itemBuilder: (context, i) => GestureDetector(
+              onTap: () => openPhotoViewer(context, photos, initialIndex: i),
+              child: Semantics(
+                button: true,
+                label: 'Zobrazit fotku přes celou obrazovku',
+                child: RecipePhotoView(photo: photos[i]),
+              ),
+            ),
           ),
         const IgnorePointer(
           child: DecoratedBox(
@@ -865,9 +971,15 @@ class _Chips extends StatelessWidget {
 }
 
 class _StepsTab extends StatelessWidget {
-  const _StepsTab({required this.recipe});
+  const _StepsTab({
+    required this.recipe,
+    required this.done,
+    required this.onToggle,
+  });
 
   final Recipe recipe;
+  final Set<String> done;
+  final ValueChanged<String> onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -881,28 +993,53 @@ class _StepsTab extends StatelessWidget {
       );
     }
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: Text(
+            'Klepnutím na krok ho odškrtnete jako hotový.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+          ),
+        ),
         for (var i = 0; i < recipe.steps.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: HkCard(
+              onTap: () => onToggle(recipe.steps[i].id),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 30,
-                    height: 30,
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      gradient: AppColors.copperGradient,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(
-                      '${i + 1}',
-                      style: const TextStyle(
-                        color: Color(0xFF1B1108),
-                        fontWeight: FontWeight.w800,
+                  Semantics(
+                    label: done.contains(recipe.steps[i].id)
+                        ? 'Krok ${i + 1} hotový'
+                        : 'Krok ${i + 1}',
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        gradient: done.contains(recipe.steps[i].id)
+                            ? null
+                            : AppColors.copperGradient,
+                        color: done.contains(recipe.steps[i].id)
+                            ? AppColors.backgroundSecondary
+                            : null,
+                        shape: BoxShape.circle,
                       ),
+                      child: done.contains(recipe.steps[i].id)
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 20,
+                              color: AppColors.copperGold,
+                            )
+                          : Text(
+                              '${i + 1}',
+                              style: const TextStyle(
+                                color: Color(0xFF1B1108),
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -912,7 +1049,16 @@ class _StepsTab extends StatelessWidget {
                       children: [
                         Text(
                           recipe.steps[i].instruction,
-                          style: const TextStyle(fontSize: 15.5, height: 1.45),
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            height: 1.45,
+                            color: done.contains(recipe.steps[i].id)
+                                ? AppColors.textSecondary
+                                : null,
+                            decoration: done.contains(recipe.steps[i].id)
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
                         ),
                         if (recipe.steps[i].temperatureC != null ||
                             recipe.steps[i].durationMinutes != null) ...[

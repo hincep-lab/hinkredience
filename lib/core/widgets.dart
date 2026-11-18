@@ -170,22 +170,36 @@ class RecipePhotoView extends ConsumerWidget {
     super.key,
     required this.photo,
     this.fit = BoxFit.cover,
+    this.thumbnail = false,
   });
 
   final RecipePhoto photo;
   final BoxFit fit;
 
+  /// Malý náhled (seznamy, karty). Načte se rychleji a šetří paměť.
+  final bool thumbnail;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final file = ref.watch(photoStoreProvider).localFile(photo);
+    final store = ref.watch(photoStoreProvider);
+    final file =
+        (thumbnail ? store.thumbnailFile(photo) : null) ??
+        store.localFile(photo);
     if (file != null) {
       return Image.file(
         file,
         fit: fit,
+        // Velkou fotku v seznamu dekódujeme zmenšenou – rychlejší posouvání.
+        cacheWidth: thumbnail ? 600 : null,
+        gaplessPlayback: true,
         errorBuilder: (context, error, stack) => const PhotoPlaceholder(),
       );
     }
-    final remotePath = photo.remotePath;
+    // Fotka zatím není v telefonu (stáhne se při synchronizaci) – načteme
+    // ji ze serveru přes dočasnou podepsanou adresu.
+    final remotePath = thumbnail
+        ? (photo.thumbPath ?? photo.remotePath)
+        : photo.remotePath;
     if (remotePath == null) return const PhotoPlaceholder();
     final url = ref.watch(signedPhotoUrlProvider(remotePath));
     return url.when(
@@ -194,6 +208,8 @@ class RecipePhotoView extends ConsumerWidget {
           : Image.network(
               value,
               fit: fit,
+              cacheWidth: thumbnail ? 600 : null,
+              gaplessPlayback: true,
               errorBuilder: (context, error, stack) => const PhotoPlaceholder(),
               loadingBuilder: (context, child, progress) => progress == null
                   ? child
@@ -253,7 +269,8 @@ class RecipeCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (recipe.photos.isEmpty) return const PhotoPlaceholder();
-    return RecipePhotoView(photo: recipe.photos.first);
+    // První fotka je hlavní.
+    return RecipePhotoView(photo: recipe.photos.first, thumbnail: true);
   }
 }
 

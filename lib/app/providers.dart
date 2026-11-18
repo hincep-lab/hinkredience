@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -49,6 +51,7 @@ class AppSettings {
     required this.greetingName,
     required this.skipAuth,
     this.aiEnabled = false,
+    this.keepScreenOn = true,
   });
 
   /// Oslovení na hlavní obrazovce („Ahoj Pájo“).
@@ -62,14 +65,19 @@ class AppSettings {
   /// bez výslovného zapnutí žádný požadavek na AI neodešle.
   final bool aiEnabled;
 
+  /// Při otevřeném receptu nenechat zhasnout displej (výchozí zapnuto).
+  final bool keepScreenOn;
+
   AppSettings copyWith({
     String? greetingName,
     bool? skipAuth,
     bool? aiEnabled,
+    bool? keepScreenOn,
   }) => AppSettings(
     greetingName: greetingName ?? this.greetingName,
     skipAuth: skipAuth ?? this.skipAuth,
     aiEnabled: aiEnabled ?? this.aiEnabled,
+    keepScreenOn: keepScreenOn ?? this.keepScreenOn,
   );
 
   @override
@@ -77,16 +85,19 @@ class AppSettings {
       other is AppSettings &&
       other.greetingName == greetingName &&
       other.skipAuth == skipAuth &&
-      other.aiEnabled == aiEnabled;
+      other.aiEnabled == aiEnabled &&
+      other.keepScreenOn == keepScreenOn;
 
   @override
-  int get hashCode => Object.hash(greetingName, skipAuth, aiEnabled);
+  int get hashCode =>
+      Object.hash(greetingName, skipAuth, aiEnabled, keepScreenOn);
 }
 
 class SettingsController extends Notifier<AppSettings> {
   static const _greetingKey = 'greeting_name';
   static const _skipAuthKey = 'skip_auth';
   static const _aiEnabledKey = 'ai_enabled';
+  static const _keepScreenOnKey = 'keep_screen_on';
 
   @override
   AppSettings build() {
@@ -95,6 +106,7 @@ class SettingsController extends Notifier<AppSettings> {
       greetingName: prefs.getString(_greetingKey) ?? 'Pájo',
       skipAuth: prefs.getBool(_skipAuthKey) ?? false,
       aiEnabled: prefs.getBool(_aiEnabledKey) ?? false,
+      keepScreenOn: prefs.getBool(_keepScreenOnKey) ?? true,
     );
   }
 
@@ -113,6 +125,11 @@ class SettingsController extends Notifier<AppSettings> {
   Future<void> setAiEnabled(bool value) async {
     await ref.read(sharedPreferencesProvider).setBool(_aiEnabledKey, value);
     state = state.copyWith(aiEnabled: value);
+  }
+
+  Future<void> setKeepScreenOn(bool value) async {
+    await ref.read(sharedPreferencesProvider).setBool(_keepScreenOnKey, value);
+    state = state.copyWith(keepScreenOn: value);
   }
 }
 
@@ -331,41 +348,123 @@ final signedPhotoUrlProvider = FutureProvider.family<String?, String>((
 
 // -------------------------------------------------------- synchronizace
 
+/// Co ukazuje nenápadný ukazatel synchronizace.
+enum SyncPhase {
+  /// Bez účtu nebo bez připojení k Supabase – recepty jsou jen v telefonu.
+  localOnly,
+  syncing,
+  synced,
+
+  /// Některé změny ještě nejsou na serveru.
+  pending,
+  offline,
+  error,
+
+  /// Recept byl změněn na dvou místech a čeká na rozhodnutí.
+  conflict,
+}
+
 @immutable
 class SyncState {
   const SyncState({
     this.running = false,
     this.lastSuccess,
-    this.lastError,
+    this.errors = const [],
+    this.offline = false,
     this.pending = 0,
+    this.conflicts = 0,
+    this.nextRetry,
   });
 
   final bool running;
   final DateTime? lastSuccess;
-  final String? lastError;
+
+  /// Chyby posledního pokusu (prázdné = proběhl bez chyby).
+  final List<String> errors;
+
+  /// Poslední pokus selhal kvůli chybějícímu připojení.
+  final bool offline;
 
   /// Počet receptů čekajících na odeslání.
   final int pending;
 
+  /// Počet receptů se souběžnou úpravou k rozhodnutí.
+  final int conflicts;
+
+  /// Kdy se synchronizace po chybě sama zopakuje.
+  final DateTime? nextRetry;
+
+  String? get lastError => errors.isEmpty ? null : errors.first;
+
+  SyncPhase phaseFor({required bool enabled}) {
+    if (!enabled) return SyncPhase.localOnly;
+    if (running) return SyncPhase.syncing;
+    if (conflicts > 0) return SyncPhase.conflict;
+    if (offline) return SyncPhase.offline;
+    if (errors.isNotEmpty) return SyncPhase.error;
+    if (pending > 0) return SyncPhase.pending;
+    return SyncPhase.synced;
+  }
+
   SyncState copyWith({
     bool? running,
     DateTime? lastSuccess,
-    Object? lastError = _keep,
+    List<String>? errors,
+    bool? offline,
     int? pending,
+    int? conflicts,
+    Object? nextRetry = _keep,
   }) => SyncState(
     running: running ?? this.running,
     lastSuccess: lastSuccess ?? this.lastSuccess,
-    lastError: identical(lastError, _keep)
-        ? this.lastError
-        : lastError as String?,
+    errors: errors ?? this.errors,
+    offline: offline ?? this.offline,
     pending: pending ?? this.pending,
+    conflicts: conflicts ?? this.conflicts,
+    nextRetry: identical(nextRetry, _keep)
+        ? this.nextRetry
+        : nextRetry as DateTime?,
   );
 }
 
 const Object _keep = Object();
 
+/// Prodlevy mezi opakovanými pokusy po chybě: 5 s, 15 s, 30 s, 1, 2, 5 min.
+const syncRetryDelays = [
+  Duration(seconds: 5),
+  Duration(seconds: 15),
+  Duration(seconds: 30),
+  Duration(minutes: 1),
+  Duration(minutes: 2),
+  Duration(minutes: 5),
+];
+
+/// Připojení k internetu: `true` = nějaká síť je k dispozici. Přepsatelné
+/// v testech (tam systémové rozhraní neexistuje).
+final connectivityChangesProvider = Provider<Stream<bool>>(
+  (ref) => Connectivity().onConnectivityChanged.map(
+    (results) => !results.contains(ConnectivityResult.none),
+  ),
+);
+
+/// Je synchronizace vůbec možná (účet a připojení k Supabase)?
+final syncEnabledProvider = Provider<bool>(
+  (ref) =>
+      ref.watch(supabaseClientProvider) != null &&
+      ref.watch(sessionProvider).isSignedIn,
+);
+
+/// Automatická synchronizace. Spouští se sama:
+/// - po otevření aplikace a po přihlášení,
+/// - po každé místní změně (recept, fotka, oblíbené, koš) – za 2 s,
+/// - po návratu aplikace z pozadí,
+/// - po obnovení připojení k internetu,
+/// - když Supabase Realtime ohlásí změnu z jiného zařízení nebo z ChatGPT,
+/// - po chybě opakovaně s rostoucí prodlevou (5 s až 5 min).
 class SyncController extends Notifier<SyncState> {
   Timer? _debounce;
+  Timer? _retry;
+  int _failures = 0;
   bool _running = false;
   bool _again = false;
 
@@ -374,34 +473,96 @@ class SyncController extends Notifier<SyncState> {
     final userId = ref.watch(sessionProvider.select((s) => s.userId));
     final repository = ref.watch(recipeRepositoryProvider).value;
     final client = ref.watch(supabaseClientProvider);
+    ref.onDispose(() {
+      _debounce?.cancel();
+      _retry?.cancel();
+    });
+    _failures = 0;
 
     if (repository != null) {
-      // Po každé místní změně naplánujeme odeslání.
-      final subscription = repository.changes.listen((_) {
-        _refreshPending();
-        _debounce?.cancel();
-        _debounce = Timer(const Duration(seconds: 2), syncNow);
+      // Místní změna, která čeká na odeslání → odeslat za 2 s.
+      final subscription = repository.changes.listen((_) async {
+        final pending = await _refreshCounts();
+        if (pending > 0) schedule(const Duration(seconds: 2));
       });
       ref.onDispose(subscription.cancel);
-      Future.microtask(_refreshPending);
+      Future.microtask(_refreshCounts);
     }
-    ref.onDispose(() => _debounce?.cancel());
 
     if (repository != null && client != null && userId != null) {
+      _listenForTriggers(client);
       Future.microtask(syncNow);
     }
     return const SyncState();
   }
 
-  Future<void> _refreshPending() async {
-    final repository = ref.read(recipeRepositoryProvider).value;
-    if (repository == null) return;
-    final pending = await repository.dirtyCount();
-    if (ref.mounted) state = state.copyWith(pending: pending);
+  void _listenForTriggers(SupabaseClient client) {
+    // Návrat z pozadí.
+    final lifecycle = AppLifecycleListener(
+      onResume: () => schedule(const Duration(milliseconds: 300)),
+    );
+    ref.onDispose(lifecycle.dispose);
+
+    // Obnovení připojení.
+    var online = true;
+    final connectivity = ref
+        .read(connectivityChangesProvider)
+        .listen(
+          (isOnline) {
+            if (isOnline && !online) schedule(const Duration(seconds: 1));
+            online = isOnline;
+          },
+          onError: (Object error) {
+            debugPrint('Sledování připojení nefunguje: $error');
+          },
+        );
+    ref.onDispose(connectivity.cancel);
+
+    // Změny z jiného zařízení nebo z ChatGPT (Supabase Realtime). Událost
+    // je jen upozornění – data se pak načtou běžnou synchronizací změn.
+    try {
+      final channel = client
+          .channel('hinkredience-sync')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'recipes',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'recipe_tombstones',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .subscribe();
+      ref.onDispose(() => client.removeChannel(channel));
+    } catch (error) {
+      debugPrint('Realtime se nepodařilo zapnout: $error');
+    }
   }
 
-  /// Spustí synchronizaci. Bez přihlášení nebo připojení nedělá nic.
+  /// Naplánuje synchronizaci (opakovaná volání se sloučí).
+  void schedule(Duration delay) {
+    if (!ref.mounted) return;
+    _debounce?.cancel();
+    _debounce = Timer(delay, syncNow);
+  }
+
+  Future<int> _refreshCounts() async {
+    final repository = ref.read(recipeRepositoryProvider).value;
+    if (repository == null) return 0;
+    final pending = await repository.dirtyCount();
+    final conflicts = (await repository.conflicts()).length;
+    if (ref.mounted) {
+      state = state.copyWith(pending: pending, conflicts: conflicts);
+    }
+    return pending;
+  }
+
+  /// Spustí synchronizaci. Bez přihlášení nebo připojení k Supabase nedělá nic.
   Future<SyncResult?> syncNow() async {
+    if (!ref.mounted) return null;
     final client = ref.read(supabaseClientProvider);
     final repository = ref.read(recipeRepositoryProvider).value;
     if (client == null ||
@@ -414,7 +575,8 @@ class SyncController extends Notifier<SyncState> {
       return null;
     }
     _running = true;
-    state = state.copyWith(running: true);
+    _retry?.cancel();
+    state = state.copyWith(running: true, nextRetry: null);
     SyncResult result;
     try {
       result = await SyncService(
@@ -423,22 +585,35 @@ class SyncController extends Notifier<SyncState> {
         photos: ref.read(photoStoreProvider),
       ).sync();
     } catch (error) {
-      result = SyncResult(errors: ['$error']);
+      result = SyncResult(offline: isOfflineError(error), errors: ['$error']);
     }
     _running = false;
     if (!ref.mounted) return result;
     final pending = await repository.dirtyCount();
     if (!ref.mounted) return result;
+
+    DateTime? nextRetry;
+    if (result.ok) {
+      _failures = 0;
+    } else {
+      final delay =
+          syncRetryDelays[_failures.clamp(0, syncRetryDelays.length - 1)];
+      _failures++;
+      nextRetry = DateTime.now().add(delay);
+      _retry = Timer(delay, syncNow);
+    }
     state = SyncState(
       running: false,
       lastSuccess: result.ok ? DateTime.now() : state.lastSuccess,
-      lastError: result.ok ? null : result.errors.first,
+      errors: result.errors,
+      offline: result.offline,
       pending: pending,
+      conflicts: result.conflicts,
+      nextRetry: nextRetry,
     );
     if (_again) {
       _again = false;
-      _debounce?.cancel();
-      _debounce = Timer(const Duration(seconds: 2), syncNow);
+      schedule(const Duration(seconds: 1));
     }
     return result;
   }
@@ -447,6 +622,17 @@ class SyncController extends Notifier<SyncState> {
 final syncProvider = NotifierProvider<SyncController, SyncState>(
   SyncController.new,
 );
+
+/// Souběžná úprava čekající na rozhodnutí u daného receptu.
+final recipeConflictProvider = FutureProvider.family<RecipeConflict?, String>((
+  ref,
+  recipeId,
+) async {
+  final repository = await ref.watch(recipeRepositoryProvider.future);
+  // Přepočítá se při každé změně receptů (konflikt vždy změnu ohlásí).
+  ref.watch(allRecipesProvider);
+  return (await repository.conflicts())[recipeId];
+});
 
 // -------------------------------------------------------------------- AI
 

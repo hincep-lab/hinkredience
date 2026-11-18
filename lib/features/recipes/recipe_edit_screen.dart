@@ -1,7 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../app/providers.dart';
 import '../../app/router.dart';
@@ -12,6 +11,7 @@ import '../../core/material.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
+import '../photos/photo_editor.dart';
 import 'recipes_screen.dart' show categoryIcon;
 
 /// Vytvoření nového receptu nebo úprava existujícího.
@@ -214,71 +214,6 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   }
 
   // ------------------------------------------------------------ fotografie
-
-  Future<void> _addPhoto(ImageSource source) async {
-    try {
-      final picked = await ImagePicker().pickImage(
-        source: source,
-        maxWidth: 2000,
-        maxHeight: 2000,
-        imageQuality: 85,
-      );
-      if (picked == null) return;
-      final repository = await ref.read(recipeRepositoryProvider.future);
-      final photo = await ref
-          .read(photoStoreProvider)
-          .import(
-            recipeId: _recipeId,
-            photoId: repository.newId(),
-            sourcePath: picked.path,
-          );
-      if (!mounted) return;
-      setState(() {
-        _photos = [..._photos, photo];
-        _dirty = true;
-      });
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      showMessage(
-        context,
-        error.code.contains('denied')
-            ? 'Aplikace nemá povolený přístup k fotkám. Povolte ho v nastavení telefonu.'
-            : 'Fotku se nepodařilo přidat.',
-      );
-    } catch (_) {
-      if (mounted) showMessage(context, 'Fotku se nepodařilo přidat.');
-    }
-  }
-
-  void _choosePhotoSource() {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Vybrat z galerie'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _addPhoto(ImageSource.gallery);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Vyfotit'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _addPhoto(ImageSource.camera);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
 
   // -------------------------------------------------------------- kategorie
 
@@ -789,80 +724,14 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
     );
   }
 
-  Widget _photoStrip() {
-    return SizedBox(
-      height: 120,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          for (final photo in _photos)
-            Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: SizedBox(
-                      width: 120,
-                      height: 120,
-                      child: RecipePhotoView(photo: photo),
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: IconButton.filled(
-                      tooltip: 'Odebrat fotku',
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.background.withValues(
-                          alpha: 0.7,
-                        ),
-                        foregroundColor: AppColors.text,
-                        minimumSize: const Size(32, 32),
-                        padding: EdgeInsets.zero,
-                      ),
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                      onPressed: () => setState(() {
-                        _photos = [
-                          for (final p in _photos)
-                            if (p.id != photo.id) p,
-                        ];
-                        _dirty = true;
-                      }),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          SizedBox(
-            width: 120,
-            child: HkCard(
-              onTap: _choosePhotoSource,
-              padding: const EdgeInsets.all(8),
-              radius: 16,
-              child: const Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.add_a_photo_outlined,
-                      color: AppColors.copperGold,
-                      size: 30,
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Přidat fotku',
-                      style: TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _photoStrip() => PhotoListEditor(
+    recipeId: _recipeId,
+    photos: _photos,
+    onChanged: (photos) => setState(() {
+      _photos = photos;
+      _dirty = true;
+    }),
+  );
 
   Widget _ingredientRow(int index) {
     final draft = _ingredients[index];

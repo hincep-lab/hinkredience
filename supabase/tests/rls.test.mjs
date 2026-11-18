@@ -90,7 +90,7 @@ test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => 
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
     'household_members', 'households', 'kitchen_equipment', 'meal_plans',
-    'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_versions',
+    'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
   const { rows } = await db.query(
@@ -435,4 +435,47 @@ test('výtěžnost v kusech, čekání a druh kroků: nové sloupce nic nerozbij
     `select (select count(*)::int from public.recipe_steps where recipe_id = $1) as steps,
             (select count(*)::int from public.recipe_versions where recipe_id = $1) as versions`, [id]);
   assert.deepEqual(left.rows[0], { steps: 0, versions: 0 });
+});
+
+test('vysypaný koš: náhrobek vidí vlastník i domácnost, recept nejde oživit', async () => {
+  const hh = await as(PAVEL, `insert into public.households (name) values ('Hinkovi 08') returning id`);
+  const hid = hh.rows[0].id;
+  await as(PAVEL, `insert into public.household_members (household_id, user_id) values ($1, $2)`, [hid, MARTINKA]);
+
+  const shared = await as(PAVEL,
+    `insert into public.recipes (title, household_id, visibility) values ('Losos', $1, 'household') returning id`, [hid]);
+  const sid = shared.rows[0].id;
+  const own = await as(PAVEL, `insert into public.recipes (title) values ('Soukromý králík') returning id`);
+  const oid = own.rows[0].id;
+
+  // Uživatel sám náhrobek zapsat nesmí.
+  await assert.rejects(
+    as(CIZI, `insert into public.recipe_tombstones (recipe_id, owner_id) values (gen_random_uuid(), $1)`, [CIZI]),
+    /row-level security|permission denied/i,
+  );
+
+  await as(PAVEL, `delete from public.recipes where id = $1`, [sid]);
+  await as(PAVEL, `delete from public.recipes where id = $1`, [oid]);
+
+  const forPavel = await as(PAVEL, `select recipe_id from public.recipe_tombstones where recipe_id = any($1::uuid[])`, [[sid, oid]]);
+  assert.equal(forPavel.rows.length, 2);
+  const forMartinka = await as(MARTINKA, `select recipe_id from public.recipe_tombstones where recipe_id = any($1::uuid[])`, [[sid, oid]]);
+  assert.deepEqual(forMartinka.rows.map((r) => r.recipe_id), [sid], 'Martinka vidí jen sdílený recept');
+  const forCizi = await as(CIZI, `select recipe_id from public.recipe_tombstones where recipe_id = any($1::uuid[])`, [[sid, oid]]);
+  assert.equal(forCizi.rows.length, 0);
+
+  // Starý telefon se pokusí recept znovu odeslat (upsert) – server odmítne.
+  await assert.rejects(
+    as(PAVEL, `insert into public.recipes (id, title) values ($1, 'Soukromý králík') on conflict (id) do update set title = excluded.title`, [oid]),
+    /natrvalo smazán/,
+  );
+  // Nový recept s jiným id jde založit normálně.
+  const fresh = await as(PAVEL, `insert into public.recipes (title) values ('Nový králík') returning id`);
+  assert.ok(fresh.rows[0].id);
+});
+
+test('migrace 08 jde spustit znovu bez chyby', async () => {
+  const sql = readFileSync(join(migrationsDir, '20261115000008_sync_tombstones.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
 });
