@@ -174,17 +174,43 @@ void main() {
 
     test('stejná akce z letáku i z kupi.cz jen jednou, zůstane ověřená', () {
       final b = browseOffers([
-        offer('g', 'jip', 'Mlékárna Kunín smetana ke šlehání 31 %', 21.9, pack: 200, unit: 'g', verified: false),
-        offer('k', 'jip', 'Smetana ke šlehání Mlékárna Kunín 31%', 21.9, pack: 200, unit: 'g'),
-        offer('k2', 'jip', 'Smetana ke šlehání Mlékárna Kunín 31%', 109.9, pack: 1000, unit: 'ml'),
+        offer(
+          'g',
+          'jip',
+          'Mlékárna Kunín smetana ke šlehání 31 %',
+          21.9,
+          pack: 200,
+          unit: 'g',
+          verified: false,
+        ),
+        offer(
+          'k',
+          'jip',
+          'Smetana ke šlehání Mlékárna Kunín 31%',
+          21.9,
+          pack: 200,
+          unit: 'g',
+        ),
+        offer(
+          'k2',
+          'jip',
+          'Smetana ke šlehání Mlékárna Kunín 31%',
+          109.9,
+          pack: 1000,
+          unit: 'ml',
+        ),
       ], today);
       expect([for (final o in b.current) o.id], ['k', 'k2']);
     });
 
     test('název bez popisku „ilustrační obrázek“ (starší akce z kupi.cz)', () {
       final o = PriceOffer.fromJson({
-        'id': 'x', 'chain': 'lidl', 'product': 'ilustrační obrázek   Máslo Milkpol',
-        'price': 29.9, 'valid_to': '2026-11-22', 'source_url': 'https://www.kupi.cz/x',
+        'id': 'x',
+        'chain': 'lidl',
+        'product': 'ilustrační obrázek   Máslo Milkpol',
+        'price': 29.9,
+        'valid_to': '2026-11-22',
+        'source_url': 'https://www.kupi.cz/x',
         'image_url': 'https://img.kupi.cz/a.jpg',
       });
       expect(o.product, 'Máslo Milkpol');

@@ -84,19 +84,20 @@ class OfferBrowse {
 String offerIdentity(PriceOffer o) => [
   o.chain,
   o.storeId ?? '',
-  (foldText(o.product)
-          .split(RegExp(r'[^a-z0-9]+'))
-          .where((w) => w.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort())
-      .join(' '),
+  _sortedWords(o.product),
   o.packQty ?? '',
   foldText(o.packUnit),
   o.price.toStringAsFixed(2),
   o.kind,
   _day(o.validTo),
 ].join('|');
+
+String _sortedWords(String text) {
+  final words = foldText(text).split(RegExp(r'[^a-z0-9]+'));
+  final unique = words.where((w) => w.isNotEmpty).toSet().toList();
+  unique.sort();
+  return unique.join(' ');
+}
 
 String _day(DateTime d) => '${d.year}-${d.month}-${d.day}';
 
@@ -113,15 +114,14 @@ OfferBrowse browseOffers(
   final current = <PriceOffer>[];
   final upcoming = <PriceOffer>[];
   // Z dvojic zůstane ověřená akce, pak ta s fotkou.
-  int keep(PriceOffer o) => (o.verified ? 0 : 2) + (o.imageUrl.isEmpty ? 1 : 0);
-  final ordered = [
-    for (var i = 0; i < offers.length; i++) (i: i, o: offers[i]),
-  ]..sort((a, b) {
-      final k = keep(a.o).compareTo(keep(b.o));
-      return k != 0 ? k : a.i.compareTo(b.i);
-    });
-  for (final entry in ordered) {
-    final o = entry.o;
+  int keep(PriceOffer o) =>
+      (o.verified ? 0 : 2) + (o.imageUrl.isEmpty ? 1 : 0);
+  final ordered = offers.indexed.toList();
+  ordered.sort((a, b) {
+    final k = keep(a.$2).compareTo(keep(b.$2));
+    return k != 0 ? k : a.$1.compareTo(b.$1);
+  });
+  for (final (_, o) in ordered) {
     if (o.isRegular || o.price <= 0) continue;
     if (o.validTo.isBefore(day)) continue;
     if (!filter.matches(o)) continue;
