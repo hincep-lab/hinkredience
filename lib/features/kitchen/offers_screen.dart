@@ -212,6 +212,7 @@ class _OffersScreenState extends ConsumerState<OffersScreen> {
             ),
             const SizedBox(height: 4),
             _LoyaltyCards(cards: cards),
+            const _SaleAlertsTile(),
             const SizedBox(height: 8),
             Text(
               '${shown.current.length} akcí platí dnes · '
@@ -401,6 +402,45 @@ class _Filters extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Vypínač upozornění na akce zboží z nákupních seznamů.
+class _SaleAlertsTile extends ConsumerStatefulWidget {
+  const _SaleAlertsTile();
+
+  @override
+  ConsumerState<_SaleAlertsTile> createState() => _SaleAlertsTileState();
+}
+
+class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
+  late bool _on = saleAlertsEnabled(ref.read(sharedPreferencesProvider));
+
+  Future<void> _set(bool value) async {
+    setState(() => _on = value);
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setBool(saleAlertsKey, value);
+    if (value) {
+      await prefs.setBool('family_notifications_asked', true);
+      await ref.read(familyAlertsProvider).requestPermission();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SwitchListTile(
+    key: const ValueKey('sale-alerts'),
+    contentPadding: EdgeInsets.zero,
+    title: const Text(
+      'Dát vědět, když je zboží ze seznamu v akci',
+      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+    ),
+    subtitle: const Text(
+      'Oznámení v telefonu o nových ověřených akcích na věci, '
+      'které máte (nebo jste měli) v nákupních seznamech.',
+      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+    ),
+    value: _on,
+    onChanged: _set,
+  );
 }
 
 /// Které věrnostní karty / aplikace uživatel má (počítá se jen s nimi).

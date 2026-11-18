@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_theme.dart';
 import '../core/material.dart';
+import 'kitchen_providers.dart' show checkSaleAlerts;
 import 'providers.dart';
 import 'router.dart';
 
@@ -25,6 +26,10 @@ class _HinkredienceAppState extends ConsumerState<HinkredienceApp> {
   Widget build(BuildContext context) {
     // Udržuje synchronizaci naživu po celou dobu běhu aplikace.
     ref.watch(syncProvider.select((s) => s.running));
+    // Po úspěšné synchronizaci: nové akce na zboží ze seznamů → oznámení.
+    ref.listen(syncProvider.select((s) => s.lastSuccess), (prev, next) {
+      if (next != null && next != prev) checkSaleAlerts(ref);
+    });
 
     return MaterialApp.router(
       title: 'HINKredience°',

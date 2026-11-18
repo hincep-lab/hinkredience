@@ -181,3 +181,51 @@ Deno.test("kupi.cz: akce už uložená z letáku (jiný název) se jen ověří 
   eq([patched[0].body.verified, patched[0].body.provider, patched[0].body.image_url],
     [true, "kupi", "https://img.kupi.cz/kupi/thumbs/maslo-jihoceske-madeta_250.jpg"]);
 });
+
+Deno.test("ranní obnovení akcí: jen s klíčem plánované úlohy, zboží z nákupních seznamů po dávkách", async () => {
+  const { sameSecret } = await import("./index.ts");
+  const KEY = "k".repeat(40);
+  const asked: string[] = [];
+  const fetchImpl = async (url: string, init: RequestInit = {}) => {
+    asked.push(url);
+    if (url.endsWith("/auth/v1/user")) return new Response("{}", { status: 401 });
+    if (url.startsWith("https://db.test/rest/v1/shopping_items")) {
+      return Response.json([
+        ...Array.from({ length: 25 }, (_, i) => ({ name: `${"abcdefghijklmnopqrstuvwxy"[i].repeat(5)} zboží` })),
+        { name: "Máslo" }, { name: "máslo" },
+      ]);
+    }
+    if (url.startsWith("https://db.test/rest/v1/")) {
+      return init.method === "POST" ? new Response("", { status: 201 }) : Response.json([]);
+    }
+    if (url.startsWith("https://www.kupi.cz/hledej")) {
+      const r = new Response("<html></html>", { status: 200 });
+      Object.defineProperty(r, "url", { value: url });
+      return r;
+    }
+    return new Response("<html></html>", { status: 200 });
+  };
+  const env = {
+    supabaseUrl: "https://db.test", anonKey: "anon", serviceKey: "sb_secret_x", geminiKey: "",
+    geminiModel: "x", geminiExtractModel: "x", geminiDailyLimit: 400, openaiKey: "", openaiModel: "", allowPaid: false,
+    cronKey: KEY,
+  };
+  const call = (key: string, body: unknown) => handle(new Request("https://fn.test/prices", {
+    method: "POST", headers: { "x-cron-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }), env, fetchImpl, new Date("2026-11-18T05:00:00Z"));
+
+  eq((await call("spatny-klic", { action: "scheduled" })).status, 401, "špatný klíč");
+  eq((await call(KEY, { action: "submit" })).status, 403, "klíčem jen obnovení");
+  const first = await (await call(KEY, { action: "scheduled", chains: ["penny"] })).json();
+  eq(first.next, 20);
+  eq(asked.filter((u) => u.startsWith("https://www.kupi.cz/")).length, 20, "první dávka 20 položek");
+  const second = await (await call(KEY, { action: "scheduled", offset: 20 })).json();
+  eq(second.next, null, "26 různých položek (máslo jen jednou) = 2 dávky");
+  ok(!sameSecret("abc", "abc"), "krátký klíč neplatí");
+  ok(!sameSecret("", ""), "prázdný klíč neplatí");
+  // Bez nastaveného klíče na serveru se plánovaná úloha spustit nedá.
+  const off = await handle(new Request("https://fn.test/prices", {
+    method: "POST", headers: { "x-cron-key": KEY }, body: JSON.stringify({ action: "scheduled" }),
+  }), { ...env, cronKey: "" }, fetchImpl);
+  eq(off.status, 401);
+});

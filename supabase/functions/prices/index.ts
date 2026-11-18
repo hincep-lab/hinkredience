@@ -38,6 +38,8 @@ export interface Env {
   budgetMs?: number;
   /** Brát akce i z přehledu kupi.cz (výchozí ano; vypne PRICES_KUPI=0). */
   kupi?: boolean;
+  /** Tajný klíč plánované úlohy (ranní obnovení akcí); prázdný = vypnuto. */
+  cronKey?: string;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -1896,6 +1898,22 @@ class Db {
     return t ? JSON.parse(t) : null;
   }
 
+  /** Zboží ze všech nákupních seznamů (nejnovější první, bez opakování) pro ranní obnovení akcí. */
+  async watchedProducts(): Promise<string[]> {
+    const rows = await this.rest("shopping_items?select=name&order=updated_at.desc&limit=400").catch(() => []);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const name = typeof r?.name === "string" ? r.name.trim().slice(0, 80) : "";
+      const key = productKey(name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+      if (out.length >= 60) break;
+    }
+    return out;
+  }
+
   /** Uložené akce řetězce se stejnou cenou a koncem platnosti (pro sloučení stejného zboží z více zdrojů). */
   async sameOffers(chain: string, price: number, validTo: string, storeId: string | null): Promise<{ id: string; product: string; verified: boolean; image_url: string; provider: string }[]> {
     const q = (v: unknown) => encodeURIComponent(String(v));
@@ -2163,17 +2181,33 @@ export async function handle(
   if (req.method !== "POST") return reply(405, { error: "Jen POST." });
   if (!env.supabaseUrl || !env.anonKey || !env.serviceKey) return reply(503, { error: "Funkce není nastavená." });
 
-  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) return reply(401, { error: "Chybí přístupový token." });
   const db = new Db(env, fetchImpl);
-  const userId = await db.userId(token).catch(() => null);
-  if (!userId) return reply(401, { error: "Neplatný nebo vypršelý přístupový token." });
+  // Ranní obnovení akcí (plánovaná úloha na GitHubu): místo přihlášení nese
+  // tajný klíč PRICES_CRON_KEY. Bez nastaveného klíče se nedá spustit.
+  const cronHeader = req.headers.get("x-cron-key") ?? "";
+  const cron = cronHeader !== "" && sameSecret(cronHeader, env.cronKey ?? "");
+  let userId: string | null = null;
+  if (!cron) {
+    const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    if (!token) return reply(401, { error: "Chybí přístupový token." });
+    userId = await db.userId(token).catch(() => null);
+    if (!userId) return reply(401, { error: "Neplatný nebo vypršelý přístupový token." });
+  }
 
   let payload: any;
   try {
     payload = await req.json();
   } catch {
     return reply(400, { error: "Neplatný požadavek." });
+  }
+  let next: number | null = null;
+  if (cron) {
+    if (payload?.action !== "scheduled") return reply(403, { error: "Klíčem plánované úlohy jde jen ranní obnovení akcí." });
+    // Co se hlídá: zboží z nákupních seznamů (i odškrtnuté = běžně kupované).
+    const all = await db.watchedProducts();
+    const offset = Math.max(0, Number(payload?.offset) || 0);
+    next = offset + 20 < all.length ? offset + 20 : null;
+    payload = { action: "refresh", products: all.slice(offset, offset + 20), force: false };
   }
   const today = pragueToday(now);
   const deadline = Date.now() + (env.budgetMs ?? 110_000);
@@ -2197,6 +2231,7 @@ export async function handle(
         const force = payload?.force === true;
         const summary = {
           version: VERSION,
+          next,
           provider: null as string | null,
           scanned: 0,
           cached: 0,
@@ -2633,6 +2668,14 @@ const VERSION = "letaky-3";
 const NO_KEY = "chybí klíč Gemini (GEMINI_API_KEY) – leták nemá kdo přečíst";
 const NO_TIME = "nestihlo se dočíst všechny strany – spusťte hledání znovu, pokračuje se tam, kde se skončilo";
 
+/** Porovnání tajného klíče bez prozrazení shody podle času. */
+export function sameSecret(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length || b.length < 24) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 export function serviceKeyFrom(get: (name: string) => string | undefined): string {
   const legacy = get("SUPABASE_SERVICE_ROLE_KEY");
   if (legacy) return legacy;
@@ -2662,6 +2705,7 @@ export function envFromDeno(get: (name: string) => string | undefined): Env {
     openaiKey: get("OPENAI_API_KEY") ?? "",
     openaiModel: get("OPENAI_PRICES_MODEL") || "gpt-5-mini",
     allowPaid: (get("PRICES_ALLOW_PAID") ?? "").toLowerCase() === "true",
+    cronKey: get("PRICES_CRON_KEY") ?? "",
     kupi: !["0", "false", "ne"].includes((get("PRICES_KUPI") ?? "").toLowerCase()),
   };
 }
