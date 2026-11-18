@@ -1966,6 +1966,8 @@ export async function handle(
           const key = flyersKey(src);
           const sourceOk = src.flyers.length > 0 || src.offers.length > 0;
           if (!sourceOk) d.errors.push("aktuální leták ani data obchodu se nepodařilo stáhnout");
+          // Zapsat hned: když server běh přeruší (limit času), stav stažení zůstane.
+          await db.logRun(chain, sourceOk, sourceOk ? "" : d.errors.join("; "), src.offers.length).catch(() => {});
 
           // 2) Mezipaměť: stejný produkt + stejné letáky už se nečtou znovu.
           const done = force || !sourceOk
@@ -1979,7 +1981,6 @@ export async function handle(
           }
           if (todo.length === 0) {
             d.cached = true;
-            await db.logRun(chain, true, "", 0).catch(() => {});
             for (const f of src.flyers) d.sources.push({ kind: "leták", title: f.title, url: f.url, valid_from: f.validFrom, valid_to: f.validTo, size: f.pages.length, text: f.pages.some((p) => !!p.text), picked: [] });
             continue;
           }
@@ -2122,7 +2123,9 @@ export async function handle(
           summary.scanned += todo.length;
           summary.rejected += d.rejected.length;
           for (const e of d.errors) summary.errors.push(`${chain}: ${e}`);
-          await db.logRun(chain, sourceOk && d.errors.length === 0, d.errors.join("; ").slice(0, 500), d.offers.length).catch(() => {});
+          if (sourceOk && d.errors.length) {
+            await db.logRun(chain, false, d.errors.join("; ").slice(0, 500), d.offers.length).catch(() => {});
+          }
           if (complete && d.errors.length === 0) {
             await db.markScanned(chain, todo.map(([k]) => k), today, summary.provider ?? "web", `ok:${key}`, d.offers.length)
               .catch(() => {});
