@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      ios:
+        description: Spustit i kontrolní sestavení pro iOS
+        type: boolean
+        default: true
 
 concurrency:
   group: build-${{ github.ref }}
@@ -91,12 +96,24 @@ jobs:
             Automatické sestavení z commitu ${{ github.sha }}.
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
           files: hinkredience.apk
+      - name: Testovací vydání z jiné větve (ruční spuštění)
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: HINKredience° – testovací sestavení ${{ github.run_number }} (${{ github.ref_name }})
+          prerelease: true
+          body: |
+            Testovací sestavení z větve `${{ github.ref_name }}` (commit ${{ github.sha }}), ještě není v `main`.
+            Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
+          files: hinkredience.apk
 
   ios:
     name: iOS – kontrolní sestavení bez podpisu
     # Běží jen na vyžádání (Run workflow) nebo když zpráva commitu obsahuje [ios];
     # minuty macOS jsou u soukromých repozitářů desetkrát dražší.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ios]')
+    if: (github.event_name == 'workflow_dispatch' && inputs.ios) || contains(github.event.head_commit.message, '[ios]')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

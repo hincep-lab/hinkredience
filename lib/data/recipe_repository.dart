@@ -168,6 +168,10 @@ class RecipeRepository {
   Future<void> setPhotos(String id, List<RecipePhoto> photos) =>
       _touch(id, (r) => r.copyWith(photos: photos));
 
+  /// Zapíše, kdy se recept naposledy vařil (bez nové verze).
+  Future<void> markCooked(String id, DateTime at) =>
+      _touch(id, (r) => r.copyWith(lastCookedAt: at));
+
   /// Přesune recept do koše. Dá se obnovit pomocí [restore].
   Future<void> softDelete(String id) =>
       _touch(id, (r) => r.copyWith(deletedAt: _clock()));

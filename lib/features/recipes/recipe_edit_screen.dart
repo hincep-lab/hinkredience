@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
@@ -89,6 +90,9 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   final _rest = TextEditingController();
   final _total = TextEditingController();
   String _yieldUnit = YieldUnit.servings;
+
+  /// Recept je sdílený s rodinou (vidí a upravují ho všichni členové).
+  bool _shared = false;
   final _notes = TextEditingController();
   final _source = TextEditingController();
   final _changeSummary = TextEditingController();
@@ -138,6 +142,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
         _cook.text = recipe.cookMinutes > 0 ? '${recipe.cookMinutes}' : '';
         _rest.text = recipe.restMinutes > 0 ? '${recipe.restMinutes}' : '';
         _yieldUnit = YieldUnit.normalize(recipe.yieldUnit);
+        _shared = recipe.visibility == RecipeVisibility.household;
         _total.text = recipe.totalMinutes > 0 ? '${recipe.totalMinutes}' : '';
         _notes.text = recipe.notes;
         _source.text = recipe.sourceUrl ?? '';
@@ -325,6 +330,10 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       description: _description.text.trim(),
       category: _category,
       servings: parseQuantity(_servings.text) ?? 4,
+      householdId: _shared ? _householdFor(base) : null,
+      visibility: _shared && _householdFor(base) != null
+          ? RecipeVisibility.household
+          : RecipeVisibility.private,
       yieldUnit: _yieldUnit,
       prepMinutes: int.tryParse(_prep.text.trim()) ?? 0,
       cookMinutes: int.tryParse(_cook.text.trim()) ?? 0,
@@ -582,6 +591,22 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                 },
               ),
 
+              if (ref.watch(householdProvider).value != null || _shared) ...[
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.group_outlined),
+                  title: const Text('Sdílet s rodinou'),
+                  subtitle: const Text(
+                    'Recept uvidí a budou moct upravit všichni členové rodiny.',
+                  ),
+                  value: _shared,
+                  onChanged: (value) => setState(() {
+                    _shared = value;
+                    _dirty = true;
+                  }),
+                ),
+                const SizedBox(height: 8),
+              ],
               const SectionTitle('Suroviny'),
               for (var i = 0; i < _ingredients.length; i++) _ingredientRow(i),
               Align(
@@ -723,6 +748,10 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       ),
     );
   }
+
+  /// Rodina, se kterou se recept sdílí (stávající, jinak rodina uživatele).
+  String? _householdFor(Recipe base) =>
+      base.householdId ?? ref.read(householdProvider).value?.id;
 
   Widget _photoStrip() => PhotoListEditor(
     recipeId: _recipeId,

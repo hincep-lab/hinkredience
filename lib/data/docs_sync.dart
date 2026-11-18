@@ -1,0 +1,447 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'docs_repository.dart';
+import 'kitchen_docs.dart';
+import 'photo_store.dart';
+import 'remote_store.dart';
+import 'sync_service.dart' show isOfflineError;
+
+/// Řádek ze serveru převedený na dokument v telefonu.
+class RemoteDoc {
+  const RemoteDoc({
+    required this.id,
+    required this.data,
+    required this.updatedAt,
+    required this.syncedAt,
+    this.deletedAt,
+  });
+
+  final String id;
+  final Map<String, dynamic> data;
+  final DateTime updatedAt;
+  final DateTime syncedAt;
+  final DateTime? deletedAt;
+}
+
+/// Server bez migrace 09 – deník, plán a nákup se zatím jen ukládají v telefonu.
+class DocsNotSupported implements Exception {
+  const DocsNotSupported();
+}
+
+/// Vzdálené úložiště deníku, plánu a nákupního seznamu (kvůli testům rozhraní).
+abstract interface class RemoteDocs {
+  String? get userId;
+
+  /// Domácnost přihlášeného uživatele, nebo `null`.
+  Future<String?> householdId();
+
+  Future<List<RemoteDoc>> pull(String kind, {DateTime? since});
+
+  Future<void> push(String kind, DirtyDoc doc, {String? householdId});
+
+  Future<String> uploadSessionPhoto({
+    required String sessionId,
+    required String photoId,
+    required File file,
+  });
+
+  Future<Uint8List> downloadPhoto(String remotePath);
+}
+
+/// Synchronizace deníku vaření, plánu vaření a nákupního seznamu.
+class DocsSync {
+  DocsSync({required this.docs, required this.remote, required this.photos});
+
+  final DocsRepository docs;
+  final RemoteDocs remote;
+  final PhotoStore photos;
+
+  static const kinds = [DocKind.session, DocKind.plan, DocKind.shopping];
+
+  /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
+  Future<({List<String> errors, bool offline, int pulled, int pushed})>
+  sync() async {
+    final uid = remote.userId;
+    if (uid == null)
+      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+    final errors = <String>[];
+    var offline = false;
+    var pulled = 0;
+    var pushed = 0;
+    String? household;
+    try {
+      household = await remote.householdId();
+    } on DocsNotSupported {
+      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+    } catch (error) {
+      if (isOfflineError(error)) {
+        return (errors: <String>[], offline: true, pulled: 0, pushed: 0);
+      }
+      household = null;
+    }
+
+    for (final kind in kinds) {
+      try {
+        // 1) Stažení změn
+        final cursorKey = 'docs_cursor:$kind:$uid';
+        final cursorText = await docs.getMeta(cursorKey);
+        final cursor = cursorText == null
+            ? null
+            : DateTime.tryParse(cursorText);
+        var newest = cursor;
+        for (final row in await remote.pull(kind, since: cursor)) {
+          if (await docs.applyRemote(
+            kind: kind,
+            id: row.id,
+            data: row.data,
+            updatedAt: row.updatedAt,
+            deletedAt: row.deletedAt,
+          )) {
+            pulled++;
+          }
+          if (newest == null || row.syncedAt.isAfter(newest)) {
+            newest = row.syncedAt;
+          }
+        }
+        if (newest != null && newest != cursor) {
+          await docs.setMeta(cursorKey, newest.toUtc().toIso8601String());
+        }
+
+        // 2) Odeslání místních změn
+        for (final doc in await docs.dirty(kind)) {
+          // Rozvařené recepty zůstávají jen v telefonu; do deníku patří
+          // dokončená (nebo smazaná) vaření.
+          if (kind == DocKind.session && doc.deletedAt == null) {
+            final session = CookingSession.fromJson(doc.data);
+            if (!session.isFinished) continue;
+            await _uploadSessionPhotos(doc.id, session);
+          }
+          final fresh = kind == DocKind.session
+              ? (await docs.dirty(kind))
+                    .firstWhere((d) => d.id == doc.id, orElse: () => doc)
+              : doc;
+          await remote.push(kind, fresh, householdId: household);
+          await docs.markClean(doc.id, doc.updatedAt);
+          pushed++;
+        }
+      } on DocsNotSupported {
+        return (
+          errors: errors,
+          offline: offline,
+          pulled: pulled,
+          pushed: pushed,
+        );
+      } catch (error) {
+        if (isOfflineError(error)) {
+          offline = true;
+          break;
+        }
+        errors.add('${_label(kind)}: $error');
+      }
+    }
+
+    if (!offline) await _cacheSessionPhotos();
+    return (errors: errors, offline: offline, pulled: pulled, pushed: pushed);
+  }
+
+  Future<void> _uploadSessionPhotos(String id, CookingSession session) async {
+    final uploaded = <String, String>{};
+    for (final photo in session.photos) {
+      if (photo.remotePath != null) continue;
+      final file = photos.localFile(photo);
+      if (file == null) continue;
+      uploaded[photo.id] = await remote.uploadSessionPhoto(
+        sessionId: id,
+        photoId: photo.id,
+        file: file,
+      );
+    }
+    if (uploaded.isNotEmpty) await docs.saveSessionPhotoUploads(id, uploaded);
+  }
+
+  Future<void> _cacheSessionPhotos() async {
+    var budget = 20;
+    for (final session in await docs.diary()) {
+      for (final photo in session.photos) {
+        if (budget <= 0) return;
+        if (photo.remotePath == null || photos.localFile(photo) != null)
+          continue;
+        try {
+          final bytes = await remote.downloadPhoto(photo.remotePath!);
+          final path = await photos.saveDownloaded(
+            recipeId: 'session-${session.id}',
+            photoId: photo.id,
+            bytes: bytes,
+          );
+          await docs.saveSession(
+            session.copyWith(
+              photos: [
+                for (final p in session.photos)
+                  p.id == photo.id ? p.copyWith(localPath: path) : p,
+              ],
+            ),
+          );
+          // Uložení výše záznam označí jako neodeslaný – jde ale jen o cestu
+          // v telefonu, takže ho hned zase označíme jako odeslaný.
+          final saved = await docs.session(session.id);
+          if (saved != null) await docs.markClean(saved.id, saved.updatedAt);
+          budget--;
+        } catch (error) {
+          if (isOfflineError(error)) return;
+        }
+      }
+    }
+  }
+
+  static String _label(String kind) => switch (kind) {
+    DocKind.session => 'Kuchařský deník',
+    DocKind.plan => 'Plán vaření',
+    _ => 'Nákupní seznam',
+  };
+}
+
+DateTime? _date(Object? value) =>
+    value is String ? DateTime.tryParse(value)?.toUtc() : null;
+
+/// Implementace nad Supabase.
+class SupabaseRemoteDocs implements RemoteDocs {
+  SupabaseRemoteDocs(this._client);
+
+  final SupabaseClient _client;
+  String? _listId;
+
+  @override
+  String? get userId => _client.auth.currentUser?.id;
+
+  Never _rethrow(Object error) {
+    if (error is PostgrestException &&
+        (isMissingColumnError(error) ||
+            isMissingTableError(error) ||
+            error.message.contains('my_household') ||
+            error.message.contains('my_shopping_list') ||
+            error.code == 'PGRST202')) {
+      throw const DocsNotSupported();
+    }
+    throw error;
+  }
+
+  @override
+  Future<String?> householdId() async {
+    try {
+      final result = await _client.rpc<dynamic>('my_household');
+      return result is String ? result : null;
+    } catch (error) {
+      _rethrow(error);
+    }
+  }
+
+  Future<String> _shoppingList() async {
+    if (_listId != null) return _listId!;
+    try {
+      final result = await _client.rpc<dynamic>('my_shopping_list');
+      return _listId = result as String;
+    } catch (error) {
+      _rethrow(error);
+    }
+  }
+
+  static const _tables = {
+    DocKind.session: 'cooking_sessions',
+    DocKind.plan: 'meal_plans',
+    DocKind.shopping: 'shopping_items',
+  };
+
+  @override
+  Future<List<RemoteDoc>> pull(String kind, {DateTime? since}) async {
+    final uid = userId!;
+    try {
+      var query = _client.from(_tables[kind]!).select();
+      if (kind == DocKind.session) {
+        query = query.eq('user_id', uid).eq('status', SessionStatus.finished);
+      }
+      if (kind == DocKind.shopping) {
+        query = query.eq('list_id', await _shoppingList());
+      }
+      if (since != null) {
+        query = query.gt('synced_at', since.toUtc().toIso8601String());
+      }
+      final List<Map<String, dynamic>> rows = await query.order(
+        'synced_at',
+        ascending: true,
+      );
+      return [for (final row in rows) _fromRow(kind, row)];
+    } catch (error) {
+      _rethrow(error);
+    }
+  }
+
+  RemoteDoc _fromRow(String kind, Map<String, dynamic> row) {
+    final updatedAt = _date(row['updated_at']) ?? DateTime.now().toUtc();
+    final Map<String, dynamic> data = switch (kind) {
+      DocKind.session => {
+        'id': row['id'],
+        'recipe_id': row['recipe_id'],
+        'recipe_title': row['recipe_title'] ?? '',
+        'version_number': row['version_number'],
+        'status': row['status'],
+        'cooked_at': row['cooked_at'],
+        'updated_at': row['updated_at'],
+        'servings': row['servings'],
+        'actual_minutes': row['actual_minutes'],
+        'actual_temperatures': row['actual_temperatures'] ?? const [],
+        'photos': [
+          for (final p in (row['photos'] as List?) ?? const [])
+            if (p is Map) {'id': p['id'], 'remote_path': p['remote_path']},
+        ],
+        'rating': row['rating'],
+        'notes': row['notes'] ?? '',
+        'went_well': row['went_well'] ?? '',
+        'to_improve': row['to_improve'] ?? '',
+      },
+      DocKind.plan => {
+        'id': row['id'],
+        'day': row['plan_date'],
+        'meal_type': row['meal_type'],
+        'recipe_id': row['recipe_id'],
+        'title': row['title'] ?? '',
+        'note': row['note'] ?? '',
+        'servings': row['servings'],
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'updated_at': row['updated_at'],
+      },
+      _ => {
+        'id': row['id'],
+        'name': row['name'],
+        'quantity': row['quantity'],
+        'unit': row['unit'] ?? '',
+        'checked': row['is_checked'] == true,
+        'sources': row['sources'] ?? const [],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+      },
+    };
+    return RemoteDoc(
+      id: row['id'] as String,
+      data: data,
+      updatedAt: updatedAt,
+      syncedAt: _date(row['synced_at']) ?? updatedAt,
+      deletedAt: _date(row['deleted_at']),
+    );
+  }
+
+  @override
+  Future<void> push(String kind, DirtyDoc doc, {String? householdId}) async {
+    final uid = userId!;
+    final d = doc.data;
+    final deleted = doc.deletedAt?.toUtc().toIso8601String();
+    final updated = doc.updatedAt.toUtc().toIso8601String();
+    final table = _tables[kind]!;
+    Map<String, dynamic> row;
+    switch (kind) {
+      case DocKind.session:
+        row = {
+          'id': doc.id,
+          'user_id': uid,
+          'recipe_id': d['recipe_id'],
+          'recipe_title': d['recipe_title'] ?? '',
+          'version_number': d['version_number'],
+          'status': d['status'] ?? SessionStatus.finished,
+          'cooked_at': d['cooked_at'],
+          'servings': d['servings'],
+          'actual_minutes': d['actual_minutes'],
+          'actual_temperatures': d['actual_temperatures'] ?? const [],
+          'photos': [
+            for (final p in (d['photos'] as List?) ?? const [])
+              if (p is Map && p['remote_path'] != null)
+                {'id': p['id'], 'remote_path': p['remote_path']},
+          ],
+          'rating': d['rating'],
+          'notes': d['notes'] ?? '',
+          'went_well': d['went_well'] ?? '',
+          'to_improve': d['to_improve'] ?? '',
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      case DocKind.plan:
+        row = {
+          'id': doc.id,
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'] ?? householdId,
+          'plan_date': d['day'],
+          'meal_type': d['meal_type'],
+          'recipe_id': d['recipe_id'],
+          'title': d['title'] ?? '',
+          'note': d['note'] ?? '',
+          'servings': d['servings'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      default:
+        row = {
+          'id': doc.id,
+          'list_id': await _shoppingList(),
+          'name': d['name'],
+          'quantity': d['quantity'],
+          'unit': d['unit'] ?? '',
+          'is_checked': d['checked'] == true,
+          'sources': d['sources'] ?? const [],
+          'created_at': d['created_at'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+    }
+
+    Future<void> write(Map<String, dynamic> values) async {
+      final owner = values['owner_id'];
+      if (owner != null && owner != uid) {
+        // Záznam jiného člena rodiny smíme upravit, ne založit.
+        final shared = Map<String, dynamic>.from(values)..remove('owner_id');
+        await _client.from(table).update(shared).eq('id', doc.id);
+      } else {
+        await _client.from(table).upsert(values);
+      }
+    }
+
+    try {
+      await write(row);
+    } on PostgrestException catch (error) {
+      if (error.code == '23503' && row['recipe_id'] != null) {
+        // Recept na serveru není (smazaný nebo ještě neodeslaný) – záznam
+        // uložíme bez odkazu na něj; název zůstane.
+        await write({...row, 'recipe_id': null});
+        return;
+      }
+      _rethrow(error);
+    }
+  }
+
+  @override
+  Future<String> uploadSessionPhoto({
+    required String sessionId,
+    required String photoId,
+    required File file,
+  }) async {
+    final uid = userId!;
+    final path = '$uid/session-$sessionId/$photoId.jpg';
+    await _client.storage
+        .from(SupabaseRemoteStore.photoBucket)
+        .upload(
+          path,
+          file,
+          fileOptions: const FileOptions(
+            upsert: true,
+            contentType: 'image/jpeg',
+          ),
+        );
+    return path;
+  }
+
+  @override
+  Future<Uint8List> downloadPhoto(String remotePath) => _client.storage
+      .from(SupabaseRemoteStore.photoBucket)
+      .download(remotePath);
+}

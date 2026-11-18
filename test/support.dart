@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:hinkredience/data/app_database.dart';
+import 'package:hinkredience/data/docs_repository.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
 import 'package:path/path.dart' as p;
@@ -38,6 +39,21 @@ class TestEnvironment {
       database,
       clock: () => _now,
       newId: () => '$prefix-id-${++_ids}',
+    );
+  }
+
+  /// Deník, plán a nákup nad stejnou databází jako [repository].
+  Future<DocsRepository> docs([String name = 'test.db']) async {
+    final database = await AppDatabase.open(
+      factory: databaseFactoryFfi,
+      path: p.join(directory.path, name),
+    );
+    _databases.add(database);
+    final prefix = name.replaceAll('.db', '');
+    return DocsRepository(
+      database,
+      clock: () => _now,
+      newId: () => '$prefix-doc-${++_ids}',
     );
   }
 

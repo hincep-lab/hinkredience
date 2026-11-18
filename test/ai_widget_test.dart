@@ -9,6 +9,7 @@ import 'package:hinkredience/app/router.dart';
 import 'package:hinkredience/core/app_theme.dart';
 import 'package:hinkredience/core/material.dart';
 import 'package:hinkredience/data/ai_service.dart';
+import 'package:hinkredience/data/docs_repository.dart';
 import 'package:hinkredience/data/photo_store.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
@@ -45,6 +46,9 @@ Future<void> pumpAiApp(
         photoStoreProvider.overrideWithValue(PhotoStore(Directory.systemTemp)),
         recipeRepositoryProvider.overrideWith(
           (ref) => Completer<RecipeRepository>().future,
+        ),
+        docsRepositoryProvider.overrideWith(
+          (ref) => Completer<DocsRepository>().future,
         ),
         allRecipesProvider.overrideWith((ref) => Stream.value(recipes)),
         if (backend != null)

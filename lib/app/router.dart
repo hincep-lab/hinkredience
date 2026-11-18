@@ -16,6 +16,12 @@ import '../features/more/trash_screen.dart';
 import '../features/recipes/recipe_detail_screen.dart';
 import '../features/recipes/recipe_edit_screen.dart';
 import '../core/screen_wake.dart';
+import '../features/cooking/cooking_screen.dart';
+import '../features/kitchen/diary_entry_screen.dart';
+import '../features/kitchen/diary_screen.dart';
+import '../features/kitchen/plan_screen.dart';
+import '../features/kitchen/shopping_screen.dart';
+import '../features/more/family_screen.dart';
 import '../features/photos/recipe_photos_screen.dart';
 import '../features/recipes/recipes_screen.dart';
 import '../features/shell/main_shell.dart';
@@ -39,10 +45,32 @@ abstract final class Routes {
   static const webSearch = '/ai/search';
   static const importRecipe = '/ai/import';
   static const draft = '/ai/draft';
+  static const shopping = '/shopping';
+  static const plan = '/plan';
+  static const diary = '/diary';
+  static const family = '/more/family';
+
+  static String diaryFor(String recipeId) =>
+      Uri(path: diary, queryParameters: {'recipe': recipeId}).toString();
+  static String diaryEntry(String id) => '/diary/$id';
+
+  /// Režim Vaříme spolu, volitelně na jiný počet porcí / kusů.
+  static String cook(String recipeId, {double? servings}) => Uri(
+    path: '/cook/$recipeId',
+    queryParameters: servings == null ? null : {'s': '$servings'},
+  ).toString();
 
   /// Chat s AI: pokračování konverzace nebo rozhovor nad receptem.
-  static String aiChat({String? conversationId, String? recipeId}) {
-    final parameters = {'c': ?conversationId, 'recipe': ?recipeId};
+  static String aiChat({
+    String? conversationId,
+    String? recipeId,
+    String? draft,
+  }) {
+    final parameters = {
+      'c': ?conversationId,
+      'recipe': ?recipeId,
+      'draft': ?draft,
+    };
     return Uri(
       path: ai,
       queryParameters: parameters.isEmpty ? null : parameters,
@@ -165,6 +193,12 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
                         page(state, const ChatGptScreen()),
                   ),
                   GoRoute(
+                    path: 'family',
+                    parentNavigatorKey: rootKey,
+                    pageBuilder: (context, state) =>
+                        page(state, const FamilyScreen()),
+                  ),
+                  GoRoute(
                     path: 'kitchen',
                     parentNavigatorKey: rootKey,
                     pageBuilder: (context, state) =>
@@ -184,6 +218,7 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
           AiChatScreen(
             conversationId: state.uri.queryParameters['c'],
             recipeId: state.uri.queryParameters['recipe'],
+            draft: state.uri.queryParameters['draft'],
           ),
         ),
         routes: [
@@ -223,6 +258,45 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
             },
           ),
         ],
+      ),
+      GoRoute(
+        path: Routes.shopping,
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(state, const ShoppingScreen()),
+      ),
+      GoRoute(
+        path: Routes.plan,
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(state, const PlanScreen()),
+      ),
+      GoRoute(
+        path: Routes.diary,
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(
+          state,
+          DiaryScreen(recipeId: state.uri.queryParameters['recipe']),
+        ),
+        routes: [
+          GoRoute(
+            path: ':id',
+            parentNavigatorKey: rootKey,
+            pageBuilder: (context, state) => page(
+              state,
+              DiaryEntryScreen(sessionId: state.pathParameters['id']!),
+            ),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: '/cook/:id',
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(
+          state,
+          CookingScreen(
+            recipeId: state.pathParameters['id']!,
+            servings: double.tryParse(state.uri.queryParameters['s'] ?? ''),
+          ),
+        ),
       ),
       GoRoute(
         path: Routes.newRecipe,

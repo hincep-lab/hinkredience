@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
@@ -48,37 +49,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     context.go(Routes.recipesWith(query: query));
   }
 
-  void _comingSoon(String title, String stage, String description) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 4),
-              Text(
-                'Připravujeme – $stage',
-                style: const TextStyle(color: AppColors.copperGold),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                description,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  height: 1.4,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -87,6 +57,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final list = recipes.value ?? const <Recipe>[];
     final favorites = list.where((r) => r.isFavorite).length;
     final aiBadge = ref.watch(aiEnabledProvider) ? null : 'Vypnuto';
+    final shoppingCount = [
+      for (final item in ref.watch(shoppingProvider).value ?? const [])
+        if (!item.checked) item,
+    ].length;
+    final open = ref.watch(openSessionProvider).value;
 
     return Scaffold(
       body: SafeArea(
@@ -145,6 +120,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
+                  if (open != null && open.recipeId != null) ...[
+                    HkCard(
+                      onTap: () => context.push(Routes.cook(open.recipeId!)),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.local_fire_department_rounded,
+                            color: AppColors.copperGold,
+                            size: 30,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Rozvařeno',
+                                  style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                                Text(
+                                  open.recipeTitle,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Text(
+                            'Pokračovat',
+                            style: TextStyle(color: AppColors.copperGold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
                 ],
               ),
             ),
@@ -188,26 +203,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   _FeatureTile(
                     icon: Icons.calendar_month_rounded,
                     title: 'Plán vaření',
-                    subtitle: 'Jídelníček na míru',
-                    badge: 'Brzy',
-                    onTap: () => _comingSoon(
-                      'Plán vaření',
-                      'Etapa 4',
-                      'Týdenní kalendář snídaní, obědů a večeří sdílený '
-                          's rodinou. Databáze je na něj už připravená.',
-                    ),
+                    subtitle: 'Týden pro celou rodinu',
+                    onTap: () => context.push(Routes.plan),
                   ),
                   _FeatureTile(
                     icon: Icons.shopping_cart_outlined,
                     title: 'Nákupní seznam',
-                    subtitle: 'Podle receptů',
-                    badge: 'Brzy',
-                    onTap: () => _comingSoon(
-                      'Nákupní seznam',
-                      'Etapa 4',
-                      'Seznam se slučováním surovin z receptů a sdílením '
-                          'v domácnosti. Databáze je na něj už připravená.',
-                    ),
+                    subtitle: shoppingCount == 0
+                        ? 'Podle receptů'
+                        : 'K nákupu · $shoppingCount',
+                    onTap: () => context.push(Routes.shopping),
                   ),
                   _FeatureTile(
                     icon: Icons.favorite_outline_rounded,
@@ -220,14 +225,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   _FeatureTile(
                     icon: Icons.edit_note_rounded,
                     title: 'Kuchařský deník',
-                    subtitle: 'Tipy a úpravy',
-                    badge: 'Brzy',
-                    onTap: () => _comingSoon(
-                      'Kuchařský deník',
-                      'Etapa 4',
-                      'Záznam každého vaření: skutečné časy a teploty, fotky, '
-                          'co se povedlo a co zlepšit.',
-                    ),
+                    subtitle: 'Časy, fotky, co zlepšit',
+                    onTap: () => context.push(Routes.diary),
                   ),
                 ],
               ),

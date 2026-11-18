@@ -14,6 +14,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/ai_models.dart';
 import '../data/ai_service.dart';
 import '../data/app_database.dart';
+import '../data/docs_repository.dart';
+import '../data/docs_sync.dart';
 import '../data/photo_store.dart';
 import '../data/recipe.dart';
 import '../data/recipe_repository.dart';
@@ -261,6 +263,14 @@ final recipeRepositoryProvider = FutureProvider<RecipeRepository>((ref) async {
   return repository;
 });
 
+/// Kuchařský deník, plán vaření a nákupní seznam (stejná místní databáze).
+final docsRepositoryProvider = FutureProvider<DocsRepository>((ref) async {
+  final database = await ref.watch(databaseProvider.future);
+  final repository = DocsRepository(database);
+  ref.onDispose(repository.dispose);
+  return repository;
+});
+
 /// Všechny recepty včetně koše; obnovuje se při každé změně v databázi.
 final allRecipesProvider = StreamProvider<List<Recipe>>((ref) {
   final controller = StreamController<List<Recipe>>();
@@ -488,6 +498,14 @@ class SyncController extends Notifier<SyncState> {
       ref.onDispose(subscription.cancel);
       Future.microtask(_refreshCounts);
     }
+    final docs = ref.watch(docsRepositoryProvider).value;
+    if (docs != null) {
+      final subscription = docs.changes.listen((_) async {
+        final pending = await _refreshCounts();
+        if (pending > 0) schedule(const Duration(seconds: 2));
+      });
+      ref.onDispose(subscription.cancel);
+    }
 
     if (repository != null && client != null && userId != null) {
       _listenForTriggers(client);
@@ -535,6 +553,18 @@ class SyncController extends Notifier<SyncState> {
             table: 'recipe_tombstones',
             callback: (_) => schedule(const Duration(seconds: 1)),
           )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'meal_plans',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'shopping_items',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
           .subscribe();
       ref.onDispose(() => client.removeChannel(channel));
     } catch (error) {
@@ -552,7 +582,9 @@ class SyncController extends Notifier<SyncState> {
   Future<int> _refreshCounts() async {
     final repository = ref.read(recipeRepositoryProvider).value;
     if (repository == null) return 0;
-    final pending = await repository.dirtyCount();
+    final docs = ref.read(docsRepositoryProvider).value;
+    final pending =
+        await repository.dirtyCount() + (await docs?.dirtyCount() ?? 0);
     final conflicts = (await repository.conflicts()).length;
     if (ref.mounted) {
       state = state.copyWith(pending: pending, conflicts: conflicts);
@@ -587,9 +619,43 @@ class SyncController extends Notifier<SyncState> {
     } catch (error) {
       result = SyncResult(offline: isOfflineError(error), errors: ['$error']);
     }
+    // Deník, plán a nákupní seznam.
+    final docs = ref.read(docsRepositoryProvider).value;
+    if (docs != null && !result.offline && ref.mounted) {
+      try {
+        final extra = await DocsSync(
+          docs: docs,
+          remote: SupabaseRemoteDocs(client),
+          photos: ref.read(photoStoreProvider),
+        ).sync();
+        if (extra.errors.isNotEmpty || extra.offline) {
+          result = SyncResult(
+            pulled: result.pulled + extra.pulled,
+            pushed: result.pushed + extra.pushed,
+            conflicts: result.conflicts,
+            offline: extra.offline,
+            errors: [
+              ...result.errors,
+              ...extra.errors,
+              if (extra.offline)
+                'Bez připojení k internetu. Změny se odešlou později.',
+            ],
+          );
+        }
+      } catch (error) {
+        result = SyncResult(
+          pulled: result.pulled,
+          pushed: result.pushed,
+          conflicts: result.conflicts,
+          offline: isOfflineError(error),
+          errors: [...result.errors, '$error'],
+        );
+      }
+    }
     _running = false;
     if (!ref.mounted) return result;
-    final pending = await repository.dirtyCount();
+    final pending =
+        await repository.dirtyCount() + (await docs?.dirtyCount() ?? 0);
     if (!ref.mounted) return result;
 
     DateTime? nextRetry;
