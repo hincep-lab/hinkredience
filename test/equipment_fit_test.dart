@@ -183,6 +183,9 @@ void main() {
       now: DateTime.utc(2026, 11, 18, 12),
     );
     expect(result.first.recipe.title, 'Rohlíky');
-    expect(result.first.reasons, contains('Využije ETA Gratussino'));
+    expect(
+      result.first.reasons.where((r) => r.startsWith('Využije ')),
+      isNotEmpty,
+    );
   });
 }

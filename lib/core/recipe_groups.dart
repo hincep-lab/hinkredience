@@ -282,10 +282,10 @@ String? _firstMeat(String text) {
 enum PrepMethod {
   oven('Trouba', Icons.kitchen_rounded, 'trouba'),
   pan('Pánev', Icons.egg_rounded, 'panev'),
-  pot('Hrnec', Icons.soup_kitchen_rounded),
   sousVide('Sous-vide', Icons.hot_tub_rounded, 'sousvide'),
   grill('Gril', Icons.outdoor_grill_rounded, 'gril'),
   slow('Pomalé vaření', Icons.soup_kitchen_outlined, 'pomale'),
+  pot('Hrnec', Icons.soup_kitchen_rounded),
   waffle('Vaflovač', Icons.grid_on_rounded),
   noCook('Bez vaření', Icons.no_food_outlined),
   noBake('Bez pečení', Icons.icecream_outlined);
@@ -349,7 +349,17 @@ Set<PrepMethod> inferPrepMethods(Recipe r) {
   final waffleOnly = waffle && !text.contains('troub');
   final oven = _oven.hasMatch(text) && !waffleOnly;
   final pan = _pan.hasMatch(text);
-  final pot = _pot.hasMatch(text);
+  // „Vařte ve vodní lázni“ u sous-vide není hrnec.
+  final pot = _pot.hasMatch(
+    foldText(
+      [
+        r.title,
+        ...r.equipment,
+        for (final s in r.steps)
+          if (!_sousVide.hasMatch(foldText(s.instruction))) s.instruction,
+      ].join(' | '),
+    ),
+  );
   final sousVide = _sousVide.hasMatch(text);
   final grill = RegExp(r'\bgril').hasMatch(text);
   final heat =

@@ -304,8 +304,12 @@ TimeBreakdown computeRecipeTime({
   final passive = max(restMinutes, stepPassive);
 
   var total = active + cook + passive - overlap;
-  // Celek nemůže být kratší než nejdelší jednotlivá část.
-  total = max(total, max(active, max(cook, passive)));
+  // Celek nemůže být kratší než nejdelší část zadaná u receptu ani než
+  // časová osa kroků (součty kroků se souběžnými kroky překrývají).
+  total = max(
+    total,
+    max(timeline, max(prepMinutes, max(cookMinutes, restMinutes))),
+  );
   if (totalOverride > 0) total = totalOverride;
 
   return TimeBreakdown(

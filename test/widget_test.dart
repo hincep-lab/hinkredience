@@ -243,20 +243,17 @@ void main() {
     expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
     expect(find.text('Rychlá omeleta'), findsOneWidget);
 
-    // Kombinace: pánev + trouba = kterýkoli z nich; + do 30 min zúží.
+    // Kombinace: pánev + trouba = recept musí používat obojí. Žádný z
+    // ukázkových receptů to nemá – omeleta je jen na pánvi.
     await tapPill(tester, find.text('Trouba'), prepRow);
-    expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
-    await tapPill(tester, find.byKey(const Key('time-upTo30')), timeRow);
-    expect(find.text('Nalezeno: 1 recept'), findsOneWidget);
-    expect(find.text('Rychlá omeleta'), findsOneWidget);
+    expect(find.text('Nalezeno: 0 receptů'), findsOneWidget);
 
-    // Jednotlivý filtr jde odebrat jedním klepnutím.
-    await tester.ensureVisible(
-      find.byKey(const Key('remove-filter-Do 30 min')),
-    );
-    await tester.tap(find.byKey(const Key('remove-filter-Do 30 min')));
+    // Jednotlivý filtr jde odebrat jedním klepnutím: zůstane jen Trouba.
+    await tester.ensureVisible(find.byKey(const Key('remove-filter-Pánev')));
+    await tester.tap(find.byKey(const Key('remove-filter-Pánev')));
     await tester.pumpAndSettle();
-    expect(find.text('Nalezeno: 3 recepty'), findsOneWidget);
+    expect(find.text('Nalezeno: 2 recepty'), findsOneWidget);
+    expect(find.text('Rychlá omeleta'), findsNothing);
 
     await tester.ensureVisible(find.byKey(const Key('clear-all-filters')));
     await tester.tap(find.byKey(const Key('clear-all-filters')));
@@ -419,7 +416,13 @@ void main() {
     expect(find.text('Pro děti · 1'), findsOneWidget);
     expect(find.text('Trouba · 1'), findsOneWidget);
     expect(find.text('Grilovačka · 1'), findsOneWidget);
+    // Štítky se vybírají a kombinují, recepty ukáže tlačítko dole.
     await tester.tap(find.text('Pro děti · 1'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Grilovačka · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Zobrazit 1 recept'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tags-show')));
     await tester.pumpAndSettle();
     expect(find.text('Žebra BBQ'), findsOneWidget);
   });

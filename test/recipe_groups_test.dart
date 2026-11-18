@@ -391,7 +391,10 @@ void main() {
       const RecipeFilters(occasions: {'Rychlé jídlo'}).apply([old, fresh]),
       [old, fresh],
     );
-    expect(tagCounts([old, fresh]), [const MapEntry('Rychlé jídlo', 2)]);
+    final counts = tagCounts([old, fresh]);
+    expect(counts, hasLength(1));
+    expect(counts.single.key, 'Rychlé jídlo');
+    expect(counts.single.value, 2);
     expect(tagKindOf('Rychlá večeře'), TagKind.occasion);
     expect(tagKindOf('Hrnec'), TagKind.prep);
     expect(tagKindOf('Italská kuchyně'), TagKind.cuisine);
