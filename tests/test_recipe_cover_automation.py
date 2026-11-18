@@ -67,6 +67,43 @@ class CoverSafetyTests(unittest.TestCase):
                 covers.main()
             candidates.assert_not_called()
 
+
+    def test_ambiguous_write_does_not_delete_possible_cover(self):
+        recipe = {"id": "recipe-id", "title": "Polévka", "photos": []}
+        with patch.object(sys, "argv", ["covers", "--apply"]), \
+             patch.dict(os.environ, {"HINK_COVER_WRITES_ENABLED": "true"}), \
+             patch.object(covers, "config", return_value=("https://example.supabase.co", "dummy", "owner")), \
+             patch.object(covers, "candidates", return_value=[recipe]), \
+             patch.object(covers, "generate_image", return_value=b"png"), \
+             patch.object(covers, "upload"), \
+             patch.object(covers, "attach_if_empty", side_effect=TimeoutError("lost response")), \
+             patch.object(covers, "remove") as remove:
+            with self.assertRaises(TimeoutError):
+                covers.main()
+            remove.assert_not_called()
+
+    def test_concurrent_cover_does_remove_unattached_upload(self):
+        recipe = {"id": "recipe-id", "title": "Polévka", "photos": []}
+        with patch.object(sys, "argv", ["covers", "--apply"]), \
+             patch.dict(os.environ, {"HINK_COVER_WRITES_ENABLED": "true"}), \
+             patch.object(covers, "config", return_value=("https://example.supabase.co", "dummy", "owner")), \
+             patch.object(covers, "candidates", return_value=[recipe]), \
+             patch.object(covers, "generate_image", return_value=b"png"), \
+             patch.object(covers, "upload"), \
+             patch.object(covers, "attach_if_empty", return_value=False), \
+             patch.object(covers, "remove") as remove:
+            covers.main()
+            remove.assert_called_once()
+
+    def test_config_rejects_non_https_url(self):
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "http://example.com",
+            "SUPABASE_SERVICE_ROLE_KEY": "dummy",
+            "HINK_OWNER_ID": "11111111-1111-1111-1111-111111111111",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "HTTPS"):
+                covers.config()
+
     def test_limit_has_upper_bound(self):
         self.assertEqual(covers.MAX_IMAGES, 5)
 
