@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import uuid
+from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -52,7 +53,7 @@ def candidates(base, key, owner):
     }))
     # Return all items; select first eligible up to MAX_IMAGES in main.
     data = request("GET", url, headers(key))
-    return [r for r in data if r.get("photos") == []]
+    return [r for r in data if isinstance(r.get("photos"), list) and not r["photos"]]
 
 
 def generate_image(recipe):
@@ -102,8 +103,7 @@ def attach_if_empty(base, key, owner, recipe_id, photo_id, path):
     url = base + "/rest/v1/recipes?" + filters
     data = json.dumps({
         "photos": [{"id": photo_id, "remote_path": path}],
-        "updated_at": __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }).encode()
     result = request("PATCH", url, headers(key, **{
         "Content-Type": "application/json", "Prefer": "return=representation"
@@ -120,6 +120,8 @@ def main():
     if not 1 <= args.limit <= MAX_IMAGES:
         parser.error("limit must be between 1 and 5")
     base, key, owner = config()
+    if args.apply and os.getenv("HINK_COVER_WRITES_ENABLED") != "true":
+        raise RuntimeError("Writes disabled: set HINK_COVER_WRITES_ENABLED=true explicitly")
     recipes = candidates(base, key, owner)
     print(f"Found {len(recipes)} recipes without photos.")
     for recipe in recipes[:args.limit]:
