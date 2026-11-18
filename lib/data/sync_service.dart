@@ -168,7 +168,13 @@ class SyncService {
     // 1) Stažení změn
     try {
       final cursorText = await repository.getMeta('$_cursorKey:$uid');
-      final cursor = cursorText == null ? null : DateTime.tryParse(cursorText);
+      var cursor = cursorText == null ? null : DateTime.tryParse(cursorText);
+      // Prázdná kuchařka se značkou „už staženo“ (např. obnovená záloha
+      // telefonu nebo nová instalace) by jinak stáhla jen nejnovější změny
+      // a zůstala prázdná. Bez receptů se proto vždy stahuje vše.
+      if (cursor != null && (await repository.getAll()).isEmpty) {
+        cursor = null;
+      }
       final changes = await remote.pullRecipes(since: cursor);
       var newest = cursor;
       for (final change in changes) {
