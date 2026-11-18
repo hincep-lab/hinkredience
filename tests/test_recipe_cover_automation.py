@@ -56,6 +56,17 @@ class CoverSafetyTests(unittest.TestCase):
         self.assertIn("paprika", request_payload["prompt"])
         self.assertIn("no collage", request_payload["prompt"])
 
+
+    def test_apply_requires_explicit_write_flag(self):
+        import io
+        with patch.object(sys, "argv", ["covers", "--apply"]), \
+             patch.dict(os.environ, {"HINK_COVER_WRITES_ENABLED": "false"}), \
+             patch.object(covers, "config", return_value=("https://example.supabase.co", "dummy", "owner")), \
+             patch.object(covers, "candidates") as candidates:
+            with self.assertRaisesRegex(RuntimeError, "Writes disabled"):
+                covers.main()
+            candidates.assert_not_called()
+
     def test_limit_has_upper_bound(self):
         self.assertEqual(covers.MAX_IMAGES, 5)
 
