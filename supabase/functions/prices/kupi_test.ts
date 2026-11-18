@@ -115,3 +115,69 @@ Deno.test("kupi.cz: fotka zboží (líné načítání), ne zástupný obrázek 
   eq(kupiImage('<img src="/foto/x.jpg?w=200&amp;h=200">'), "https://www.kupi.cz/foto/x.jpg?w=200&h=200");
   eq(kupiImage('<img src="http://nezabezpecene.cz/x.jpg">'), "");
 });
+
+Deno.test("stejné zboží pod jiným názvem (sloučení akcí z letáku a kupi.cz)", async () => {
+  const { sameProduct } = await import("./index.ts");
+  ok(sameProduct("Smetana ke šlehání Mlékárna Kunín 31%", "Mlékárna Kunín smetana ke šlehání 31 %"));
+  ok(sameProduct("ilustrační obrázek   Kuřecí játra", "Kuřecí játra"));
+  ok(sameProduct("Máslo Milkpol", "Máslo Milkpol 250 g"));
+  ok(!sameProduct("Kuřecí játra", "Kuřecí stehna"), "játra ≠ stehna");
+  ok(!sameProduct("Máslo Milkpol", "Máslo Tatra"), "jiná značka");
+});
+
+Deno.test("Lidl: adresa letáku podle data, když se seznam letáků nestáhne", async () => {
+  const { lidlGuessSlugs } = await import("./index.ts");
+  const wed = lidlGuessSlugs("2026-11-18");
+  ok(wed.includes("akcni-letak-od-pondeli-16-11-18-11-2026"), JSON.stringify(wed));
+  const fri = lidlGuessSlugs("2026-11-20");
+  ok(fri.includes("akcni-letaky-od-ctvrtka-19-11-22-11-2026"), JSON.stringify(fri));
+  ok(lidlGuessSlugs("2026-12-03").includes("akcni-letaky-od-ctvrtka-3-12-6-12-2026"));
+  ok(lidlGuessSlugs("2026-12-29").includes("akcni-letak-od-pondeli-28-12-30-12-2026"));
+});
+
+Deno.test("kupi.cz: akce už uložená z letáku (jiný název) se jen ověří a dostane fotku, nová se neuloží", async () => {
+  const posted: any[] = [];
+  const patched: { path: string; body: any }[] = [];
+  const fetchImpl = async (url: string, init: RequestInit = {}) => {
+    if (url.endsWith("/auth/v1/user")) return Response.json({ id: "pavel" });
+    if (url.startsWith("https://db.test/rest/v1/")) {
+      const path = decodeURIComponent(url.slice("https://db.test/rest/v1/".length));
+      if (path.startsWith("price_offers?select=id,product")) {
+        return Response.json(path.includes("price=eq.32.9")
+          ? [{ id: "g1", product: "Madeta Jihočeské máslo", verified: false, image_url: "", provider: "gemini" }]
+          : []);
+      }
+      if (path === "price_offers" && init.method === "POST") {
+        posted.push(JSON.parse(init.body as string));
+        return new Response("", { status: 201 });
+      }
+      if (init.method === "PATCH") {
+        patched.push({ path, body: JSON.parse(init.body as string) });
+        return new Response("", { status: 204 });
+      }
+      if (path.includes("select")) return Response.json([]);
+      return new Response("", { status: 201 });
+    }
+    if (url.startsWith("https://www.kupi.cz/hledej")) {
+      const r = new Response(KUPI_MASLO, { status: 200 });
+      Object.defineProperty(r, "url", { value: url });
+      return r;
+    }
+    return new Response("<html></html>", { status: 200 });
+  };
+  const env = {
+    supabaseUrl: "https://db.test", anonKey: "anon", serviceKey: "sb_secret_x", geminiKey: "",
+    geminiModel: "x", geminiExtractModel: "x", geminiDailyLimit: 400, openaiKey: "", openaiModel: "", allowPaid: false,
+  };
+  const res = await handle(new Request("https://fn.test/prices", {
+    method: "POST",
+    headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "refresh", products: ["máslo"], chains: ["penny"] }),
+  }), env, fetchImpl, new Date("2026-11-18T10:00:00Z"));
+  eq(res.status, 200);
+  eq(posted.length, 0, "nic nového");
+  eq(patched.length, 1);
+  eq(patched[0].path, "price_offers?id=eq.g1");
+  eq([patched[0].body.verified, patched[0].body.provider, patched[0].body.image_url],
+    [true, "kupi", "https://img.kupi.cz/kupi/thumbs/maslo-jihoceske-madeta_250.jpg"]);
+});

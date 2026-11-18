@@ -96,7 +96,11 @@ class PriceOffer {
     id: j['id'] as String? ?? '',
     chain: j['chain'] as String? ?? '',
     storeId: j['store_id'] as String?,
-    product: j['product'] as String? ?? '',
+    // Starší akce z kupi.cz měly v názvu popisek obrázku – pryč s ním.
+    product: (j['product'] as String? ?? '').replaceFirst(
+      RegExp(r'^ilustrační obrázek\s+'),
+      '',
+    ),
     label: j['label'] as String? ?? '',
     price: (j['price'] as num?)?.toDouble() ?? 0,
     packQty: (j['pack_qty'] as num?)?.toDouble(),

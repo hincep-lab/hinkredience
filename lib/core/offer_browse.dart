@@ -78,16 +78,23 @@ class OfferBrowse {
 }
 
 /// Klíč pro odstranění dvojitých záznamů: stejný obchod, prodejna, zboží,
-/// balení, cena, podmínka a platnost.
+/// balení, cena, podmínka a konec platnosti. Na pořadí slov v názvu nezáleží
+/// („Smetana ke šlehání Mlékárna Kunín 31%“ = „Mlékárna Kunín smetana ke
+/// šlehání 31 %“) – stejná akce z letáku i z kupi.cz se ukáže jen jednou.
 String offerIdentity(PriceOffer o) => [
   o.chain,
   o.storeId ?? '',
-  foldText(o.product).replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim(),
+  (foldText(o.product)
+          .split(RegExp(r'[^a-z0-9]+'))
+          .where((w) => w.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort())
+      .join(' '),
   o.packQty ?? '',
   foldText(o.packUnit),
   o.price.toStringAsFixed(2),
   o.kind,
-  o.validFrom == null ? '' : _day(o.validFrom!),
   _day(o.validTo),
 ].join('|');
 
@@ -105,7 +112,16 @@ OfferBrowse browseOffers(
   final seen = <String>{};
   final current = <PriceOffer>[];
   final upcoming = <PriceOffer>[];
-  for (final o in offers) {
+  // Z dvojic zůstane ověřená akce, pak ta s fotkou.
+  int keep(PriceOffer o) => (o.verified ? 0 : 2) + (o.imageUrl.isEmpty ? 1 : 0);
+  final ordered = [
+    for (var i = 0; i < offers.length; i++) (i: i, o: offers[i]),
+  ]..sort((a, b) {
+      final k = keep(a.o).compareTo(keep(b.o));
+      return k != 0 ? k : a.i.compareTo(b.i);
+    });
+  for (final entry in ordered) {
+    final o = entry.o;
     if (o.isRegular || o.price <= 0) continue;
     if (o.validTo.isBefore(day)) continue;
     if (!filter.matches(o)) continue;
