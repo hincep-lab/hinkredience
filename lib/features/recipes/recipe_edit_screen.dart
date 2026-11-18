@@ -330,8 +330,8 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       description: _description.text.trim(),
       category: _category,
       servings: parseQuantity(_servings.text) ?? 4,
-      householdId: _shared ? _householdFor(base) : null,
-      visibility: _shared && _householdFor(base) != null
+      householdId: _shared || _autoShare ? _householdFor(base) : null,
+      visibility: (_shared || _autoShare) && _householdFor(base) != null
           ? RecipeVisibility.household
           : RecipeVisibility.private,
       yieldUnit: _yieldUnit,
@@ -591,19 +591,26 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                 },
               ),
 
-              if (ref.watch(householdProvider).value != null || _shared) ...[
+              if ((ref.watch(shareAllRecipesProvider).value ?? false) ||
+                  ref.watch(householdProvider).value != null ||
+                  _shared) ...[
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   secondary: const Icon(Icons.group_outlined),
                   title: const Text('Sdílet s rodinou'),
-                  subtitle: const Text(
-                    'Recept uvidí a budou moct upravit všichni členové rodiny.',
+                  subtitle: Text(
+                    _autoShare
+                        ? 'Sdílí se automaticky (Více → Rodina).'
+                        : 'Recept uvidí a budou moct upravit všichni '
+                              'členové rodiny.',
                   ),
-                  value: _shared,
-                  onChanged: (value) => setState(() {
-                    _shared = value;
-                    _dirty = true;
-                  }),
+                  value: _shared || _autoShare,
+                  onChanged: _autoShare
+                      ? null
+                      : (value) => setState(() {
+                          _shared = value;
+                          _dirty = true;
+                        }),
                 ),
                 const SizedBox(height: 8),
               ],
@@ -748,6 +755,11 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       ),
     );
   }
+
+  /// Všechny recepty se sdílejí automaticky (nastavení v Rodině).
+  bool get _autoShare =>
+      ref.read(shareAllRecipesProvider).value == true &&
+      ref.read(householdProvider).value != null;
 
   /// Rodina, se kterou se recept sdílí (stávající, jinak rodina uživatele).
   String? _householdFor(Recipe base) =>

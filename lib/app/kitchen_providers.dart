@@ -244,6 +244,44 @@ class HouseholdStore {
     }
   }
 
+  /// Sdílí se automaticky každý můj recept s rodinou?
+  Future<bool> shareAllRecipes() async {
+    try {
+      final Map<String, dynamic>? row = await _client
+          .from('profiles')
+          .select('share_recipes_with_family')
+          .eq('id', _uid)
+          .maybeSingle();
+      return row?['share_recipes_with_family'] == true;
+    } on PostgrestException {
+      // Server ještě nemá migraci 11 – volba je vypnutá.
+      return false;
+    }
+  }
+
+  /// Zapne / vypne automatické sdílení. Při zapnutí rovnou nasdílí všechny
+  /// mé recepty. Vrací počet nově sdílených receptů.
+  Future<int> setShareAllRecipes(bool enabled) =>
+      _shareRpc('set_share_recipes_with_family', {'p_enabled': enabled});
+
+  /// Jednorázově nasdílí rodině všechny mé recepty. Vrací jejich počet.
+  Future<int> shareAllRecipesNow() => _shareRpc('share_all_my_recipes', {});
+
+  Future<int> _shareRpc(String name, Map<String, dynamic> params) async {
+    try {
+      final result = await _client.rpc<dynamic>(name, params: params);
+      return result is num ? result.toInt() : 0;
+    } on PostgrestException catch (error) {
+      if (error.code == 'PGRST202' || error.code == '42703') {
+        throw Exception(
+          'Na serveru ještě chybí migrace 11 (sdílení receptů). '
+          'Spusťte ji v Supabase.',
+        );
+      }
+      throw Exception(error.message);
+    }
+  }
+
   Future<void> leave(String householdId) async {
     await _client
         .from('household_members')
@@ -265,6 +303,14 @@ final householdStoreProvider = Provider<HouseholdStore?>((ref) {
   final client = ref.watch(supabaseClientProvider);
   if (client == null || !ref.watch(sessionProvider).isSignedIn) return null;
   return HouseholdStore(client);
+});
+
+/// Automatické sdílení všech mých receptů s rodinou (nastavení na serveru,
+/// platí na všech zařízeních i pro recepty z ChatGPT).
+final shareAllRecipesProvider = FutureProvider<bool>((ref) async {
+  final store = ref.watch(householdStoreProvider);
+  if (store == null) return false;
+  return store.shareAllRecipes();
 });
 
 /// Rodina přihlášeného uživatele (`null` = žádná nebo bez účtu).
