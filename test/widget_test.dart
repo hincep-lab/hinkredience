@@ -143,12 +143,12 @@ void main() {
     );
     expect(find.text('Moje sbírka · 2'), findsOneWidget);
     await tester.dragUntilVisible(
-      find.text('Doporučené recepty'),
+      find.text('Doporučujeme dnes'),
       find.byType(CustomScrollView),
       const Offset(0, -200),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Doporučené recepty'), findsOneWidget);
+    expect(find.text('Doporučujeme dnes'), findsOneWidget);
     expect(find.text('Žebra BBQ'), findsOneWidget);
     expect(find.text('Přidej první recept'), findsNothing);
   });
@@ -604,5 +604,38 @@ void main() {
       expect(chip.selected, isTrue);
       expect(find.text('Přidat a další'), findsOneWidget);
     });
+  });
+
+  testWidgets('recept s chilli jde zobrazit a uložit bez chilli', (
+    tester,
+  ) async {
+    final hot = sampleRecipe().copyWith(
+      ingredients: const [
+        Ingredient(id: 'i1', name: 'Vepřová žebra', quantity: 2, unit: 'kg'),
+        Ingredient(id: 'i2', name: 'Chilli paprička', quantity: 2, unit: 'ks'),
+      ],
+    );
+    await pumpApp(tester, location: Routes.recipe('recipe-1'), recipes: [hot]);
+    final toggle = find.widgetWithText(SwitchListTile, 'Bez chilli');
+    await tester.scrollUntilVisible(
+      toggle,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(CustomScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(find.textContaining('Pálivé: Chilli paprička'), findsOneWidget);
+    expect(find.textContaining('Chilli paprička'), findsWidgets);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(find.text('Uložit jako recept bez chilli'), findsOneWidget);
+    expect(
+      find.textContaining('Zobrazeno bez: Chilli paprička'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('2 ks'), findsNothing);
   });
 }

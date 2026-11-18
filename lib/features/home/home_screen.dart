@@ -6,24 +6,15 @@ import '../../app/providers.dart';
 import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/material.dart';
+import '../../core/personalization.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import '../sync/sync_status.dart';
 
-/// Doporučené recepty pro hlavní obrazovku: oblíbené a nejlépe hodnocené
-/// napřed, potom naposledy upravené. (Doporučení podle historie vaření
-/// přibude s kuchařským deníkem.)
-List<Recipe> recommendRecipes(List<Recipe> recipes, {int limit = 6}) {
-  final sorted = [...recipes]
-    ..sort((a, b) {
-      final favorite = (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0);
-      if (favorite != 0) return favorite;
-      final rating = (b.rating ?? 0).compareTo(a.rating ?? 0);
-      if (rating != 0) return rating;
-      return b.updatedAt.compareTo(a.updatedAt);
-    });
-  return sorted.take(limit).toList();
-}
+/// Doporučené recepty bez deníku a chutí (oblíbené a hodnocení napřed).
+List<Recipe> recommendRecipes(List<Recipe> recipes, {int limit = 6}) => [
+  for (final r in recommend(recipes: recipes, limit: limit)) r.recipe,
+];
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -244,7 +235,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ? _FirstRecipeCard(
                           onTap: () => context.push(Routes.newRecipe),
                         )
-                      : _Recommended(recipes: recommendRecipes(data)),
+                      : _Recommended(
+                          items: recommend(
+                            recipes: data,
+                            diary: ref.watch(diaryProvider).value ?? const [],
+                            profile: ref.watch(tasteProfileProvider),
+                          ),
+                        ),
                 ),
               ),
             ),
@@ -386,25 +383,26 @@ class _FirstRecipeCard extends StatelessWidget {
 }
 
 class _Recommended extends StatelessWidget {
-  const _Recommended({required this.recipes});
+  const _Recommended({required this.items});
 
-  final List<Recipe> recipes;
+  final List<Recommendation> items;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionTitle('Doporučené recepty'),
+        const SectionTitle('Doporučujeme dnes'),
         SizedBox(
-          height: 196,
+          height: 214,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             clipBehavior: Clip.none,
-            itemCount: recipes.length,
+            itemCount: items.length,
             separatorBuilder: (context, index) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
-              final recipe = recipes[index];
+              final recipe = items[index].recipe;
+              final reason = items[index].reasons.firstOrNull;
               return SizedBox(
                 width: 168,
                 child: HkCard(
@@ -435,7 +433,18 @@ class _Recommended extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 3),
-                            RecipeMetaLine(recipe: recipe),
+                            if (reason != null)
+                              Text(
+                                reason,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: AppColors.copperGold,
+                                  fontSize: 12.5,
+                                ),
+                              )
+                            else
+                              RecipeMetaLine(recipe: recipe),
                           ],
                         ),
                       ),

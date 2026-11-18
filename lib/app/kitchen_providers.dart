@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/personalization.dart';
 import '../data/docs_repository.dart';
 import '../data/kitchen_docs.dart';
 import 'providers.dart';
@@ -50,6 +51,26 @@ final recipeDiaryProvider =
             ],
           ),
     );
+
+/// Osobní chutě a vybavení pro doporučení (prázdné, dokud se nenačtou
+/// nebo když uživatel není přihlášený).
+final tasteProfileProvider = Provider.autoDispose<TasteProfile>((ref) {
+  final kitchen = ref.watch(kitchenProvider).value;
+  if (kitchen == null) return TasteProfile.empty;
+  return TasteProfile.fromLabels(
+    [
+      for (final p in kitchen.preferences)
+        if (p.enabled) p.label,
+    ],
+    equipment: [for (final e in kitchen.equipment) e.label],
+  );
+});
+
+/// Připomínka z deníku k receptu („příště víc soli“), nebo null.
+final diaryReminderProvider = Provider.family<DiaryReminder?, String>(
+  (ref, recipeId) =>
+      diaryReminder(recipeId, ref.watch(diaryProvider).value ?? const []),
+);
 
 /// Rozvařený recept (pokračování po zavření aplikace).
 final openSessionProvider = StreamProvider<CookingSession?>(
