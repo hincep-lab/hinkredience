@@ -417,7 +417,11 @@ void main() {
     expect(find.text('Trouba · 1'), findsOneWidget);
     expect(find.text('Grilovačka · 1'), findsOneWidget);
     // Štítky se vybírají a kombinují, recepty ukáže tlačítko dole.
+    await tester.ensureVisible(find.text('Pro děti · 1'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Pro děti · 1'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Grilovačka · 1'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Grilovačka · 1'));
     await tester.pumpAndSettle();
