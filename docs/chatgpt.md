@@ -98,7 +98,7 @@ migrace spuštěné a funkce `mcp` nasazená.
    kroku se propojení nespustí.
 4. **Přihlašovací stránka** – je nasazená z veřejného repozitáře
    [hincep-lab/hinkredience-login](https://github.com/hincep-lab/hinkredience-login)
-   přes GitHub Pages (kopie souborů je ve složce [`web/`](../web)):
+   přes GitHub Pages (kopie souborů je ve složce [`login/`](../login)):
    <https://hincep-lab.github.io/hinkredience-login/oauth/consent/>.
    Neobsahuje nic tajného a knihovnu supabase-js má uloženou u sebe.
 5. **Supabase Auth → URL Configuration** – jako *Site URL* nastavte

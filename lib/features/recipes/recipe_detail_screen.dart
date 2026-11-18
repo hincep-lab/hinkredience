@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
@@ -204,13 +205,30 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
 
   Future<void> _export(Recipe recipe) async {
     try {
+      final json = const JsonEncoder.withIndent('  ')
+          .convert(recipeExportJson(recipe));
+      if (kIsWeb) {
+        // Prohlížeč nemá dočasnou složku – soubor se rovnou stáhne.
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [
+              XFile.fromData(
+                utf8.encode(json),
+                mimeType: 'application/json',
+                name: '${exportFileName(recipe.title)}.json',
+              ),
+            ],
+            fileNameOverrides: ['${exportFileName(recipe.title)}.json'],
+            subject: recipe.title,
+          ),
+        );
+        return;
+      }
       final directory = await getTemporaryDirectory();
       final file = File(
         p.join(directory.path, '${exportFileName(recipe.title)}.json'),
       );
-      await file.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(recipeExportJson(recipe)),
-      );
+      await file.writeAsString(json);
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(file.path, mimeType: 'application/json')],

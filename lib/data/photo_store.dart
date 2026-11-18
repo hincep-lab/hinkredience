@@ -54,9 +54,14 @@ String thumbnailPathFor(String path) {
 class PhotoStore {
   PhotoStore(this.baseDirectory);
 
-  final Directory baseDirectory;
+  /// Složka aplikace; `null` ve webové verzi – tam se fotky do zařízení
+  /// neukládají a zobrazují se rovnou ze serveru.
+  final Directory? baseDirectory;
 
-  File _file(String relative) => File(p.join(baseDirectory.path, relative));
+  /// Ukládá se do zařízení? (Ve webové verzi ne.)
+  bool get canStore => baseDirectory != null;
+
+  File _file(String relative) => File(p.join(baseDirectory!.path, relative));
 
   bool _safe(String relative) =>
       relative.isNotEmpty &&
@@ -70,6 +75,9 @@ class PhotoStore {
     required String photoId,
     required String sourcePath,
   }) async {
+    if (!canStore) {
+      throw UnsupportedError('Fotky se ve webové verzi neukládají.');
+    }
     final relative = p.join('photos', recipeId, '$photoId.jpg');
     final target = _file(relative);
     await target.parent.create(recursive: true);
@@ -85,6 +93,9 @@ class PhotoStore {
     required String photoId,
     required Uint8List bytes,
   }) async {
+    if (!canStore) {
+      throw UnsupportedError('Fotky se ve webové verzi neukládají.');
+    }
     final relative = p.join('photos', recipeId, '$photoId.jpg');
     final target = _file(relative);
     await target.parent.create(recursive: true);
@@ -99,7 +110,7 @@ class PhotoStore {
   /// Vytvoří náhled, pokud ještě neexistuje. Vrací soubor náhledu, nebo
   /// `null`, když fotka chybí nebo nejde přečíst.
   Future<File?> ensureThumbnail(String relative) async {
-    if (!_safe(relative)) return null;
+    if (!canStore || !_safe(relative)) return null;
     final thumb = _file(thumbnailPathFor(relative));
     if (await thumb.exists()) return thumb;
     final source = _file(relative);
@@ -113,6 +124,7 @@ class PhotoStore {
   /// Smaže z telefonu soubory fotografií (relativní cesty z databáze) i jejich
   /// náhledy. Chybějící soubor není chyba.
   Future<void> deleteFiles(Iterable<String> relativePaths) async {
+    if (!canStore) return;
     for (final relative in relativePaths) {
       if (!_safe(relative)) continue;
       for (final file in [_file(relative), _file(thumbnailPathFor(relative))]) {
@@ -128,7 +140,7 @@ class PhotoStore {
   /// Soubor fotografie v telefonu, pokud existuje.
   File? localFile(RecipePhoto photo) {
     final relative = photo.localPath;
-    if (relative == null || !_safe(relative)) return null;
+    if (!canStore || relative == null || !_safe(relative)) return null;
     final file = _file(relative);
     return file.existsSync() ? file : null;
   }
@@ -136,7 +148,7 @@ class PhotoStore {
   /// Náhled fotografie v telefonu, pokud existuje.
   File? thumbnailFile(RecipePhoto photo) {
     final relative = photo.localPath;
-    if (relative == null || !_safe(relative)) return null;
+    if (!canStore || relative == null || !_safe(relative)) return null;
     final file = _file(thumbnailPathFor(relative));
     return file.existsSync() ? file : null;
   }

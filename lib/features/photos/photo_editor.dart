@@ -45,6 +45,14 @@ Future<RecipePhoto?> pickRecipePhoto(
   required String recipeId,
   required ImageSource source,
 }) async {
+  if (!ref.read(photoStoreProvider).canStore) {
+    showMessage(
+      context,
+      'Ve webové verzi se fotky jen zobrazují. Přidejte je v aplikaci '
+      'v telefonu s Androidem nebo přes ChatGPT.',
+    );
+    return null;
+  }
   try {
     final picked = await ImagePicker().pickImage(
       source: source,
