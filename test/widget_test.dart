@@ -5,12 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hinkredience/app/app_config.dart';
+import 'package:hinkredience/app/kitchen_providers.dart';
 import 'package:hinkredience/app/providers.dart';
 import 'package:hinkredience/app/router.dart';
 import 'package:hinkredience/core/app_theme.dart';
 import 'package:hinkredience/core/material.dart';
 import 'package:hinkredience/core/screen_wake.dart';
 import 'package:hinkredience/data/docs_repository.dart';
+import 'package:hinkredience/data/kitchen_docs.dart';
 import 'package:hinkredience/data/photo_store.dart';
 import 'package:hinkredience/data/recipe.dart';
 import 'package:hinkredience/data/recipe_repository.dart';
@@ -37,6 +39,8 @@ Future<GoRouter> pumpApp(
   required String location,
   List<Recipe> recipes = const [],
   Map<String, Object> preferences = const {},
+  List<ShoppingList> shoppingLists = const [],
+  List<ShoppingItem> shoppingItems = const [],
 }) async {
   tester.view.physicalSize = const Size(1080, 2340);
   tester.view.devicePixelRatio = 3;
@@ -62,6 +66,29 @@ Future<GoRouter> pumpApp(
           (ref) => Completer<DocsRepository>().future,
         ),
         allRecipesProvider.overrideWith((ref) => Stream.value(recipes)),
+        shoppingListsProvider.overrideWith(
+          (ref) => Stream.value([
+            for (final list in shoppingLists)
+              ShoppingListSummary(
+                list: list,
+                remaining: shoppingItems
+                    .where((i) => i.listId == list.id && !i.checked)
+                    .length,
+                total: shoppingItems.where((i) => i.listId == list.id).length,
+              ),
+          ]),
+        ),
+        shoppingListProvider.overrideWith(
+          (ref, id) =>
+              Stream.value(shoppingLists.where((l) => l.id == id).firstOrNull),
+        ),
+        shoppingItemsProvider.overrideWith(
+          (ref, id) => Stream.value([
+            for (final i in shoppingItems)
+              if (i.listId == id) i,
+          ]),
+        ),
+        shoppingProvider.overrideWith((ref) => Stream.value(shoppingItems)),
         screenWakeProvider.overrideWithValue(screenWake),
       ],
       child: MaterialApp.router(
@@ -467,5 +494,115 @@ void main() {
       find.textContaining('Připojení k Supabase není nastavené'),
       findsOneWidget,
     );
+  });
+
+  group('nákupní seznamy', () {
+    final now = DateTime.utc(2026, 11, 15);
+    final kure = ShoppingList(
+      id: 'l1',
+      name: 'Kuře na paprice',
+      createdAt: now,
+      updatedAt: now,
+    );
+    final tyden = ShoppingList(
+      id: 'l2',
+      name: 'Týden',
+      householdId: 'rodina',
+      createdAt: now,
+      updatedAt: now,
+    );
+    ShoppingItem item(
+      String id,
+      String name, {
+      double? quantity,
+      String unit = '',
+      bool checked = false,
+      String note = '',
+      String listId = 'l1',
+    }) => ShoppingItem(
+      id: id,
+      listId: listId,
+      name: name,
+      quantity: quantity,
+      unit: unit,
+      checked: checked,
+      note: note,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final items = [
+      item('1', 'Kuřecí stehna s kostí', quantity: 1500, unit: 'g'),
+      item('2', 'Cibule', quantity: 300, unit: 'g'),
+      item('3', 'Máslo', quantity: 60, unit: 'g', checked: true),
+      item('4', 'Sůl', note: 'podle chuti'),
+      item('5', 'Mléko', quantity: 1, unit: 'l', listId: 'l2'),
+    ];
+
+    testWidgets('záložka Nákupy ukazuje seznamy a kolik zbývá', (tester) async {
+      await pumpApp(
+        tester,
+        location: Routes.shopping,
+        shoppingLists: [kure, tyden],
+        shoppingItems: items,
+      );
+      expect(find.text('Nákupy'), findsWidgets);
+      expect(find.text('Kuře na paprice'), findsOneWidget);
+      expect(find.text('Zbývá koupit 3 z 4'), findsOneWidget);
+      expect(find.text('Zbývá koupit 1 z 1'), findsOneWidget);
+      expect(find.byIcon(Icons.group_outlined), findsOneWidget);
+      expect(find.text('Nový seznam'), findsOneWidget);
+    });
+
+    testWidgets('prázdná záložka Nákupy nabídne založení', (tester) async {
+      await pumpApp(tester, location: Routes.shopping);
+      expect(find.text('Zatím žádný nákupní seznam'), findsOneWidget);
+    });
+
+    testWidgets('seznam: kategorie, množství, koupené zvlášť, odstranění', (
+      tester,
+    ) async {
+      await pumpApp(
+        tester,
+        location: Routes.shoppingList('l1'),
+        shoppingLists: [kure, tyden],
+        shoppingItems: items,
+      );
+      expect(find.text('Kuře na paprice'), findsOneWidget);
+      expect(find.text('Maso a ryby'), findsOneWidget);
+      expect(find.text('Zelenina a ovoce'), findsOneWidget);
+      expect(find.text('Mléčné výrobky a vejce'), findsOneWidget);
+      expect(find.text('Koření'), findsOneWidget);
+      expect(find.text('1,5 kg'), findsOneWidget);
+      expect(find.text('podle chuti'), findsOneWidget);
+      expect(
+        find.text('Mléko'),
+        findsNothing,
+        reason: 'patří do jiného seznamu',
+      );
+      expect(find.text('Odstranit nakoupené (1)'), findsOneWidget);
+      expect(find.text('Přidat položku'), findsOneWidget);
+      final butter = tester.widget<Text>(find.text('Máslo'));
+      expect(butter.style?.decoration, TextDecoration.lineThrough);
+    });
+
+    testWidgets('formulář položky odhadne kategorii podle názvu', (
+      tester,
+    ) async {
+      await pumpApp(
+        tester,
+        location: Routes.shoppingList('l1'),
+        shoppingLists: [kure],
+        shoppingItems: items,
+      );
+      await tester.tap(find.text('Přidat položku'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'Smetana 31 %');
+      await tester.pump();
+      final chip = tester.widget<ChoiceChip>(
+        find.widgetWithText(ChoiceChip, 'Mléčné výrobky a vejce'),
+      );
+      expect(chip.selected, isTrue);
+      expect(find.text('Přidat a další'), findsOneWidget);
+    });
   });
 }

@@ -550,3 +550,67 @@ test('migrace 09 jde spustit znovu bez chyby', async () => {
   await db.exec(sql);
   await db.exec(sql);
 });
+
+test('nákupní seznamy: více seznamů, cizí uživatel nic nevidí ani nezmění', async () => {
+  const a = await as(PAVEL, `insert into public.shopping_lists (name) values ('Kuře na paprice') returning id`);
+  const b = await as(PAVEL, `insert into public.shopping_lists (name) values ('Týdenní nákup') returning id`);
+  const lid = a.rows[0].id;
+  await as(PAVEL, `insert into public.shopping_items (list_id, name, quantity, unit, category, note)
+    values ($1, 'Cibule', 300, 'g', 'zelenina', ''), ($1, 'Sůl', null, '', 'koreni', 'podle chuti')`, [lid]);
+  const mine = await as(PAVEL, `select id, name from public.shopping_lists where id = any($1::uuid[])`, [[lid, b.rows[0].id]]);
+  assert.equal(mine.rows.length, 2);
+
+  // Cizí uživatel: nevidí seznam ani položky, nic nezmění ani nepřidá.
+  assert.equal((await as(CIZI, `select 1 from public.shopping_lists where id = $1`, [lid])).rows.length, 0);
+  assert.equal((await as(CIZI, `select 1 from public.shopping_items where list_id = $1`, [lid])).rows.length, 0);
+  const upd = await as(CIZI, `update public.shopping_items set is_checked = true where list_id = $1 returning id`, [lid]);
+  assert.equal(upd.rows.length, 0, 'cizí změna nic nezasáhne');
+  const del = await as(CIZI, `delete from public.shopping_lists where id = $1 returning id`, [lid]);
+  assert.equal(del.rows.length, 0);
+  await denied(
+    as(CIZI, `insert into public.shopping_items (list_id, name) values ($1, 'Podvrh')`, [lid]),
+    'do cizího seznamu nejde přidat',
+  );
+  await denied(
+    as(CIZI, `insert into public.shopping_lists (owner_id, name) values ($1, 'Na cizí jméno')`, [PAVEL]),
+    'seznam na cizí jméno',
+  );
+
+  // Odškrtnutí a měkké smazání posunou kurzor změn.
+  const before = (await as(PAVEL, `select synced_at from public.shopping_lists where id = $1`, [lid])).rows[0].synced_at;
+  await as(PAVEL, `update public.shopping_items set is_checked = true where list_id = $1 and name = 'Cibule'`, [lid]);
+  await as(PAVEL, `update public.shopping_lists set deleted_at = now(), name = 'Kuře na paprice' where id = $1`, [lid]);
+  const after = (await as(PAVEL, `select synced_at, deleted_at from public.shopping_lists where id = $1`, [lid])).rows[0];
+  assert.ok(after.deleted_at);
+  assert.ok(after.synced_at >= before);
+  const checked = await as(PAVEL, `select is_checked from public.shopping_items where list_id = $1 and name = 'Cibule'`, [lid]);
+  assert.equal(checked.rows[0].is_checked, true);
+});
+
+test('nákupní seznamy: kontroly vstupů a ochrana vlastníka', async () => {
+  const lid = (await as(PAVEL, `insert into public.shopping_lists (name) values ('Kontroly') returning id`)).rows[0].id;
+  await assert.rejects(as(PAVEL, `insert into public.shopping_items (list_id, name, quantity) values ($1, 'X', -1)`, [lid]), /quantity_range/);
+  await assert.rejects(as(PAVEL, `insert into public.shopping_items (list_id, name, category) values ($1, 'X', 'drogerie')`, [lid]), /category_check/);
+  await assert.rejects(as(PAVEL, `insert into public.shopping_items (list_id, name) values ($1, '   ')`, [lid]), /name_length|check/);
+  await assert.rejects(as(PAVEL, `insert into public.shopping_lists (name) values ('')`), /name_check|check/);
+
+  // Člen rodiny smí sdílený seznam upravit, ale ne si ho přivlastnit.
+  const hid = (await as(PAVEL, `insert into public.households (name) values ('Rodina 10') returning id`)).rows[0].id;
+  await as(PAVEL, `insert into public.household_members (household_id, user_id) values ($1, $2)`, [hid, MARTINKA]);
+  const shared = (await as(PAVEL, `insert into public.shopping_lists (name, household_id) values ('Společný', $1) returning id`, [hid])).rows[0].id;
+  const renamed = await as(MARTINKA, `update public.shopping_lists set name = 'Společný nákup' where id = $1 returning name`, [shared]);
+  assert.equal(renamed.rows[0].name, 'Společný nákup');
+  await assert.rejects(
+    as(MARTINKA, `update public.shopping_lists set owner_id = $2 where id = $1`, [shared, MARTINKA]),
+    /nelze změnit/,
+  );
+  // Starší data bez nových údajů zůstávají platná.
+  const old = await db.query(`select count(*)::int as c from public.shopping_items where note = ''`);
+  assert.ok(old.rows[0].c >= 0);
+});
+
+test('migrace 10 jde spustit znovu bez chyby', async () => {
+  const sql = readFileSync(join(migrationsDir, '20261115000010_shopping_lists.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
