@@ -1,11 +1,16 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/best_buy.dart';
 import '../core/personalization.dart';
+import '../core/sale_alerts.dart';
 import '../data/docs_repository.dart';
 import '../data/kitchen_docs.dart';
+import '../data/price_service.dart';
 import 'providers.dart';
 
 /// Proud, který se obnoví při každé změně deníku, plánu nebo nákupu.
@@ -121,6 +126,132 @@ final shoppingListProvider = StreamProvider.family<ShoppingList?, String>(
 /// Položky jednoho nákupního seznamu.
 final shoppingItemsProvider = StreamProvider.family<List<ShoppingItem>, String>(
   (ref, listId) => _watch(ref, (docs) => docs.shopping(listId: listId)),
+);
+
+/// Ceny z vlastních účtenek (synchronizované s rodinou).
+final receiptPricesProvider = StreamProvider<List<ReceiptPrice>>(
+  (ref) => _watch(ref, (docs) => docs.receipts()),
+);
+
+/// Služba cen (bez Supabase null).
+final priceServiceProvider = Provider<PriceService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  if (client == null) return null;
+  return PriceService(client, ref.watch(sharedPreferencesProvider));
+});
+
+/// Platné akce z letáků; [PriceOffersNotifier.reload] po hledání.
+final priceOffersProvider =
+    AsyncNotifierProvider<PriceOffersNotifier, List<PriceOffer>>(
+      PriceOffersNotifier.new,
+    );
+
+/// Kdy se letáky jednotlivých řetězců naposledy stáhly (a zda poslední
+/// pokus selhal).
+final priceUpdatesProvider =
+    AsyncNotifierProvider<PriceUpdatesNotifier, Map<String, ChainUpdate>>(
+      PriceUpdatesNotifier.new,
+    );
+
+class PriceUpdatesNotifier extends AsyncNotifier<Map<String, ChainUpdate>> {
+  @override
+  Future<Map<String, ChainUpdate>> build() async {
+    final service = ref.watch(priceServiceProvider);
+    if (service == null) return const {};
+    return service.updates();
+  }
+
+  Future<void> reload() async {
+    final service = ref.read(priceServiceProvider);
+    if (service == null) return;
+    state = AsyncData(await service.updates());
+  }
+}
+
+class PriceOffersNotifier extends AsyncNotifier<List<PriceOffer>> {
+  @override
+  Future<List<PriceOffer>> build() async {
+    final service = ref.watch(priceServiceProvider);
+    if (service == null) return const [];
+    return service.offers(DateTime.now());
+  }
+
+  Future<void> reload() async {
+    final service = ref.read(priceServiceProvider);
+    if (service == null) return;
+    state = AsyncData(await service.offers(DateTime.now()));
+  }
+}
+
+/// Nastavení panelu „Nejvýhodnější nákup“ (zapnuto, sbaleno, varianta,
+/// seskupení podle prodejen) – pamatuje si ho telefon.
+class BestBuyPrefs {
+  const BestBuyPrefs({
+    this.enabled = true,
+    this.collapsed = false,
+    this.multiStore = false,
+    this.groupByStore = false,
+    this.cards = const {},
+  });
+
+  final bool enabled;
+  final bool collapsed;
+  final bool multiStore;
+  final bool groupByStore;
+
+  /// Řetězce, jejichž věrnostní kartu / aplikaci uživatel má. Jen u nich
+  /// se počítá s cenou „s kartou“ (Clubcard, Můj Albert, PENNY karta…).
+  final Set<String> cards;
+
+  BestBuyPrefs copyWith({
+    bool? enabled,
+    bool? collapsed,
+    bool? multiStore,
+    bool? groupByStore,
+    Set<String>? cards,
+  }) => BestBuyPrefs(
+    enabled: enabled ?? this.enabled,
+    collapsed: collapsed ?? this.collapsed,
+    multiStore: multiStore ?? this.multiStore,
+    groupByStore: groupByStore ?? this.groupByStore,
+    cards: cards ?? this.cards,
+  );
+}
+
+final bestBuyPrefsProvider =
+    NotifierProvider<BestBuyPrefsNotifier, BestBuyPrefs>(
+      BestBuyPrefsNotifier.new,
+    );
+
+class BestBuyPrefsNotifier extends Notifier<BestBuyPrefs> {
+  static const _prefix = 'best_buy_';
+
+  @override
+  BestBuyPrefs build() {
+    final p = ref.watch(sharedPreferencesProvider);
+    return BestBuyPrefs(
+      enabled: p.getBool('${_prefix}enabled') ?? true,
+      collapsed: p.getBool('${_prefix}collapsed') ?? false,
+      multiStore: p.getBool('${_prefix}multi') ?? false,
+      groupByStore: p.getBool('${_prefix}group') ?? false,
+      cards: {...?p.getStringList('${_prefix}cards')},
+    );
+  }
+
+  Future<void> update(BestBuyPrefs next) async {
+    state = next;
+    final p = ref.read(sharedPreferencesProvider);
+    await p.setBool('${_prefix}enabled', next.enabled);
+    await p.setBool('${_prefix}collapsed', next.collapsed);
+    await p.setBool('${_prefix}multi', next.multiStore);
+    await p.setBool('${_prefix}group', next.groupByStore);
+    await p.setStringList('${_prefix}cards', next.cards.toList()..sort());
+  }
+}
+
+/// Přání rodiny „mám chuť na…“ (čekající a ještě nesnědená naplánovaná).
+final wishesProvider = StreamProvider<List<MealWish>>(
+  (ref) => _watch(ref, (docs) => docs.wishes()),
 );
 
 /// Plán vaření na týden začínající daným pondělím.
@@ -319,3 +450,53 @@ final householdProvider = FutureProvider<Household?>((ref) async {
   if (store == null) return null;
   return store.current();
 });
+
+/// Upozornění na akce zboží z nákupních seznamů (vypínač na obrazovce Akce).
+const saleAlertsKey = 'sale_alerts';
+const _saleAlertsSeenKey = 'sale_alerts_seen';
+const _saleAlertsLastKey = 'sale_alerts_last';
+
+bool saleAlertsEnabled(SharedPreferences prefs) =>
+    prefs.getBool(saleAlertsKey) ?? true;
+
+/// Po synchronizaci (nejvýš jednou za 30 minut): nové ověřené akce na
+/// zboží ze seznamů → oznámení v telefonu. Při prvním spuštění si jen
+/// zapamatuje, co už v akci je, aby nepřišla vlna oznámení najednou.
+Future<void> checkSaleAlerts(WidgetRef ref, {DateTime? now}) async {
+  try {
+    final prefs = ref.read(sharedPreferencesProvider);
+    if (!saleAlertsEnabled(prefs)) return;
+    final service = ref.read(priceServiceProvider);
+    final docs = ref.read(docsRepositoryProvider).value;
+    if (service == null || docs == null) return;
+    final time = now ?? DateTime.now();
+    final last = prefs.getInt(_saleAlertsLastKey) ?? 0;
+    if (time.millisecondsSinceEpoch - last < 30 * 60 * 1000) return;
+    await prefs.setInt(_saleAlertsLastKey, time.millisecondsSinceEpoch);
+    final offers = await service.offers(time);
+    if (offers.isEmpty) return;
+    final items = await docs.shopping();
+    final first = !prefs.containsKey(_saleAlertsSeenKey);
+    final seen = (prefs.getStringList(_saleAlertsSeenKey) ?? const []).toSet();
+    final alerts = saleAlerts(
+      offers: offers,
+      watched: [for (final i in items) i.name],
+      seen: seen,
+      today: time,
+      cards: ref.read(bestBuyPrefsProvider).cards,
+    );
+    // Pamatovat jen platné akce (prošlé samy vypadnou).
+    await prefs.setStringList(_saleAlertsSeenKey, [
+      for (final o in offers) o.id,
+    ]);
+    if (first || alerts.isEmpty) return;
+    final notifier = ref.read(familyAlertsProvider);
+    if (!(prefs.getBool('family_notifications_asked') ?? false)) {
+      await prefs.setBool('family_notifications_asked', true);
+      await notifier.requestPermission();
+    }
+    await notifier.show(alerts);
+  } catch (error) {
+    debugPrint('Upozornění na akce se nepodařilo: $error');
+  }
+}

@@ -14,6 +14,7 @@ import '../../data/recipe.dart';
 import 'recipe_picker.dart';
 import 'add_to_shopping_sheet.dart';
 import 'shopping_screen.dart';
+import 'wishes.dart';
 
 const _dayNames = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
@@ -288,6 +289,7 @@ class _PlanScreenState extends ConsumerState<PlanScreen> {
                 ),
               ),
             ),
+          const WishesSection(),
           for (var i = 0; i < 7; i++)
             () {
               final day = DateTime(

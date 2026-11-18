@@ -51,12 +51,17 @@ android {
 
     buildTypes {
         release {
-            // Stálý podpisový klíč z android/key.properties; bez něj ladicí klíč.
+            // Stálý podpisový klíč z android/key.properties (v CI z GitHub Secrets,
+            // v repozitáři není); bez něj ladicí klíč.
             signingConfig = if (keyProperties.containsKey("storeFile")) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -73,4 +78,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // FileProvider pro instalaci stažené aktualizace.
+    implementation("androidx.core:core:1.13.1")
 }

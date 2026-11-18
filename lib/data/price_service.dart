@@ -1,0 +1,227 @@
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../core/best_buy.dart';
+import '../core/sale_ideas.dart';
+
+/// Výsledek hledání akcí na serveru včetně diagnostiky (co se stáhlo, co
+/// vrátila AI, co a proč bylo odmítnuto a co se uložilo).
+class PriceRefresh {
+  const PriceRefresh({
+    this.provider,
+    this.scanned = 0,
+    this.cached = 0,
+    this.found = 0,
+    this.verified = 0,
+    this.unverified = 0,
+    this.saved = 0,
+    this.duplicates = 0,
+    this.rejected = 0,
+    this.errors = const [],
+    this.diag = const [],
+    this.geminiConfigured = false,
+    this.geminiOk,
+    this.geminiCalls = 0,
+    this.geminiModel = '',
+    this.geminiError = '',
+    this.version = '',
+  });
+
+  final String? provider;
+  final int scanned;
+  final int cached;
+  final int found;
+  final int verified;
+  final int unverified;
+  final int saved;
+  final int duplicates;
+  final int rejected;
+  final List<String> errors;
+
+  /// Diagnostika po řetězcích (mapy z JSON serveru).
+  final List<Map<String, dynamic>> diag;
+
+  /// Stav Google Gemini v tomto hledání: je klíč nastaven, kolikrát se
+  /// volalo a zda odpovědělo (null = nebylo potřeba volat).
+  final bool geminiConfigured;
+  final bool? geminiOk;
+  final int geminiCalls;
+  final String geminiModel;
+  final String geminiError;
+
+  /// Verze serverové funkce („letaky-2“); prázdná = stará funkce.
+  final String version;
+
+  bool get noProvider => errors.contains('no_provider');
+
+  /// Chyby jednotlivých řetězců („penny: …“).
+  List<String> get chainErrors => [
+    for (final e in errors)
+      if (e != 'no_provider') e,
+  ];
+
+  factory PriceRefresh.fromJson(Map<String, dynamic> j) {
+    int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    final g = j['gemini'] is Map
+        ? Map<String, dynamic>.from(j['gemini'] as Map)
+        : const <String, dynamic>{};
+    return PriceRefresh(
+      provider: j['provider'] as String?,
+      scanned: n('scanned'),
+      cached: n('cached'),
+      found: n('found'),
+      verified: n('verified'),
+      unverified: n('unverified'),
+      saved: n('saved'),
+      duplicates: n('duplicates'),
+      rejected: n('rejected'),
+      errors: [for (final e in (j['errors'] as List?) ?? const []) '$e'],
+      diag: [
+        for (final d in (j['diag'] as List?) ?? const [])
+          if (d is Map) Map<String, dynamic>.from(d),
+      ],
+      geminiConfigured: g['configured'] == true,
+      geminiOk: g['ok'] as bool?,
+      geminiCalls: (g['calls'] as num?)?.toInt() ?? 0,
+      geminiModel: '${g['model'] ?? ''}',
+      geminiError: '${g['error'] ?? ''}',
+      version: '${j['version'] ?? ''}',
+    );
+  }
+}
+
+/// Akce z letáků (čtení z tabulky price_offers) a hledání nových přes
+/// serverovou funkci `prices`. Bez připojení vrací poslední známé akce.
+class PriceService {
+  PriceService(this._client, this._prefs);
+
+  final SupabaseClient _client;
+  final SharedPreferences _prefs;
+
+  static const _cacheKey = 'price_offers_cache';
+
+  /// Platné akce (dnes a později), poslední známé při výpadku.
+  Future<List<PriceOffer>> offers(DateTime today) async {
+    final day =
+        '${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    try {
+      final List<Map<String, dynamic>> rows = await _client
+          .from('price_offers')
+          .select()
+          .gte('valid_to', day)
+          .order('price')
+          .limit(3000);
+      await _prefs.setString(_cacheKey, jsonEncode(rows));
+      return [for (final r in rows) PriceOffer.fromJson(r)];
+    } catch (_) {
+      return cached();
+    }
+  }
+
+  /// Dřívější ověřené akce na stejné zboží (posledních [days] dní) – pro
+  /// porovnání „bývá i levněji“. Bez připojení prázdné.
+  Future<List<PriceOffer>> history(String product, {int days = 120}) async {
+    final key = productKey(product);
+    if (key.isEmpty) return const [];
+    final since = DateTime.now().subtract(Duration(days: days));
+    final day =
+        '${since.year.toString().padLeft(4, '0')}-${since.month.toString().padLeft(2, '0')}-${since.day.toString().padLeft(2, '0')}';
+    try {
+      final List<Map<String, dynamic>> rows = await _client
+          .from('price_offers')
+          .select()
+          .eq('product_key', key)
+          .eq('verified', true)
+          .neq('kind', 'regular')
+          .gte('valid_to', day)
+          .order('valid_to', ascending: false)
+          .limit(100);
+      return [for (final r in rows) PriceOffer.fromJson(r)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static const _runsKey = 'price_runs_cache';
+
+  /// Stav stahování letáků po řetězcích (poslední úspěch, poslední chyba).
+  Future<Map<String, ChainUpdate>> updates() async {
+    try {
+      final List<Map<String, dynamic>> rows = await _client
+          .from('price_runs')
+          .select('chain, ran_at, ok, error')
+          .order('ran_at', ascending: false)
+          .limit(300);
+      await _prefs.setString(_runsKey, jsonEncode(rows));
+      return chainUpdates(rows);
+    } catch (_) {
+      final text = _prefs.getString(_runsKey);
+      if (text == null) return const {};
+      try {
+        return chainUpdates([
+          for (final r in jsonDecode(text) as List)
+            if (r is Map<String, dynamic>) r,
+        ]);
+      } catch (_) {
+        return const {};
+      }
+    }
+  }
+
+  /// Nechá Gemini (zdarma) vymyslet recepty z uložených ověřených akcí.
+  Future<SaleIdeas> suggestRecipes({
+    String wish = '',
+    List<String> avoid = const [],
+    int count = 3,
+  }) async {
+    final response = await _client.functions.invoke(
+      'sale-ideas',
+      body: {
+        'action': 'suggest',
+        'count': count,
+        if (wish.trim().isNotEmpty) 'wish': wish.trim(),
+        if (avoid.isNotEmpty) 'avoid': avoid,
+      },
+    );
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? SaleIdeas.fromJson(data)
+        : const SaleIdeas(error: 'Server nevrátil návrhy.');
+  }
+
+  List<PriceOffer> cached() {
+    final text = _prefs.getString(_cacheKey);
+    if (text == null) return const [];
+    try {
+      return [
+        for (final r in jsonDecode(text) as List)
+          if (r is Map<String, dynamic>) PriceOffer.fromJson(r),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Najde akce pro [products] v aktuálních letácích sušických řetězců
+  /// (zdarma; letáky čte Google Gemini, stejný leták se pro stejný produkt
+  /// čte jen jednou). [force] obejde mezipaměť (pro opakovaný test).
+  Future<PriceRefresh> refresh(
+    List<String> products, {
+    bool force = false,
+  }) async {
+    final response = await _client.functions.invoke(
+      'prices',
+      body: {
+        'action': 'refresh',
+        'products': products,
+        if (force) 'force': true,
+      },
+    );
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? PriceRefresh.fromJson(data)
+        : const PriceRefresh();
+  }
+}

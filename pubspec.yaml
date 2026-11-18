@@ -16,6 +16,7 @@ dependencies:
   sqflite_common_ffi_web: '>=0.4.0 <3.0.0'
   path: ^1.9.1
   path_provider: ^2.1.6
+  crypto: ^3.0.6
   image_picker: ^1.2.4
   share_plus: ^13.3.1
   url_launcher: ^6.3.2
@@ -30,6 +31,7 @@ dependencies:
   timezone: any
   flutter_tts: ^4.0.0
   speech_to_text: ^7.0.0
+  google_mlkit_text_recognition: '>=0.13.0 <2.0.0'
   flutter_localizations:
     sdk: flutter
 
@@ -42,3 +44,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/images/categories/
+    - assets/images/icons/

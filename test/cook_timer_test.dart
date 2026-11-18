@@ -63,4 +63,34 @@ void main() {
     expect(restored.timers.single.remaining(later), 15 * 60);
     expect(restored.timers.single.label, 'Kynutí');
   });
+
+  test('zazvonit sám jen u právě doběhnutého časovače', () {
+    final start = DateTime.utc(2026, 11, 17, 9);
+    final timer = const CookTimers()
+        .start(
+          id: 't',
+          label: 'Těstoviny',
+          duration: const Duration(minutes: 10),
+          now: start,
+        )
+        .timers
+        .single;
+    expect(timer.justFinished(start.add(const Duration(minutes: 9))), isFalse);
+    expect(timer.justFinished(start.add(const Duration(minutes: 10))), isTrue);
+    expect(
+      timer.justFinished(start.add(const Duration(minutes: 11))),
+      isTrue,
+      reason: 'zpožděný tik (aplikace v pozadí) ještě zazvoní',
+    );
+    expect(
+      timer.justFinished(start.add(const Duration(minutes: 40))),
+      isFalse,
+      reason: 'starý konec už ohlásilo naplánované oznámení',
+    );
+    expect(
+      timer.pause(start).justFinished(start.add(const Duration(hours: 1))),
+      isFalse,
+      reason: 'pozastavený časovač nedobíhá',
+    );
+  });
 }

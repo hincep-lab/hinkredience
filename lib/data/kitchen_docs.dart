@@ -11,6 +11,8 @@ abstract final class DocKind {
   static const plan = 'meal_plan';
   static const shopping = 'shopping_item';
   static const shoppingList = 'shopping_list';
+  static const wish = 'meal_wish';
+  static const receipt = 'price_receipt';
 }
 
 DateTime? _date(Object? value) =>
@@ -324,6 +326,99 @@ class MealPlanEntry {
         _date(json['updated_at']) ??
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
   );
+}
+
+// ------------------------------------------------------- „mám chuť na…“
+
+/// Přání člena rodiny do jídelníčku: recept z kuchařky nebo jen název.
+/// Když ho někdo naplánuje, dostane [plannedDay].
+class MealWish {
+  const MealWish({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+    this.recipeId,
+    this.note = '',
+    this.authorName = '',
+    this.plannedDay,
+    this.ownerId,
+    this.householdId,
+  });
+
+  final String id;
+  final String title;
+  final String? recipeId;
+  final String note;
+
+  /// Jak se autor jmenuje (oslovení v aplikaci, např. „Martinka“).
+  final String authorName;
+
+  /// Den ve tvaru [dayKey], na který je jídlo naplánované; null = čeká.
+  final String? plannedDay;
+  final String? ownerId;
+  final String? householdId;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get isPlanned => plannedDay != null;
+
+  static const _keep = Object();
+
+  /// Zobrazovat: čekající přání a naplánovaná, jejichž den ještě nebyl.
+  bool isActive(DateTime today) =>
+      plannedDay == null || plannedDay!.compareTo(dayKey(today)) >= 0;
+
+  MealWish copyWith({
+    String? title,
+    String? note,
+    Object? plannedDay = _keep,
+    DateTime? updatedAt,
+  }) => MealWish(
+    id: id,
+    title: title ?? this.title,
+    recipeId: recipeId,
+    note: note ?? this.note,
+    authorName: authorName,
+    plannedDay: identical(plannedDay, _keep)
+        ? this.plannedDay
+        : plannedDay as String?,
+    ownerId: ownerId,
+    householdId: householdId,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'recipe_id': ?recipeId,
+    'note': note,
+    'author_name': authorName,
+    'planned_day': plannedDay,
+    'owner_id': ?ownerId,
+    'household_id': ?householdId,
+    'created_at': _iso(createdAt),
+    'updated_at': _iso(updatedAt),
+  };
+
+  factory MealWish.fromJson(Map<String, dynamic> json) {
+    final updated =
+        _date(json['updated_at']) ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    return MealWish(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      recipeId: json['recipe_id'] as String?,
+      note: json['note'] as String? ?? '',
+      authorName: json['author_name'] as String? ?? '',
+      plannedDay: json['planned_day'] as String?,
+      ownerId: json['owner_id'] as String?,
+      householdId: json['household_id'] as String?,
+      createdAt: _date(json['created_at']) ?? updated,
+      updatedAt: updated,
+    );
+  }
 }
 
 // ---------------------------------------------------------- nákupní seznam

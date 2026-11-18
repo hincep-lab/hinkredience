@@ -17,10 +17,12 @@ import '../data/app_database.dart';
 import '../data/docs_repository.dart';
 import '../data/docs_sync.dart';
 import '../data/photo_store.dart';
+import '../data/push_service.dart';
 import '../data/recipe.dart';
 import '../data/recipe_repository.dart';
 import '../data/remote_store.dart';
 import '../data/sync_service.dart';
+import '../core/family_alerts.dart';
 import 'app_config.dart';
 
 // --------------------------------------------------------------- základ
@@ -610,6 +612,29 @@ class SyncController extends Notifier<SyncState> {
           )
           .subscribe();
       ref.onDispose(() => client.removeChannel(channel));
+      // Přání rodiny ve vlastním kanálu: bez migrace 12 tabulka neexistuje
+      // a chyba nesmí shodit odběr ostatních změn.
+      final wishes = client
+          .channel('hinkredience-wishes')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'meal_wishes',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .subscribe();
+      ref.onDispose(() => client.removeChannel(wishes));
+      // Ceny z účtenek (migrace 14) – vlastní kanál ze stejného důvodu.
+      final receipts = client
+          .channel('hinkredience-receipts')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'price_receipts',
+            callback: (_) => schedule(const Duration(seconds: 1)),
+          )
+          .subscribe();
+      ref.onDispose(() => client.removeChannel(receipts));
     } catch (error) {
       debugPrint('Realtime se nepodařilo zapnout: $error');
     }
@@ -671,6 +696,17 @@ class SyncController extends Notifier<SyncState> {
           remote: SupabaseRemoteDocs(client),
           photos: ref.read(photoStoreProvider),
         ).sync();
+        if (extra.news.isNotEmpty && familyNotificationsEnabled(ref)) {
+          unawaited(() async {
+            final prefs = ref.read(sharedPreferencesProvider);
+            final alerts = ref.read(familyAlertsProvider);
+            if (!(prefs.getBool('family_notifications_asked') ?? false)) {
+              await prefs.setBool('family_notifications_asked', true);
+              await alerts.requestPermission();
+            }
+            await alerts.show(familyNotifications(extra.news));
+          }());
+        }
         if (extra.errors.isNotEmpty || extra.offline) {
           result = SyncResult(
             pulled: result.pulled + extra.pulled,
@@ -727,6 +763,23 @@ class SyncController extends Notifier<SyncState> {
     return result;
   }
 }
+
+/// Oznámení „někdo z rodiny něco chce“ (v testech se nahrazuje).
+final familyAlertsProvider = Provider<FamilyAlerts>(
+  (ref) => LocalFamilyAlerts(),
+);
+
+const familyNotificationsKey = 'family_notifications';
+
+/// Oznámení do zavřené aplikace (web push); bez Supabase null.
+final pushServiceProvider = Provider<PushService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  return client == null ? null : PushService(client);
+});
+
+/// Oznámení od rodiny jsou zapnutá (výchozí stav: ano).
+bool familyNotificationsEnabled(Ref ref) =>
+    ref.read(sharedPreferencesProvider).getBool(familyNotificationsKey) ?? true;
 
 final syncProvider = NotifierProvider<SyncController, SyncState>(
   SyncController.new,

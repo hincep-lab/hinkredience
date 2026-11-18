@@ -85,6 +85,12 @@ Future<void> scrollTo(WidgetTester tester, Finder finder) async {
 void main() {
   testWidgets('bez účtu AI kuchař vysvětlí, co je potřeba', (tester) async {
     await pumpAiApp(tester, location: Routes.home);
+    await tester.dragUntilVisible(
+      find.text('AI kuchař'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('AI kuchař'));
     await tester.pumpAndSettle();
     expect(find.text('AI kuchař potřebuje účet'), findsOneWidget);
@@ -97,10 +103,19 @@ void main() {
     expect(find.text('Hledat recepty'), findsNothing);
   });
 
-  testWidgets('import bez účtu nepředstírá funkčnost', (tester) async {
+  testWidgets('import funguje i bez účtu a bez AI', (tester) async {
     await pumpAiApp(tester, location: Routes.importRecipe);
-    expect(find.text('AI kuchař potřebuje účet'), findsOneWidget);
-    expect(find.text('Převést na recept'), findsNothing);
+    expect(find.text('AI kuchař potřebuje účet'), findsNothing);
+    expect(find.text('Použít placenou AI'), findsNothing);
+    await tester.enterText(
+      find.byType(TextField),
+      'Lívance\nSuroviny:\n250 g hladké mouky\n2 vejce\n300 ml mléka\n'
+      'Postup:\n1. Vše smíchejte.\n2. Pečte na pánvi 3 minuty.',
+    );
+    await tester.tap(find.text('Převést na recept'));
+    await tester.pumpAndSettle();
+    expect(find.text('Importovaný recept'), findsOneWidget);
+    expect(find.text('Lívance'), findsWidgets);
   });
 
   testWidgets('chat: odešle zprávu a ukáže odpověď s návrhem receptu', (
@@ -255,7 +270,9 @@ void main() {
     expect(find.text('Vložte celý text receptu.'), findsOneWidget);
   });
 
-  testWidgets('import z textu otevře návrh ke kontrole', (tester) async {
+  testWidgets('import přes zapnutou AI otevře návrh ke kontrole', (
+    tester,
+  ) async {
     final backend = FakeAiBackend(
       (body) => {
         'recipe': draftJson(title: 'Hovězí guláš'),
@@ -268,6 +285,8 @@ void main() {
       find.byType(TextField),
       'Hovězí guláš: 800 g hovězího, 3 cibule, paprika. Dusit 2 hodiny.',
     );
+    await tester.tap(find.text('Použít placenou AI'));
+    await tester.pump();
     await tester.tap(find.text('Převést na recept'));
     await tester.pumpAndSettle();
 
@@ -295,7 +314,14 @@ void main() {
     tester,
   ) async {
     await pumpAiApp(tester, location: Routes.home, aiEnabled: false);
-    expect(find.text('Vypnuto'), findsNWidgets(3));
+    await tester.dragUntilVisible(
+      find.text('Další funkce'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    // Import receptu funguje i bez AI, označené jsou jen AI kuchař a hledání.
+    expect(find.text('Vypnuto'), findsNWidgets(2));
     expect(find.text('Recepty'), findsWidgets);
   });
 
@@ -303,6 +329,13 @@ void main() {
     tester,
   ) async {
     await pumpAiApp(tester, location: Routes.home);
+    await tester.dragUntilVisible(
+      find.text('Další funkce'),
+      find.byKey(const Key('home-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('AI kuchař'), findsOneWidget);
     expect(find.text('Vypnuto'), findsNothing);
   });
 

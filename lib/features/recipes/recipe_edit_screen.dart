@@ -9,10 +9,13 @@ import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
+import '../../core/recipe_groups.dart'
+    show inferPrepMethods, prepTags, sameTag, suggestedTags;
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import '../photos/photo_editor.dart';
+import 'recipe_tag_picker.dart';
 import 'recipes_screen.dart' show categoryIcon;
 
 /// Vytvoření nového receptu nebo úprava existujícího.
@@ -104,6 +107,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   var _photos = <RecipePhoto>[];
   var _temperatures = <String>[];
   var _equipment = <String>[];
+  var _tags = <String>[];
   String _category = '';
   double? _rating;
 
@@ -151,6 +155,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
         _photos = [...recipe.photos];
         _temperatures = [...recipe.temperatures];
         _equipment = [...recipe.equipment];
+        _tags = [...recipe.tags];
         for (final item in recipe.ingredients) {
           _ingredients.add(
             _IngredientDraft(
@@ -341,6 +346,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       totalMinutes: int.tryParse(_total.text.trim()) ?? 0,
       temperatures: _temperatures,
       equipment: _equipment,
+      tags: _tags,
       notes: _notes.text.trim(),
       rating: _rating,
       photos: _photos,
@@ -666,6 +672,32 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                 hint: 'např. Trouba, litinový hrnec',
                 onChanged: (values) => setState(() {
                   _equipment = values;
+                  _dirty = true;
+                }),
+              ),
+
+              const SectionTitle('Štítky'),
+              RecipeTagPicker(
+                tags: _tags,
+                suggest: () => inferPrepMethods(_build()),
+                onChanged: (next) => setState(() {
+                  _tags = next;
+                  _dirty = true;
+                }),
+              ),
+              const SizedBox(height: 8),
+              _TagEditor(
+                values: [
+                  for (final t in _tags)
+                    if (!_isKnownTag(t)) t,
+                ],
+                hint: 'vlastní štítek, např. Vánoce, Grilovačka',
+                onChanged: (values) => setState(() {
+                  _tags = [
+                    for (final t in _tags)
+                      if (_isKnownTag(t)) t,
+                    ...values,
+                  ];
                   _dirty = true;
                 }),
               ),
@@ -1112,3 +1144,7 @@ class _TagEditorState extends State<_TagEditor> {
     );
   }
 }
+
+/// Štítek z nabídky (způsob přípravy nebo příležitost), ne vlastní.
+bool _isKnownTag(String tag) =>
+    [...prepTags, ...suggestedTags].any((t) => sameTag(t, tag));

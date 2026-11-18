@@ -1,11 +1,13 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'docs_repository.dart';
 import 'kitchen_docs.dart';
 import 'photo_store.dart';
+import 'push_service.dart';
 import 'remote_store.dart';
 import 'sync_service.dart' show isOfflineError;
 
@@ -49,6 +51,9 @@ abstract interface class RemoteDocs {
   });
 
   Future<Uint8List> downloadPhoto(String remotePath);
+
+  /// Dá vědět ostatním v rodině (oznámení do zavřené aplikace).
+  Future<void> announce(List<Map<String, String>> items);
 }
 
 /// Synchronizace deníku vaření, plánu vaření a nákupního seznamu.
@@ -64,26 +69,59 @@ class DocsSync {
     DocKind.plan,
     DocKind.shoppingList,
     DocKind.shopping,
+    // Poslední: bez migrace 12 server tabulku nemá a synchronizace zde
+    // tiše skončí (DocsNotSupported) – ostatní už jsou hotové.
+    DocKind.wish,
+    // Bez migrace 14 tabulka chybí – synchronizace zde tiše skončí.
+    DocKind.receipt,
   ];
 
   /// Vrací chyby (prázdné = v pořádku). Server bez migrace 09 není chyba.
-  Future<({List<String> errors, bool offline, int pulled, int pushed})>
+  Future<
+    ({
+      List<String> errors,
+      bool offline,
+      int pulled,
+      int pushed,
+      List<FamilyNews> news,
+    })
+  >
   sync() async {
     final uid = remote.userId;
     if (uid == null)
-      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+      return (
+        errors: <String>[],
+        offline: false,
+        pulled: 0,
+        pushed: 0,
+        news: const <FamilyNews>[],
+      );
     final errors = <String>[];
     var offline = false;
     var pulled = 0;
     var pushed = 0;
+    final news = <FamilyNews>[];
+    final announce = <Map<String, String>>[];
     String? household;
     try {
       household = await remote.householdId();
     } on DocsNotSupported {
-      return (errors: <String>[], offline: false, pulled: 0, pushed: 0);
+      return (
+        errors: <String>[],
+        offline: false,
+        pulled: 0,
+        pushed: 0,
+        news: const <FamilyNews>[],
+      );
     } catch (error) {
       if (isOfflineError(error)) {
-        return (errors: <String>[], offline: true, pulled: 0, pushed: 0);
+        return (
+          errors: <String>[],
+          offline: true,
+          pulled: 0,
+          pushed: 0,
+          news: const <FamilyNews>[],
+        );
       }
       household = null;
     }
@@ -102,7 +140,17 @@ class DocsSync {
             ? null
             : DateTime.tryParse(cursorText);
         var newest = cursor;
+        // Novinky hlásíme až po první úplné synchronizaci daného druhu.
+        final seenKey = 'docs_seen:$kind:$uid';
+        final seen = await docs.getMeta(seenKey) != null;
         for (final row in await remote.pull(kind, since: cursor)) {
+          // Novinky od rodiny (ne při úplně první synchronizaci, to by
+          // ohlásilo celou historii).
+          final isNew =
+              seen &&
+              row.deletedAt == null &&
+              (kind == DocKind.wish || kind == DocKind.shopping) &&
+              !await docs.known(row.id);
           if (await docs.applyRemote(
             kind: kind,
             id: row.id,
@@ -111,6 +159,10 @@ class DocsSync {
             deletedAt: row.deletedAt,
           )) {
             pulled++;
+            if (isNew) {
+              final item = FamilyNews.from(kind, row.data, uid);
+              if (item != null) news.add(item);
+            }
           }
           if (newest == null || row.syncedAt.isAfter(newest)) {
             newest = row.syncedAt;
@@ -119,6 +171,7 @@ class DocsSync {
         if (newest != null && newest != cursor) {
           await docs.setMeta(cursorKey, newest.toUtc().toIso8601String());
         }
+        if (!seen) await docs.setMeta(seenKey, '1');
 
         // 2) Odeslání místních změn
         for (final doc in await docs.dirty(kind)) {
@@ -136,6 +189,9 @@ class DocsSync {
           await remote.push(kind, fresh, householdId: household);
           await docs.markClean(doc.id, doc.updatedAt);
           pushed++;
+          if (await _announcement(kind, doc) case final item?) {
+            announce.add(item);
+          }
         }
       } on DocsNotSupported {
         return (
@@ -143,6 +199,7 @@ class DocsSync {
           offline: offline,
           pulled: pulled,
           pushed: pushed,
+          news: news,
         );
       } catch (error) {
         if (isOfflineError(error)) {
@@ -154,7 +211,44 @@ class DocsSync {
     }
 
     if (!offline) await _cacheSessionPhotos();
-    return (errors: errors, offline: offline, pulled: pulled, pushed: pushed);
+    if (!offline && announce.isNotEmpty) {
+      try {
+        await remote.announce(announce);
+      } catch (error) {
+        // Oznámení jsou bonus – synchronizaci kvůli nim nezastavíme.
+        debugPrint('Oznámení rodině se nepodařilo odeslat: $error');
+      }
+    }
+    return (
+      errors: errors,
+      offline: offline,
+      pulled: pulled,
+      pushed: pushed,
+      news: news,
+    );
+  }
+
+  /// Nové přání nebo položka na nákup, o které se ještě rodině neřeklo.
+  /// Staré záznamy (starší 6 hodin) se neohlašují – ani po aktualizaci.
+  Future<Map<String, String>?> _announcement(String kind, DirtyDoc doc) async {
+    if (doc.deletedAt != null) return null;
+    if (kind != DocKind.wish && kind != DocKind.shopping) return null;
+    final d = doc.data;
+    final title =
+        ((kind == DocKind.wish ? d['title'] : d['name']) as String? ?? '')
+            .trim();
+    if (title.isEmpty) return null;
+    if (kind == DocKind.wish && d['planned_day'] != null) return null;
+    if (kind == DocKind.shopping && d['checked'] == true) return null;
+    final created = DateTime.tryParse(d['created_at'] as String? ?? '');
+    if (created == null ||
+        docs.now().difference(created.toUtc()) > const Duration(hours: 6)) {
+      return null;
+    }
+    final key = 'announced:${doc.id}';
+    if (await docs.getMeta(key) != null) return null;
+    await docs.setMeta(key, '1');
+    return {'kind': kind == DocKind.wish ? 'wish' : 'shopping', 'title': title};
   }
 
   Future<void> _uploadSessionPhotos(String id, CookingSession session) async {
@@ -211,6 +305,8 @@ class DocsSync {
     DocKind.session => 'Kuchařský deník',
     DocKind.plan => 'Plán vaření',
     DocKind.shoppingList => 'Nákupní seznamy',
+    DocKind.wish => 'Přání rodiny',
+    DocKind.receipt => 'Ceny z účtenek',
     _ => 'Nákupní seznam',
   };
 }
@@ -253,6 +349,8 @@ class SupabaseRemoteDocs implements RemoteDocs {
     DocKind.plan: 'meal_plans',
     DocKind.shoppingList: 'shopping_lists',
     DocKind.shopping: 'shopping_items',
+    DocKind.wish: 'meal_wishes',
+    DocKind.receipt: 'price_receipts',
   };
 
   @override
@@ -311,6 +409,32 @@ class SupabaseRemoteDocs implements RemoteDocs {
         'household_id': row['household_id'],
         'updated_at': row['updated_at'],
       },
+      DocKind.receipt => {
+        'id': row['id'],
+        'store_id': row['store_id'],
+        'product': row['product'] ?? '',
+        'label': row['label'] ?? '',
+        'price': row['price'],
+        'pack_qty': row['pack_qty'],
+        'pack_unit': row['pack_unit'] ?? '',
+        'bought_on': row['bought_on'],
+        'note': row['note'] ?? '',
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'updated_at': row['updated_at'],
+      },
+      DocKind.wish => {
+        'id': row['id'],
+        'title': row['title'] ?? '',
+        'recipe_id': row['recipe_id'],
+        'note': row['note'] ?? '',
+        'author_name': row['author_name'] ?? '',
+        'planned_day': row['planned_day'],
+        'owner_id': row['owner_id'],
+        'household_id': row['household_id'],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+      },
       DocKind.shoppingList => {
         'id': row['id'],
         'name': row['name'] ?? 'Nákupní seznam',
@@ -321,6 +445,7 @@ class SupabaseRemoteDocs implements RemoteDocs {
       },
       _ => {
         'id': row['id'],
+        'added_by': row['added_by'],
         'list_id': row['list_id'],
         'name': row['name'],
         'quantity': row['quantity'],
@@ -386,6 +511,36 @@ class SupabaseRemoteDocs implements RemoteDocs {
           'title': d['title'] ?? '',
           'note': d['note'] ?? '',
           'servings': d['servings'],
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      case DocKind.receipt:
+        row = {
+          'id': doc.id,
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'] ?? householdId,
+          'store_id': d['store_id'],
+          'product': d['product'] ?? '',
+          'label': d['label'] ?? '',
+          'price': d['price'],
+          'pack_qty': d['pack_qty'],
+          'pack_unit': d['pack_unit'] ?? '',
+          'bought_on': d['bought_on'],
+          'note': d['note'] ?? '',
+          'updated_at': updated,
+          'deleted_at': deleted,
+        };
+      case DocKind.wish:
+        row = {
+          'id': doc.id,
+          'owner_id': d['owner_id'] ?? uid,
+          'household_id': d['household_id'] ?? householdId,
+          'recipe_id': d['recipe_id'],
+          'title': d['title'] ?? '',
+          'note': d['note'] ?? '',
+          'author_name': d['author_name'] ?? '',
+          'planned_day': d['planned_day'],
+          'created_at': d['created_at'],
           'updated_at': updated,
           'deleted_at': deleted,
         };
@@ -467,4 +622,70 @@ class SupabaseRemoteDocs implements RemoteDocs {
   Future<Uint8List> downloadPhoto(String remotePath) => _client.storage
       .from(SupabaseRemoteStore.photoBucket)
       .download(remotePath);
+
+  @override
+  Future<void> announce(List<Map<String, String>> items) =>
+      PushService(_client).announce(items);
+}
+
+/// Co přidal někdo jiný z rodiny (nebo jiné zařízení): přání nebo položka
+/// nákupního seznamu. Z toho vznikají oznámení.
+class FamilyNews {
+  const FamilyNews({required this.kind, required this.title, this.author = ''});
+
+  final String kind;
+  final String title;
+  final String author;
+
+  /// Null, když nejde o novinku pro tohoto uživatele (vlastní přání,
+  /// odškrtnutá položka).
+  static FamilyNews? from(String kind, Map<String, dynamic> data, String uid) {
+    if (kind == DocKind.wish) {
+      if (data['owner_id'] == uid) return null;
+      final title = (data['title'] as String? ?? '').trim();
+      if (title.isEmpty || data['planned_day'] != null) return null;
+      return FamilyNews(
+        kind: kind,
+        title: title,
+        author: (data['author_name'] as String? ?? '').trim(),
+      );
+    }
+    if (kind == DocKind.shopping) {
+      if (data['checked'] == true || data['added_by'] == uid) return null;
+      final name = (data['name'] as String? ?? '').trim();
+      if (name.isEmpty) return null;
+      return FamilyNews(kind: kind, title: name);
+    }
+    return null;
+  }
+}
+
+/// Text oznámení: každé přání zvlášť, položky nákupu souhrnně.
+List<({String title, String body})> familyNotifications(List<FamilyNews> news) {
+  final out = <({String title, String body})>[];
+  for (final wish in news.where((n) => n.kind == DocKind.wish)) {
+    out.add((
+      title: wish.author.isEmpty
+          ? 'Nové přání do jídelníčku'
+          : '${wish.author} má chuť na…',
+      body: wish.title,
+    ));
+  }
+  final items = [
+    for (final n in news)
+      if (n.kind == DocKind.shopping) n.title,
+  ];
+  if (items.isNotEmpty) {
+    final shown = items.take(3).join(', ');
+    final rest = items.length - 3;
+    out.add((
+      title: switch (items.length) {
+        1 => 'Na nákup přibyla položka',
+        < 5 => 'Na nákup přibyly ${items.length} položky',
+        _ => 'Na nákup přibylo ${items.length} položek',
+      },
+      body: rest > 0 ? '$shown a $rest další' : shown,
+    ));
+  }
+  return out;
 }

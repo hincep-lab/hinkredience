@@ -271,10 +271,13 @@ v telefonu fungují dál).
 
 ## Poznámky k bezpečnosti
 
-- Soubor `android/key.properties` a klíč `android/app/hinkredience-sideload.jks`
-  jsou v repozitáři záměrně, aby každé sestavení mělo stejný podpis a šlo
-  aktualizovat bez odinstalace. Repozitář proto nechte soukromý. Před vydáním
-  do Google Play si vytvořte vlastní klíč a uložte ho mimo repozitář.
+- Podpisový klíč APK v repozitáři není. Sestavení na GitHubu ho bere ze
+  secretu `ANDROID_SIGNING_BUNDLE` (base64 archivu s `key.properties`
+  a `hinkredience-release.jks`), takže každé sestavení má stejný podpis
+  a jde aktualizovat bez odinstalace. Starý klíč `hinkredience-sideload.jks`
+  už se nepoužívá.
+- Nasazení serveru pro ChatGPT používá secret `SUPABASE_ACCESS_TOKEN`
+  (klíč jen pro serverové funkce projektu).
 - Veřejný klíč Supabase (*anon*) tajný není; přístup k datům řídí RLS.
 
 ---

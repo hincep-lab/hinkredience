@@ -201,6 +201,18 @@ void main() {
     expect(again.pushed, 0);
   });
 
+  test('prázdná kuchařka se značkou „už staženo“ stáhne všechno', () async {
+    // Např. obnovená záloha telefonu: kurzor je, recepty ne.
+    remote.serverEdit(sampleRecipe(id: 'stary', title: 'Svíčková'));
+    await repository.setMeta(
+      'sync_cursor:user-1',
+      DateTime.now().toUtc().add(const Duration(days: 1)).toIso8601String(),
+    );
+    final result = await sync.sync();
+    expect(result.pulled, 1);
+    expect((await repository.getById('stary'))!.title, 'Svíčková');
+  });
+
   test('vysypaný koš se smaže i na serveru a už se nestáhne zpět', () async {
     await repository.create(sampleRecipe());
     await repository.create(sampleRecipe(id: 'r2', title: 'Svíčková'));

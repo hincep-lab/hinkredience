@@ -21,7 +21,7 @@ export interface Env {
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export const SERVER_NAME = "hinkredience";
-export const SERVER_VERSION = "1.2.0";
+export const SERVER_VERSION = "1.4.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 // Fotka poslaná přímo v požadavku (base64) může mít až ~10 MB.
 const MAX_BODY_BYTES = 15_000_000;
@@ -140,7 +140,53 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
   if (typeof rest === "number" && Number.isFinite(rest) && rest >= 0) {
     result.rest_minutes = Math.round(rest);
   }
+  // Štítky se posílají jen tehdy, když je klient uvedl – jinak je databáze
+  // ponechá beze změny (starší klienti o nich nevědí).
+  if (Array.isArray(raw?.tags)) result.tags = cleanTags(raw.tags);
   return result;
+}
+
+/** Způsoby přípravy, podle kterých filtruje aplikace. */
+export const PREP_TAGS = ["Trouba", "Pánev", "Sous-vide", "Gril", "Pomalé vaření"];
+
+/** Příležitosti, podle kterých filtruje aplikace. */
+export const OCCASION_TAGS = [
+  "Rychlá večeře",
+  "Rodinný oběd",
+  "Pro děti",
+  "Nedělní oběd",
+  "Slavnostní jídlo",
+  "Na více dní",
+  "Sladká snídaně",
+];
+
+/** Štítky: oříznuté, bez duplicit, nejvýš 30. Známé štítky v přesném tvaru. */
+export function cleanTags(value: unknown): string[] {
+  const known = [...PREP_TAGS, ...OCCASION_TAGS];
+  const out: string[] = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    let tag = text(item, 40);
+    if (!tag) continue;
+    const canonical = known.find((k) => fold(k) === fold(tag));
+    if (canonical) tag = canonical;
+    if (!out.some((t) => fold(t) === fold(tag))) out.push(tag);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+/** Štítky receptu rozdělené na způsob přípravy, příležitosti a vlastní. */
+export function describeTags(row: any) {
+  const tags = cleanTags(Array.isArray(row?.tags) ? row.tags : []);
+  return {
+    recipe_id: row?.id,
+    title: row?.title ?? "",
+    category: row?.category ?? "",
+    tags,
+    preparation: tags.filter((t) => PREP_TAGS.includes(t)),
+    occasions: tags.filter((t) => OCCASION_TAGS.includes(t)),
+    custom: tags.filter((t) => !PREP_TAGS.includes(t) && !OCCASION_TAGS.includes(t)),
+  };
 }
 
 const STEP_KINDS = ["active", "cook", "passive"];
@@ -167,6 +213,7 @@ export function presentRecipe(row: any, full: boolean): Record<string, unknown> 
     prep_minutes: row.prep_minutes ?? 0,
     cook_minutes: row.cook_minutes ?? 0,
     rest_minutes: row.rest_minutes ?? 0,
+    tags: Array.isArray(row.tags) ? row.tags : [],
     rating: row.rating ?? null,
     is_favorite: row.is_favorite === true,
     current_version: row.current_version ?? 1,
@@ -351,6 +398,26 @@ class Supabase {
       body: JSON.stringify({ prefixes: paths }),
     });
     if (!response.ok) console.error("Smazání souboru fotky selhalo", response.status);
+  }
+
+  /** Zavolá jinou serverovou funkci projektu s tokenem uživatele. */
+  async callFunction(name: string, body: Record<string, unknown>): Promise<any> {
+    const response = await this.fetchImpl(`${this.env.supabaseUrl}/functions/v1/${name}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (response.status === 401) throw new AuthError("Přístupový token vypršel.");
+    let data: any = null;
+    try {
+      data = await response.json();
+    } catch {
+      // odpověď není JSON
+    }
+    if (!response.ok) {
+      throw new ToolError(typeof data?.error === "string" ? data.error : "Služba cen teď neodpovídá.");
+    }
+    return data;
   }
 
   async rpc(name: string, args: Record<string, unknown>): Promise<any> {
@@ -812,7 +879,22 @@ async function applyShoppingMerge(db: Supabase, list: any, drafts: ShoppingDraft
     }
   }
   await touchList(db, list.id);
+  if (plan.inserts.length && list.household_id) {
+    // Oznámení rodině (web push). Chyba oznámení nesmí zastavit nákup.
+    await announce(db, plan.inserts.map((i: any) => ({ kind: "shopping", title: String(i.name ?? "") })));
+  }
   return { added: plan.inserts.length, merged: plan.merged };
+}
+
+/** Dá vědět ostatním v rodině (serverová funkce push); chyby ignoruje. */
+async function announce(db: Supabase, items: { kind: string; title: string }[]): Promise<void> {
+  const clean = items.filter((i) => i.title.trim()).slice(0, 50);
+  if (!clean.length) return;
+  try {
+    await db.callFunction("push", { action: "notify", items: clean });
+  } catch {
+    // oznámení jsou bonus
+  }
 }
 
 async function presentList(db: Supabase, list: any) {
@@ -882,6 +964,404 @@ const shoppingItemSchema = {
   },
 };
 
+
+// ------------------------------------------------- import receptu z odkazu
+
+const MAX_PAGE_BYTES = 3 * 1024 * 1024;
+
+/** Odkaz na veřejnou stránku: http(s), žádné IP adresy ani vnitřní servery. */
+export function isSafePageUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) return false;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host.includes(".") || host.endsWith(".local") || host.endsWith(".internal") || host === "localhost") {
+    return false;
+  }
+  if (/^[\d.]+$/.test(host) || host.includes(":")) return false;
+  return true;
+}
+
+async function fetchPage(fetchImpl: FetchLike, url: string): Promise<{ html: string; url: string }> {
+  let current = url;
+  for (let hop = 0; hop < 4; hop++) {
+    if (!isSafePageUrl(current)) throw new ToolError("Odkaz musí vést na veřejnou webovou stránku (http/https).");
+    let response: Response;
+    try {
+      response = await fetchImpl(current, {
+        redirect: "manual",
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "cs,en;q=0.8",
+          "User-Agent": "Mozilla/5.0 (compatible; HINKredience/1.3; +https://hincep-lab.github.io/hinkredience-login/)",
+        },
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      throw new ToolError("Stránku se nepodařilo načíst. Zkontrolujte odkaz.");
+    }
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get("location");
+      if (!next) break;
+      current = new URL(next, current).toString();
+      continue;
+    }
+    if (!response.ok) throw new ToolError(`Stránku se nepodařilo načíst (HTTP ${response.status}).`);
+    const reader = response.body?.getReader();
+    if (!reader) throw new ToolError("Stránka je prázdná.");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > MAX_PAGE_BYTES) {
+        await reader.cancel();
+        break;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return { html: new TextDecoder("utf-8").decode(bytes), url: current };
+  }
+  throw new ToolError("Odkaz přesměrovává příliš mnohokrát.");
+}
+
+export function decodeEntities(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
+function stripTags(value: string): string {
+  return decodeEntities(value.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " ")).replace(/[ \t]+/g, " ").trim();
+}
+
+/** ISO 8601 doba („PT1H30M“) na minuty. */
+export function isoMinutes(value: unknown): number {
+  if (typeof value !== "string") return 0;
+  const m = value.match(/^P(?:(\d+)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+)S)?)?$/i);
+  if (!m) return 0;
+  const minutes = Number(m[1] ?? 0) * 1440 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0) + Number(m[4] ?? 0) / 60;
+  return Math.round(minutes);
+}
+
+const UNIT_WORDS: Record<string, string> = {
+  g: "g", gr: "g", gram: "g", gramy: "g", gramu: "g", "gramů": "g",
+  kg: "kg", dkg: "dkg", dag: "dkg", deka: "dkg",
+  ml: "ml", cl: "cl", dl: "dl", l: "l", litr: "l", litry: "l", "litrů": "l", litru: "l",
+  ks: "ks", kus: "ks", kusy: "ks", "kusů": "ks", kusu: "ks",
+  "lžíce": "lžíce", "lžic": "lžíce", "lžíci": "lžíce", "lž": "lžíce", pl: "lžíce", "polévková": "lžíce",
+  "lžička": "lžička", "lžičky": "lžička", "lžiček": "lžička", "lžičku": "lžička", kl: "lžička", "čl": "lžička",
+  "hrnek": "hrnek", "hrnky": "hrnek", "hrnku": "hrnek", "hrnků": "hrnek", "šálek": "hrnek",
+  "špetka": "špetka", "špetku": "špetka", "špetky": "špetka",
+  "stroužek": "stroužek", "stroužky": "stroužek", "stroužků": "stroužek",
+  "plátek": "plátek", "plátky": "plátek", "plátků": "plátek",
+  "balení": "balení", "bal": "balení", "plechovka": "plechovka", "plechovky": "plechovka",
+  "svazek": "svazek", "hrst": "hrst", "hrsti": "hrst", "snítka": "snítka", "snítky": "snítka",
+  cup: "hrnek", cups: "hrnek", tbsp: "lžíce", tsp: "lžička", oz: "oz", lb: "lb",
+};
+
+const FRACTIONS: Record<string, number> = { "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
+
+function parseAmount(value: string): number | null {
+  let text = value.trim();
+  let total = 0;
+  for (const [ch, n] of Object.entries(FRACTIONS)) {
+    if (text.includes(ch)) {
+      total += n;
+      text = text.replace(ch, "").trim();
+    }
+  }
+  if (!text) return total || null;
+  const frac = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (frac) return total + Number(frac[1]) / Number(frac[2]);
+  const range = text.match(/^(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)$/);
+  if (range) return total + Number(range[2].replace(",", "."));
+  const n = Number(text.replace(",", "."));
+  return Number.isFinite(n) ? total + n : total || null;
+}
+
+/** „500 g hladké mouky (prosáté)“ → název, množství, jednotka, poznámka. */
+export function parseIngredientLine(line: string): { name: string; quantity: number | null; unit: string; note: string } {
+  let text = stripTags(line).replace(/^[-–•*·▪●○]\s*/, "").trim();
+  let note = "";
+  const paren = text.match(/\(([^)]*)\)/);
+  if (paren) {
+    note = paren[1].trim();
+    text = text.replace(paren[0], " ").replace(/\s+/g, " ").trim();
+  }
+  const amount = "((?:\\d+(?:[.,]\\d+)?\\s*(?:[-–/]\\s*\\d+(?:[.,]\\d+)?)?)?\\s*[½¼¾⅓⅔⅛]?)";
+  const lead = text.match(new RegExp(`^${amount}\\s*([A-Za-zÀ-ž.]+)?\\s+(.+)$`));
+  if (lead && lead[1].trim()) {
+    const quantity = parseAmount(lead[1]);
+    const word = (lead[2] ?? "").replace(/\.$/, "");
+    const unit = UNIT_WORDS[word.toLowerCase()] ?? UNIT_WORDS[fold(word)];
+    if (unit) return { name: lead[3].trim(), quantity, unit, note };
+    return { name: `${lead[2] ?? ""} ${lead[3]}`.trim(), quantity, unit: quantity ? "ks" : "", note };
+  }
+  const trail = text.match(new RegExp(`^(.+?)[,:]?\\s+${amount}\\s*([A-Za-zÀ-ž.]+)?$`));
+  if (trail && trail[2].trim()) {
+    const word = (trail[3] ?? "").replace(/\.$/, "");
+    const unit = UNIT_WORDS[word.toLowerCase()] ?? UNIT_WORDS[fold(word)] ?? "";
+    if (unit || !word) {
+      return { name: trail[1].trim(), quantity: parseAmount(trail[2]), unit: unit || "ks", note };
+    }
+  }
+  return { name: text, quantity: null, unit: "", note };
+}
+
+function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+}
+
+function isRecipeNode(node: any): boolean {
+  return asArray(node?.["@type"]).some((t) => typeof t === "string" && t.toLowerCase() === "recipe");
+}
+
+function findRecipeNode(data: any): any | null {
+  for (const node of asArray(data)) {
+    if (!node || typeof node !== "object") continue;
+    if (isRecipeNode(node)) return node;
+    const nested = findRecipeNode(node["@graph"]) ?? findRecipeNode(node.mainEntity);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function instructionsOf(value: unknown): string[] {
+  const out: string[] = [];
+  for (const item of asArray(value)) {
+    if (typeof item === "string") {
+      out.push(...stripTags(item).split(/\n+|(?<=\.)\s+(?=\d+\.\s)/).map((t) => t.trim()).filter(Boolean));
+    } else if (item && typeof item === "object") {
+      if (item.itemListElement) out.push(...instructionsOf(item.itemListElement));
+      else if (typeof item.text === "string") out.push(stripTags(item.text));
+      else if (typeof item.name === "string") out.push(stripTags(item.name));
+    }
+  }
+  return out.map((t) => t.replace(/^\d+[.)]\s*/, "").trim()).filter((t) => t.length > 1);
+}
+
+function yieldOf(value: unknown): { servings: number; yield_unit: string } {
+  for (const item of asArray(value)) {
+    const text = String(item ?? "");
+    const n = text.match(/(\d+(?:[.,]\d+)?)/);
+    if (n) {
+      const servings = Number(n[1].replace(",", "."));
+      if (servings > 0) return { servings, yield_unit: /\b(ks|kus|kusů|pieces?)\b/i.test(text) ? "ks" : "porce" };
+    }
+  }
+  return { servings: 4, yield_unit: "porce" };
+}
+
+/** Recept ze strukturovaných dat stránky (schema.org/Recipe v JSON-LD). */
+export function recipeFromJsonLd(html: string, url: string): Record<string, unknown> | null {
+  const blocks = html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+  for (const block of blocks) {
+    let data: unknown;
+    try {
+      data = JSON.parse(block[1].trim());
+    } catch {
+      try {
+        data = JSON.parse(decodeEntities(block[1].trim()));
+      } catch {
+        continue;
+      }
+    }
+    const node = findRecipeNode(data);
+    if (!node) continue;
+    const title = stripTags(String(node.name ?? ""));
+    if (!title) continue;
+    const { servings, yield_unit } = yieldOf(node.recipeYield);
+    const prep = isoMinutes(node.prepTime);
+    let cook = isoMinutes(node.cookTime);
+    const total = isoMinutes(node.totalTime);
+    if (!prep && !cook && total) cook = total;
+    return {
+      title,
+      description: stripTags(String(node.description ?? "")).slice(0, 2000),
+      category: stripTags(String(asArray(node.recipeCategory)[0] ?? "")).slice(0, 60),
+      servings,
+      yield_unit,
+      prep_minutes: prep,
+      cook_minutes: cook,
+      ingredients: asArray(node.recipeIngredient ?? node.ingredients)
+        .map((line) => parseIngredientLine(String(line)))
+        .filter((i) => i.name),
+      steps: instructionsOf(node.recipeInstructions).map((instruction) => ({ instruction })),
+      source_url: url,
+      notes: "",
+    };
+  }
+  return null;
+}
+
+/** Recept z volného textu (popis videa, vložený text): suroviny a postup. */
+export function recipeFromText(raw: string, title: string, url: string): Record<string, unknown> | null {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const ingredients: any[] = [];
+  const steps: { instruction: string }[] = [];
+  let section: "unknown" | "ingredients" | "steps" = "unknown";
+  for (const line of lines) {
+    const head = fold(line).replace(/[:\s]+$/, "");
+    if (/^(suroviny|ingredience|potrebujeme|potrebujete|na .* potrebujeme)$/.test(head)) {
+      section = "ingredients";
+      continue;
+    }
+    if (/^(postup|priprava|navod|jak na to)$/.test(head)) {
+      section = "steps";
+      continue;
+    }
+    if (/^(https?:|#|@)/.test(line)) continue;
+    const looksLikeIngredient = /^[-–•*·]?\s*[\d½¼¾⅓⅔]/.test(line) && line.length < 80;
+    if (section === "ingredients" || (section === "unknown" && looksLikeIngredient)) {
+      if (section === "ingredients" && line.length > 120) {
+        section = "steps";
+      } else {
+        const item = parseIngredientLine(line);
+        if (item.name) ingredients.push(item);
+        continue;
+      }
+    }
+    if (section === "steps" || /^\d+[.)]\s/.test(line)) {
+      steps.push({ instruction: line.replace(/^\d+[.)]\s*/, "") });
+    }
+  }
+  if (!ingredients.length && !steps.length) return null;
+  return {
+    title: title || "Recept",
+    description: "",
+    servings: 4,
+    ingredients,
+    steps,
+    source_url: url,
+    notes: "Načteno z popisu bez AI – zkontrolujte suroviny a postup.",
+  };
+}
+
+function metaContent(html: string, name: string): string {
+  const re = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${name}["']`,
+    "i",
+  );
+  const m = html.match(re);
+  return decodeEntities((m?.[1] ?? m?.[2] ?? "").trim());
+}
+
+/** YouTube: celý popis videa je ve stránce jako „shortDescription“. */
+function youtubeDescription(html: string): string {
+  const m = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+  if (!m) return "";
+  try {
+    return JSON.parse(`"${m[1]}"`);
+  } catch {
+    return "";
+  }
+}
+
+/** Recept z odkazu bez AI: strukturovaná data, jinak popis stránky / videa. */
+export async function importRecipeFromUrl(fetchImpl: FetchLike, url: string) {
+  const page = await fetchPage(fetchImpl, url);
+  const structured = recipeFromJsonLd(page.html, page.url);
+  if (structured) return { recipe: structured, method: "structured" };
+  const title = metaContent(page.html, "og:title") || stripTags(page.html.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "");
+  const description = youtubeDescription(page.html) || metaContent(page.html, "og:description") ||
+    metaContent(page.html, "description");
+  const fromText = recipeFromText(description, title, page.url);
+  if (fromText) return { recipe: fromText, method: "description" };
+  throw new ToolError(
+    "Na stránce jsem nenašel recept ve strojově čitelné podobě ani v popisu. " +
+      "Zkopírujte text receptu a vložte ho jako text.",
+  );
+}
+
+// -------------------------------------------- plán vaření, deník, rodina
+
+/** Druhy potravin pro hledání akcí (typická slova v názvu zboží, bez diakritiky i s ní). */
+export const OFFER_CATEGORIES: Record<string, string[]> = {
+  maso: ["maso", "kuřec", "kuřat", "vepřov", "hověz", "krkovic", "kotlet", "řízk", "plec", "stehn", "prsa", "mlet", "krůt", "kachn", "játr", "bůč", "svíčkov", "karabáč", "panenk"],
+  uzeniny: ["šunk", "salám", "slanin", "klobás", "párk", "uzen", "špekáč", "prosciutto", "guanciale"],
+  mlecne: ["máslo", "mléko", "smetan", "sýr", "jogurt", "tvaroh", "eidam", "mascarpone", "hermelín", "kefír"],
+  vejce: ["vejce"],
+  zelenina: ["brambor", "cibul", "mrkev", "zelí", "paprik", "rajč", "okurk", "česnek", "žampion", "salát", "ředkvič"],
+  ovoce: ["jabl", "banán", "pomeranč", "mandarink", "hrozn", "citron", "hrušk", "mango", "kiwi"],
+  pecivo: ["chléb", "chleb", "rohlík", "bagetk", "kobli", "pečivo", "croissant"],
+  trvanlive: ["rýže", "těstovin", "mouk", "cukr", "olej", "konzerv", "noky"],
+};
+
+const MEAL_TYPES = ["breakfast", "lunch", "dinner"];
+const MEAL_LABELS: Record<string, string> = { breakfast: "snídaně", lunch: "oběd", dinner: "večeře" };
+
+function isoDay(value: unknown, name: string): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) {
+    throw new ToolError(`Parametr ${name} musí být datum ve tvaru RRRR-MM-DD.`);
+  }
+  return value;
+}
+
+function mealType(value: unknown): string {
+  const v = typeof value === "string" ? fold(value.trim()) : "";
+  const map: Record<string, string> = {
+    breakfast: "breakfast", snidane: "breakfast", lunch: "lunch", obed: "lunch", dinner: "dinner", vecere: "dinner",
+  };
+  const t = map[v];
+  if (!t) throw new ToolError("meal_type musí být breakfast (snídaně), lunch (oběd) nebo dinner (večeře).");
+  return t;
+}
+
+function weekRange(args: any): { from: string; to: string } {
+  const today = new Date();
+  const monday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const from = args?.from === undefined ? monday.toISOString().slice(0, 10) : isoDay(args.from, "from");
+  const to = args?.to === undefined ? sunday.toISOString().slice(0, 10) : isoDay(args.to, "to");
+  if (to < from) throw new ToolError("Datum to musí být stejné nebo pozdější než from.");
+  return { from, to };
+}
+
+async function myHousehold(db: Supabase): Promise<string | null> {
+  try {
+    const id = await db.rpc("my_household", {});
+    return typeof id === "string" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function presentMeal(row: any) {
+  return {
+    entry_id: row.id,
+    date: row.plan_date,
+    meal_type: row.meal_type,
+    meal: MEAL_LABELS[row.meal_type] ?? row.meal_type,
+    recipe_id: row.recipe_id,
+    title: row.title || row.recipes?.title || "",
+    servings: row.servings === null || row.servings === undefined ? null : Number(row.servings),
+    note: row.note ?? "",
+    shared_with_family: row.household_id !== null && row.household_id !== undefined,
+  };
+}
+
+const MEAL_SELECT = "id,plan_date,meal_type,recipe_id,title,note,servings,household_id,recipes(title)";
+
 // ----------------------------------------------------------------- nástroje
 
 const ingredientSchema = {
@@ -946,6 +1426,14 @@ const recipeFields = {
     description: "Důležité teploty, např. „Trouba 160 °C“, „Střed masa 58 °C“.",
   },
   equipment: { type: "array", items: { type: "string" }, description: "Potřebné vybavení." },
+  tags: {
+    type: "array",
+    items: { type: "string" },
+    description:
+      "Štítky pro filtry v aplikaci. Způsob přípravy (jeden nebo víc): " + PREP_TAGS.join(", ") +
+      ". Příležitost: " + OCCASION_TAGS.join(", ") + ". Lze přidat i vlastní štítky. " +
+      "Při úpravě pošli celý seznam; když pole vynecháš, štítky zůstanou beze změny.",
+  },
   notes: { type: "string", description: "Poznámky a tipy." },
   source_url: { type: "string", description: "Odkaz na zdroj, pokud recept z nějakého vychází." },
   ingredients: { type: "array", items: ingredientSchema },
@@ -988,6 +1476,10 @@ export const tools: Tool[] = [
       additionalProperties: false,
       properties: {
         category: { type: "string", description: "Jen recepty z této kategorie." },
+        tag: {
+          type: "string",
+          description: "Jen recepty s tímto štítkem, např. „Sous-vide“ nebo „Pro děti“.",
+        },
         favorites_only: { type: "boolean", description: "Jen oblíbené." },
         limit: { type: "integer", description: "Max. počet (výchozí 50, nejvýše 200)." },
       },
@@ -999,6 +1491,11 @@ export const tools: Tool[] = [
       const category = text(args?.category, 60);
       if (category) path += `&category=eq.${encodeURIComponent(category)}`;
       if (args?.favorites_only === true) path += "&is_favorite=eq.true";
+      const tag = text(args?.tag, 40);
+      if (tag) {
+        const [canonical] = cleanTags([tag]);
+        path += `&tags=cs.${encodeURIComponent(JSON.stringify([canonical]))}`;
+      }
       const rows = await db.select(path);
       return { count: rows.length, recipes: rows.map((r) => presentRecipe(r, false)) };
     },
@@ -1022,7 +1519,7 @@ export const tools: Tool[] = [
     name: "search_recipes",
     title: "Hledání v receptech",
     description:
-      "Hledá v uložených receptech podle názvu, popisu, kategorie, poznámek a surovin. " +
+      "Hledá v uložených receptech podle názvu, popisu, kategorie, štítků, poznámek a surovin. " +
       "Nerozlišuje diakritiku ani velikost písmen. Nehledá na internetu.",
     inputSchema: {
       type: "object",
@@ -1048,6 +1545,7 @@ export const tools: Tool[] = [
             row.description,
             row.category,
             row.notes,
+            ...(Array.isArray(row.tags) ? row.tags : []),
             ...(Array.isArray(row.recipe_ingredients) ? row.recipe_ingredients.map((i: any) => i.name) : []),
           ].join(" "),
         );
@@ -2007,6 +2505,893 @@ export const tools: Tool[] = [
       };
     },
   },
+  {
+    name: "import_recipe_from_url",
+    title: "Načíst recept z odkazu (bez AI)",
+    description:
+      "Načte recept z webové stránky nebo popisu videa (YouTube) bez AI: použije strukturovaná data " +
+      "stránky (schema.org Recipe), jinak rozdělí popis na suroviny a postup. S save=true ho rovnou " +
+      "uloží do HINKredience, jinak vrátí návrh ke kontrole.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["url"],
+      properties: {
+        url: { type: "string", description: "Adresa stránky s receptem nebo videa." },
+        save: { type: "boolean", description: "Rovnou uložit jako nový recept (výchozí ne)." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args, _userId, fetchImpl) => {
+      const url = text(args?.url, 2000);
+      if (!url) throw new ToolError("Zadejte odkaz.");
+      const result = await importRecipeFromUrl(fetchImpl, url);
+      const recipe = cleanRecipe(result.recipe);
+      if (args?.save !== true) {
+        return {
+          saved: false,
+          method: result.method,
+          recipe,
+          message: result.method === "structured"
+            ? `Načteno: „${recipe.title}“ (${(recipe.ingredients as any[]).length} surovin, ${(recipe.steps as any[]).length} kroků).`
+            : `Načteno z popisu: „${recipe.title}“ – zkontrolujte suroviny a postup.`,
+        };
+      }
+      const saved = await db.rpc("api_save_recipe", {
+        p_recipe: recipe,
+        p_meta: { change_summary: "Importováno z odkazu" },
+      });
+      return {
+        saved: true,
+        method: result.method,
+        recipe_id: saved.id,
+        version: saved.version,
+        message: `Recept „${recipe.title}“ je uložený v HINKredience.`,
+      };
+    },
+  },
+  {
+    name: "add_meal_wish",
+    title: "Mám chuť na…",
+    description:
+      "Přidá do rodinného jídelníčku přání „mám chuť na…“ (recept z kuchařky podle recipe_id, nebo jen " +
+      "název jídla). Ostatní v rodině ho uvidí v plánu vaření a dostanou oznámení.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title"],
+      properties: {
+        title: { type: "string", description: "Na co má chuť, např. „Svíčková“." },
+        recipe_id: { type: "string", description: "Recept z kuchařky, když existuje." },
+        note: { type: "string", description: "Např. „ideálně v sobotu“." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args, userId) => {
+      const title = text(args?.title, 160);
+      if (!title) throw new ToolError("Napište, na co máte chuť.");
+      const household = await db.rpc("my_household", {}).catch(() => null);
+      const profile = (await db.select(`profiles?select=greeting_name,display_name&id=eq.${userId}&limit=1`))[0] ?? {};
+      const recipeId = typeof args?.recipe_id === "string" && /^[0-9a-f-]{36}$/i.test(args.recipe_id)
+        ? args.recipe_id
+        : null;
+      const row = await db.insert("meal_wishes", {
+        household_id: typeof household === "string" ? household : null,
+        recipe_id: recipeId,
+        title,
+        note: text(args?.note, 300),
+        author_name: String(profile.greeting_name || profile.display_name || ""),
+      });
+      if (typeof household === "string") await announce(db, [{ kind: "wish", title }]);
+      return {
+        saved: true,
+        wish_id: row?.id ?? null,
+        message: `Přání „${title}“ je v plánu vaření${typeof household === "string" ? " a rodina dostane oznámení" : ""}.`,
+      };
+    },
+  },
+  {
+    name: "get_meal_wishes",
+    title: "Na co má rodina chuť",
+    description: "Vrátí čekající i naplánovaná přání „mám chuť na…“ celé rodiny (kdo, co, poznámka, naplánovaný den).",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    readOnly: true,
+    run: async (db) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = await db.select(
+        "meal_wishes?select=id,title,recipe_id,note,author_name,planned_day,created_at" +
+          "&deleted_at=is.null&order=created_at.desc&limit=100",
+      );
+      const wishes = rows.filter((w: any) => !w.planned_day || w.planned_day >= today);
+      return { count: wishes.length, wishes };
+    },
+  },
+  {
+    name: "save_price_offer",
+    title: "Uložit akci z letáku (Sušice)",
+    description:
+      "Uloží akční nabídku obchodu v Sušici do HINKredience pro porovnání cen v nákupním košíku. " +
+      "Použij JEN cenu, kterou vidíš na oficiálním webu nebo v letáku řetězce (penny.cz, lidl.cz, " +
+      "albert.cz, itesco.cz, jip-potraviny.cz, zkdsusice.cz) – nikdy ji neodhaduj. Server cenu ověří na zdrojové " +
+      "stránce; neověřené nabídky se uloží s označením a do přesného porovnání se nepočítají.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["chain", "product", "price", "valid_to", "source_url"],
+      properties: {
+        chain: { type: "string", enum: ["tesco", "penny", "lidl", "albert", "jip", "coop"] },
+        store_id: {
+          type: "string",
+          description: "Jen když akce platí v jediné prodejně.",
+          enum: [
+            "tesco-hradecka", "penny-nadrazni", "lidl-hradecka", "albert-hradecka", "albert-tgm",
+            "jip-hradecka", "coop-namesti", "coop-nadrazni", "coop-lerchova", "coop-smetanova",
+          ],
+        },
+        product: { type: "string", description: "Název produktu jako ve zdroji." },
+        label: { type: "string", description: "Značka, gramáž." },
+        price: { type: "number", description: "Akční cena v Kč za balení." },
+        pack_qty: { type: "number" },
+        pack_unit: { type: "string", description: "g, kg, ml, l, ks" },
+        regular_price: { type: "number" },
+        conditions: { type: "string", description: "Např. jen s aplikací, od 2 ks." },
+        valid_from: { type: "string", description: "RRRR-MM-DD" },
+        valid_to: { type: "string", description: "RRRR-MM-DD (poslední den platnosti)" },
+        source_url: { type: "string", description: "https adresa oficiální stránky s akcí." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const offer: Record<string, unknown> = {};
+      for (const k of ["product", "label", "pack_unit", "conditions", "valid_from", "valid_to", "source_url", "store_id"]) {
+        if (typeof args?.[k] === "string") offer[k] = text(args[k], 300);
+      }
+      for (const k of ["price", "pack_qty", "regular_price"]) {
+        if (typeof args?.[k] === "number") offer[k] = args[k];
+      }
+      const r = await db.callFunction("prices", {
+        action: "submit",
+        provider: "chatgpt",
+        chain: String(args?.chain ?? ""),
+        offer,
+      });
+      return {
+        saved: r?.saved === true,
+        duplicate: r?.duplicate === true,
+        verified: r?.verified === true,
+        reason: r?.reason ?? "",
+        message: r?.verified
+          ? `Uloženo a ověřeno: ${offer.product} za ${offer.price} Kč.`
+          : `Uloženo jako NEOVĚŘENÉ (${r?.reason ?? "zdroj nejde ověřit"}) – do porovnání se nepočítá.`,
+      };
+    },
+  },
+  {
+    name: "get_price_offers",
+    title: "Akce v obchodech v Sušici",
+    description:
+      "Vrátí platné akční nabídky uložené v HINKredience (Tesco, Penny, Lidl, Albert, JIP, COOP v Sušici; " +
+      "z oficiálních webů, letáků a kupi.cz), seřazené od nejlevnější. Lze filtrovat podle řetězce, části názvu " +
+      "produktu nebo druhu potravin (např. maso = kuřecí, vepřové, hovězí, mleté…). U každé je cena, balení, " +
+      "platnost, zda jde o cenu jen s věrnostní kartou (kind=loyalty), zdroj, fotka a zda je ověřená. " +
+      "Běžné (neakční) ceny se nevrací. Ceny nikdy nedopočítávej ani nevymýšlej – uváděj jen ty vrácené.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        chain: { type: "string", enum: ["tesco", "penny", "lidl", "albert", "jip", "coop"] },
+        product: { type: "string", description: "Část názvu produktu (např. máslo, kuřecí stehna)." },
+        category: {
+          type: "string",
+          enum: Object.keys(OFFER_CATEGORIES),
+          description: "Druh potravin – hledá podle typických slov v názvu.",
+        },
+        only_verified: { type: "boolean", description: "Jen ověřené akce (výchozí ano)." },
+      },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const today = new Date().toISOString().slice(0, 10);
+      let path =
+        "price_offers?select=chain,store_id,product,label,price,pack_qty,pack_unit,regular_price,conditions," +
+        "kind,loyalty,valid_from,valid_to,source_url,image_url,provider,verified" +
+        `&valid_to=gte.${today}&kind=neq.regular&order=price.asc&limit=200`;
+      if (args?.only_verified !== false) path += "&verified=is.true";
+      if (typeof args?.chain === "string") path += `&chain=eq.${encodeURIComponent(args.chain)}`;
+      if (typeof args?.product === "string" && args.product.trim()) {
+        path += `&product=ilike.${encodeURIComponent(`*${text(args.product, 60).replace(/[*,()]/g, " ")}*`)}`;
+      }
+      const words = typeof args?.category === "string" ? OFFER_CATEGORIES[args.category] : undefined;
+      if (words) {
+        path += `&or=(${words.map((w) => `product.ilike.${encodeURIComponent(`*${w}*`)}`).join(",")})`;
+      }
+      const offers = await db.select(path);
+      return { count: offers.length, offers };
+    },
+  },
+  {
+    name: "save_receipt_prices",
+    title: "Uložit ceny z účtenky",
+    description:
+      "Uloží skutečné ceny z účtenky (např. z fotky, kterou uživatel poslal) k prodejně v Sušici. " +
+      "Sdílí se s rodinou a nákupní košík je použije pro porovnání. Opiš jen ceny, které na účtence jsou.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["store_id", "items"],
+      properties: {
+        store_id: {
+          type: "string",
+          enum: [
+            "tesco-hradecka", "penny-nadrazni", "lidl-hradecka", "albert-hradecka", "albert-tgm",
+            "jip-hradecka", "coop-namesti", "coop-nadrazni", "coop-lerchova", "coop-smetanova",
+          ],
+        },
+        bought_on: { type: "string", description: "RRRR-MM-DD (výchozí dnes)" },
+        items: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["product", "price"],
+            properties: {
+              product: { type: "string" },
+              price: { type: "number", description: "Cena za kus/balení v Kč." },
+              pack_qty: { type: "number" },
+              pack_unit: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const household = await db.rpc("my_household", {}).catch(() => null);
+      const day = typeof args?.bought_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.bought_on)
+        ? args.bought_on
+        : new Date().toISOString().slice(0, 10);
+      let saved = 0;
+      for (const item of Array.isArray(args?.items) ? args.items.slice(0, 100) : []) {
+        const product = text(item?.product, 160);
+        const price = Number(item?.price);
+        if (!product || !(price > 0 && price < 100000)) continue;
+        await db.insert("price_receipts", {
+          store_id: String(args?.store_id ?? ""),
+          household_id: typeof household === "string" ? household : null,
+          product,
+          price,
+          pack_qty: typeof item?.pack_qty === "number" && item.pack_qty > 0 ? item.pack_qty : null,
+          pack_unit: text(item?.pack_unit, 20),
+          bought_on: day,
+          note: "účtenka (ChatGPT)",
+        });
+        saved++;
+      }
+      if (saved === 0) throw new ToolError("Žádná položka s platnou cenou.");
+      return { saved, message: `Uloženo cen z účtenky: ${saved}.` };
+    },
+  },
+  {
+    name: "get_meal_plan",
+    title: "Plán vaření",
+    description: "Vrátí plán vaření (snídaně, obědy, večeře) pro zadané dny; bez dat aktuální týden (po–ne).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        from: { type: "string", description: "Od (RRRR-MM-DD)." },
+        to: { type: "string", description: "Do (RRRR-MM-DD)." },
+      },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const { from, to } = weekRange(args);
+      const rows = await db.select(
+        `meal_plans?select=${MEAL_SELECT}&deleted_at=is.null&plan_date=gte.${from}&plan_date=lte.${to}` +
+          `&order=plan_date.asc,meal_type.asc&limit=200`,
+      );
+      return { from, to, count: rows.length, entries: rows.map(presentMeal) };
+    },
+  },
+  {
+    name: "plan_meal",
+    title: "Naplánovat jídlo",
+    description:
+      "Přidá jídlo do plánu vaření (v rodině společný). Použij recipe_id uloženého receptu, nebo jen title " +
+      "(např. „Pizza z venku“). Pro celý týden volej opakovaně.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["date", "meal_type"],
+      properties: {
+        date: { type: "string", description: "Den (RRRR-MM-DD)." },
+        meal_type: { type: "string", enum: MEAL_TYPES, description: "breakfast, lunch nebo dinner." },
+        recipe_id: { type: "string", description: "Id receptu (nepovinné)." },
+        title: { type: "string", description: "Název jídla, pokud není recept." },
+        servings: { type: "number", description: "Počet porcí (nepovinné)." },
+        note: { type: "string" },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const date = isoDay(args?.date, "date");
+      const type = mealType(args?.meal_type);
+      let recipeId: string | null = null;
+      let title = text(args?.title, 200);
+      if (args?.recipe_id) {
+        const recipe = await loadRecipeRow(db, requireId(args.recipe_id));
+        recipeId = recipe.id;
+        if (!title) title = recipe.title;
+      }
+      if (!recipeId && !title) throw new ToolError("Uveďte recipe_id nebo title.");
+      const servings = typeof args?.servings === "number" && args.servings > 0 && args.servings <= 100
+        ? args.servings
+        : null;
+      const household = await myHousehold(db);
+      const now = new Date().toISOString();
+      const row = await db.insert("meal_plans", {
+        plan_date: date,
+        meal_type: type,
+        recipe_id: recipeId,
+        title,
+        note: text(args?.note, 500),
+        servings,
+        ...(household ? { household_id: household } : {}),
+        created_at: now,
+        updated_at: now,
+      });
+      return { saved: true, entry: presentMeal(row), message: `${MEAL_LABELS[type]} ${date}: ${title}.` };
+    },
+  },
+  {
+    name: "update_meal_plan_entry",
+    title: "Upravit jídlo v plánu",
+    description: "Přesune nebo upraví naplánované jídlo (den, druh, recept, název, porce, poznámka).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["entry_id"],
+      properties: {
+        entry_id: { type: "string" },
+        date: { type: "string" },
+        meal_type: { type: "string", enum: MEAL_TYPES },
+        recipe_id: { type: ["string", "null"] },
+        title: { type: "string" },
+        servings: { type: ["number", "null"] },
+        note: { type: "string" },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.entry_id, "entry_id");
+      const fields: Record<string, unknown> = {};
+      if (args?.date !== undefined) fields.plan_date = isoDay(args.date, "date");
+      if (args?.meal_type !== undefined) fields.meal_type = mealType(args.meal_type);
+      if (args?.recipe_id !== undefined) {
+        if (args.recipe_id === null) fields.recipe_id = null;
+        else {
+          const recipe = await loadRecipeRow(db, requireId(args.recipe_id));
+          fields.recipe_id = recipe.id;
+          if (args?.title === undefined) fields.title = recipe.title;
+        }
+      }
+      if (args?.title !== undefined) fields.title = text(args.title, 200);
+      if (args?.servings !== undefined) {
+        fields.servings = typeof args.servings === "number" && args.servings > 0 && args.servings <= 100
+          ? args.servings
+          : null;
+      }
+      if (args?.note !== undefined) fields.note = text(args.note, 500);
+      if (!Object.keys(fields).length) throw new ToolError("Neuvedli jste, co změnit.");
+      fields.updated_at = new Date().toISOString();
+      const rows = await db.patch(`meal_plans?id=eq.${id}&deleted_at=is.null&select=${MEAL_SELECT}`, fields);
+      if (!rows.length) throw new ToolError("Jídlo v plánu nenalezeno. Zjistěte entry_id přes get_meal_plan.");
+      return { saved: true, entry: presentMeal(rows[0]) };
+    },
+  },
+  {
+    name: "remove_meal_plan_entry",
+    title: "Odebrat jídlo z plánu",
+    description: "Odebere naplánované jídlo z plánu vaření (entry_id z get_meal_plan).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["entry_id"],
+      properties: { entry_id: { type: "string" } },
+    },
+    readOnly: false,
+    destructive: true,
+    run: async (db, args) => {
+      const id = requireId(args?.entry_id, "entry_id");
+      const now = new Date().toISOString();
+      const rows = await db.patch(`meal_plans?id=eq.${id}&deleted_at=is.null`, { deleted_at: now, updated_at: now });
+      if (!rows.length) throw new ToolError("Jídlo v plánu nenalezeno.");
+      return { removed: true, entry_id: id };
+    },
+  },
+  {
+    name: "shop_for_meal_plan",
+    title: "Nakoupit na plán",
+    description:
+      "Přidá suroviny všech naplánovaných receptů v zadaných dnech (bez dat aktuální týden) do nákupního " +
+      "seznamu, přepočtené na naplánované porce a sečtené. Bez seznamu založí nový.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        from: { type: "string" },
+        to: { type: "string" },
+        ...listSelector,
+        new_list_name: { type: "string" },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const { from, to } = weekRange(args);
+      const entries = await db.select(
+        `meal_plans?select=recipe_id,servings&deleted_at=is.null&recipe_id=not.is.null` +
+          `&plan_date=gte.${from}&plan_date=lte.${to}&limit=200`,
+      );
+      if (!entries.length) throw new ToolError(`V plánu ${from} – ${to} nejsou žádné recepty.`);
+      const drafts: ShoppingDraft[] = [];
+      for (const entry of entries) {
+        const recipe = await loadRecipe(db, entry.recipe_id).catch(() => null);
+        if (!recipe) continue;
+        const base = Number(recipe.servings) > 0 ? Number(recipe.servings) : 4;
+        const factor = Number(entry.servings) > 0 ? Number(entry.servings) / base : 1;
+        drafts.push(
+          ...cleanShoppingItems(
+            (recipe.recipe_ingredients ?? []).map((i: any) => ({
+              name: i.name,
+              quantity: i.quantity === null || i.quantity === undefined ? null : Number(i.quantity) * factor,
+              unit: i.unit ?? "",
+              note: i.note ?? "",
+            })).slice(0, 100),
+            recipe.title,
+          ),
+        );
+      }
+      const newName = text(args?.new_list_name, 120);
+      let list = newName && !args?.list_id && !args?.list_name ? null : await resolveList(db, args, false);
+      if (!list) {
+        const now = new Date().toISOString();
+        list = await db.insert("shopping_lists", {
+          name: newName || `Nákup ${from} – ${to}`,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+      const result = await applyShoppingMerge(db, list, drafts, true);
+      return {
+        saved: true,
+        recipes: entries.length,
+        added: result.added,
+        merged_with_existing: result.merged,
+        ...(await presentList(db, list)),
+      };
+    },
+  },
+  {
+    name: "log_cooking",
+    title: "Zapsat vaření do deníku",
+    description:
+      "Zapíše do kuchařského deníku, že se recept vařil: hodnocení, co se povedlo, co příště zlepšit, " +
+      "skutečný čas. Aplikace pak „co zlepšit“ připomene při příštím vaření.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: {
+        recipe_id: idProperty,
+        cooked_at: { type: "string", description: "Kdy (ISO datum/čas), výchozí teď." },
+        servings: { type: "number" },
+        rating: { type: "number", description: "0–5." },
+        actual_minutes: { type: "integer" },
+        went_well: { type: "string" },
+        to_improve: { type: "string" },
+        notes: { type: "string" },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const recipe = await loadRecipeRow(db, requireId(args?.recipe_id));
+      const cookedAt = typeof args?.cooked_at === "string" && !Number.isNaN(Date.parse(args.cooked_at))
+        ? new Date(args.cooked_at).toISOString()
+        : new Date().toISOString();
+      const rating = typeof args?.rating === "number" && args.rating >= 0 && args.rating <= 5
+        ? Math.round(args.rating * 2) / 2
+        : null;
+      const now = new Date().toISOString();
+      const row = await db.insert("cooking_sessions", {
+        recipe_id: recipe.id,
+        recipe_title: recipe.title,
+        status: "finished",
+        cooked_at: cookedAt,
+        servings: typeof args?.servings === "number" && args.servings > 0 ? args.servings : null,
+        rating,
+        actual_minutes: typeof args?.actual_minutes === "number" && args.actual_minutes >= 0
+          ? Math.round(args.actual_minutes)
+          : null,
+        went_well: text(args?.went_well, 2000),
+        to_improve: text(args?.to_improve, 2000),
+        notes: text(args?.notes, 4000),
+        updated_at: now,
+      });
+      await db.patch(`recipes?id=eq.${recipe.id}`, { last_cooked_at: cookedAt }).catch(() => []);
+      return { saved: true, session_id: row.id, message: `Vaření „${recipe.title}“ je zapsané v deníku.` };
+    },
+  },
+  {
+    name: "get_recipe_tags",
+    title: "Štítky receptů",
+    description:
+      "Načte štítky receptů: způsob přípravy (" + PREP_TAGS.join(", ") + ") a příležitosti (" +
+      OCCASION_TAGS.join(", ") + "), případně vlastní štítky. S recipe_id vrátí štítky jednoho " +
+      "receptu, bez něj přehled všech receptů. untagged_only=true vrátí recepty, které ještě nemají " +
+      "způsob přípravy nebo příležitost – hodí se při postupném přiřazování štítků.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        recipe_id: { ...idProperty, description: "Nepovinné: štítky jen tohoto receptu." },
+        tag: { type: "string", description: "Nepovinné: jen recepty s tímto štítkem." },
+        untagged_only: {
+          type: "boolean",
+          description: "Jen recepty bez způsobu přípravy nebo bez příležitosti.",
+        },
+        limit: { type: "integer", description: "Max. počet receptů (výchozí 200, nejvýše 500)." },
+      },
+    },
+    readOnly: true,
+    run: async (db, args) => {
+      const known = { preparation: PREP_TAGS, occasions: OCCASION_TAGS };
+      if (args?.recipe_id !== undefined && args?.recipe_id !== null && args?.recipe_id !== "") {
+        const id = requireId(args.recipe_id);
+        const rows = await db.select(`recipes?select=id,title,category,tags&id=eq.${id}&deleted_at=is.null&limit=1`);
+        if (!rows.length) throw new ToolError("Recept nenalezen. Zkontrolujte id přes get_recipes.");
+        return { recipe: describeTags(rows[0]), available_tags: known };
+      }
+      const rows = await db.select(
+        `recipes?select=id,title,category,tags&deleted_at=is.null&order=title.asc&limit=${limitOf(args?.limit, 200, 500)}`,
+      );
+      let recipes = rows.map(describeTags);
+      const wanted = text(args?.tag, 40);
+      if (wanted) recipes = recipes.filter((r) => r.tags.some((t) => fold(t) === fold(wanted)));
+      if (args?.untagged_only === true) {
+        recipes = recipes.filter((r) => !r.preparation.length || !r.occasions.length);
+      }
+      const counts: Record<string, number> = {};
+      for (const r of rows.map(describeTags)) for (const t of r.tags) counts[t] = (counts[t] ?? 0) + 1;
+      return { count: recipes.length, recipes, tag_counts: counts, available_tags: known };
+    },
+  },
+  {
+    name: "update_recipe_tags",
+    title: "Upravit štítky receptu",
+    description:
+      "Přidá, odebere nebo nahradí štítky receptu – bez nové verze receptu, okamžitě se " +
+      "synchronizuje do aplikace (filtry Trouba, Pánev, Sous-vide, Pro děti…). Jeden recept může mít " +
+      "víc štítků. add = přidat, remove = odebrat, set = nahradit celý seznam (pak add/remove neuváděj). " +
+      "Pro více receptů najednou pošli pole items (každá položka má recipe_id a add/remove/set). " +
+      "Způsoby přípravy: " + PREP_TAGS.join(", ") + ". Příležitosti: " + OCCASION_TAGS.join(", ") + ".",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        recipe_id: idProperty,
+        add: { type: "array", items: { type: "string" }, description: "Štítky k přidání." },
+        remove: { type: "array", items: { type: "string" }, description: "Štítky k odebrání." },
+        set: {
+          type: "array",
+          items: { type: "string" },
+          description: "Nahradí všechny štítky receptu tímto seznamem (prázdný = smazat všechny).",
+        },
+        items: {
+          type: "array",
+          description: "Hromadná úprava – nejvýše 50 receptů najednou.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["recipe_id"],
+            properties: {
+              recipe_id: idProperty,
+              add: { type: "array", items: { type: "string" } },
+              remove: { type: "array", items: { type: "string" } },
+              set: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const changes: any[] = Array.isArray(args?.items) ? args.items : [args];
+      if (!changes.length) throw new ToolError("Neuvedli jste žádný recept.");
+      if (changes.length > 50) throw new ToolError("Najednou lze upravit nejvýše 50 receptů.");
+      const results = [];
+      for (const change of changes) {
+        const id = requireId(change?.recipe_id);
+        const hasSet = Array.isArray(change?.set);
+        const add = Array.isArray(change?.add) ? cleanTags(change.add) : [];
+        const remove = Array.isArray(change?.remove) ? cleanTags(change.remove) : [];
+        if (!hasSet && !add.length && !remove.length) {
+          throw new ToolError(`U receptu ${id} uveďte add, remove nebo set.`);
+        }
+        if (hasSet && (add.length || remove.length)) {
+          throw new ToolError("Použijte buď set, nebo add/remove – ne obojí najednou.");
+        }
+        const rows = await db.select(`recipes?select=id,title,tags&id=eq.${id}&deleted_at=is.null&limit=1`);
+        if (!rows.length) throw new ToolError(`Recept ${id} nenalezen. Zkontrolujte id přes get_recipes.`);
+        const before = cleanTags(Array.isArray(rows[0].tags) ? rows[0].tags : []);
+        const next = hasSet ? cleanTags(change.set) : cleanTags([
+          ...before.filter((t) => !remove.some((r) => fold(r) === fold(t))),
+          ...add,
+        ]);
+        const unchanged = JSON.stringify(next) === JSON.stringify(before);
+        if (!unchanged) {
+          const saved = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+            tags: next,
+            updated_at: new Date().toISOString(),
+          });
+          if (!saved.length) throw new ToolError(`Štítky receptu „${rows[0].title}“ nejde uložit (oprávnění).`);
+        }
+        results.push({ ...describeTags({ ...rows[0], tags: next }), changed: !unchanged });
+      }
+      const changed = results.filter((r) => r.changed).length;
+      return {
+        saved: true,
+        changed_count: changed,
+        recipes: results,
+        message: changed
+          ? `Štítky upraveny u ${changed} ${changed === 1 ? "receptu" : "receptů"}. V aplikaci se projeví po synchronizaci (obvykle hned).`
+          : "Štítky už byly takto nastavené, nic se neměnilo.",
+      };
+    },
+  },
+  {
+    name: "set_recipe_favorite",
+    title: "Oblíbený recept",
+    description: "Přidá recept mezi oblíbené (favorite=true), nebo ho z nich odebere.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id", "favorite"],
+      properties: { recipe_id: idProperty, favorite: { type: "boolean" } },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const rows = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+        is_favorite: args?.favorite === true,
+        updated_at: new Date().toISOString(),
+      });
+      if (!rows.length) throw new ToolError("Recept nenalezen.");
+      return { saved: true, recipe_id: id, favorite: rows[0].is_favorite };
+    },
+  },
+  {
+    name: "rate_recipe",
+    title: "Ohodnotit recept",
+    description: "Nastaví hodnocení receptu 0–5 hvězdiček (po půlkách), null hodnocení smaže.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id", "rating"],
+      properties: { recipe_id: idProperty, rating: { type: ["number", "null"] } },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const rating = args?.rating;
+      if (rating !== null && !(typeof rating === "number" && rating >= 0 && rating <= 5)) {
+        throw new ToolError("Hodnocení musí být číslo 0–5, nebo null.");
+      }
+      const rows = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+        rating: rating === null ? null : Math.round(rating * 2) / 2,
+        updated_at: new Date().toISOString(),
+      });
+      if (!rows.length) throw new ToolError("Recept nenalezen.");
+      return { saved: true, recipe_id: id, rating: rows[0].rating };
+    },
+  },
+  {
+    name: "get_trash",
+    title: "Koš receptů",
+    description: "Recepty přesunuté do koše (jdou obnovit přes restore_recipe).",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    readOnly: true,
+    run: async (db) => {
+      const rows = await db.select(
+        "recipes?select=id,title,category,deleted_at&deleted_at=not.is.null&order=deleted_at.desc&limit=100",
+      );
+      return { count: rows.length, recipes: rows.map((r) => ({ recipe_id: r.id, title: r.title, deleted_at: r.deleted_at })) };
+    },
+  },
+  {
+    name: "restore_recipe",
+    title: "Obnovit recept z koše",
+    description: "Vrátí recept z koše zpět do kuchařky.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id"],
+      properties: { recipe_id: idProperty },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const rows = await db.patch(`recipes?id=eq.${id}&deleted_at=not.is.null`, {
+        deleted_at: null,
+        updated_at: new Date().toISOString(),
+      });
+      if (!rows.length) throw new ToolError("V koši takový recept není.");
+      return { restored: true, recipe_id: id, title: rows[0].title };
+    },
+  },
+  {
+    name: "get_family",
+    title: "Rodina",
+    description: "Rodina uživatele: členové a zda se jeho recepty sdílejí automaticky.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    readOnly: true,
+    run: async (db, _args, userId) => {
+      const household = await myHousehold(db);
+      const profile = (await db.select(
+        `profiles?select=greeting_name,share_recipes_with_family&id=eq.${userId}&limit=1`,
+      ).catch(() => []))[0] ?? {};
+      if (!household) {
+        return { in_family: false, greeting_name: profile.greeting_name ?? "", auto_share_recipes: false };
+      }
+      const [house] = await db.select(`households?select=id,name&id=eq.${household}&limit=1`);
+      const members = await db.select(`household_members?select=user_id,role&household_id=eq.${household}`);
+      const ids = members.map((m) => m.user_id).join(",");
+      const names = ids ? await db.select(`profiles?select=id,display_name,greeting_name&id=in.(${ids})`) : [];
+      return {
+        in_family: true,
+        family_name: house?.name ?? "Rodina",
+        greeting_name: profile.greeting_name ?? "",
+        auto_share_recipes: profile.share_recipes_with_family === true,
+        members: members.map((m) => {
+          const p = names.find((n) => n.id === m.user_id) ?? {};
+          return {
+            name: p.greeting_name || p.display_name || "Člen rodiny",
+            role: m.role === "owner" ? "zakladatel" : "člen",
+            is_me: m.user_id === userId,
+          };
+        }),
+      };
+    },
+  },
+  {
+    name: "set_recipe_sharing",
+    title: "Sdílet recept s rodinou",
+    description: "Nasdílí jeden recept rodině (shared=true), nebo ho udělá soukromým.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipe_id", "shared"],
+      properties: { recipe_id: idProperty, shared: { type: "boolean" } },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const id = requireId(args?.recipe_id);
+      const household = args?.shared === true ? await myHousehold(db) : null;
+      if (args?.shared === true && !household) throw new ToolError("Nejste v žádné rodině.");
+      const rows = await db.patch(`recipes?id=eq.${id}&deleted_at=is.null`, {
+        household_id: household,
+        visibility: household ? "household" : "private",
+        updated_at: new Date().toISOString(),
+      });
+      if (!rows.length) throw new ToolError("Recept nenalezen.");
+      const shared = rows[0].visibility === "household";
+      return {
+        saved: true,
+        recipe_id: id,
+        shared,
+        message: shared
+          ? "Recept vidí celá rodina."
+          : "Recept je soukromý.",
+        ...(args?.shared === false && shared
+          ? { note: "Máte zapnuté automatické sdílení všech receptů, proto zůstal sdílený." }
+          : {}),
+      };
+    },
+  },
+  {
+    name: "share_all_recipes",
+    title: "Sdílet všechny recepty s rodinou",
+    description:
+      "Nasdílí rodině všechny recepty uživatele. S automatic=true se navíc budou automaticky sdílet i všechny " +
+      "nové; automatic=false automatiku vypne (sdílené zůstanou sdílené).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { automatic: { type: "boolean" } },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      if (typeof args?.automatic === "boolean") {
+        const count = await db.rpc("set_share_recipes_with_family", { p_enabled: args.automatic });
+        return {
+          saved: true,
+          automatic: args.automatic,
+          newly_shared: Number(count) || 0,
+          message: args.automatic
+            ? "Všechny recepty se teď sdílejí s rodinou automaticky."
+            : "Automatické sdílení je vypnuté.",
+        };
+      }
+      const count = await db.rpc("share_all_my_recipes", {});
+      return { saved: true, newly_shared: Number(count) || 0 };
+    },
+  },
+  {
+    name: "update_taste_preferences",
+    title: "Upravit chutě",
+    description:
+      "Upraví chuťové preference (Kuchyně a chutě): add přidá, remove smaže, enable/disable zapne či vypne. " +
+      "Aplikace podle nich doporučuje recepty.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["add", "remove", "enable", "disable"] },
+        preference_id: { type: "string" },
+        label: { type: "string", description: "Text preference, např. „Bez koriandru“." },
+      },
+    },
+    readOnly: false,
+    run: async (db, args) => {
+      const action = args?.action;
+      if (action === "add") {
+        const label = text(args?.label, 200);
+        if (!label) throw new ToolError("Uveďte label.");
+        const row = await db.insert("user_preferences", { label, position: 1000 });
+        return { saved: true, preference_id: row.id, label };
+      }
+      let id = typeof args?.preference_id === "string" && args.preference_id ? requireId(args.preference_id, "preference_id") : "";
+      if (!id) {
+        const label = text(args?.label, 200);
+        if (!label) throw new ToolError("Uveďte preference_id nebo label.");
+        const all = await db.select("user_preferences?select=id,label&limit=200");
+        const found = all.find((p) => fold(p.label) === fold(label)) ?? all.find((p) => fold(p.label).includes(fold(label)));
+        if (!found) throw new ToolError(`Preference „${label}“ nenalezena.`);
+        id = found.id;
+      }
+      if (action === "remove") {
+        const rows = await db.remove(`user_preferences?id=eq.${id}`);
+        if (!rows.length) throw new ToolError("Preference nenalezena.");
+        return { removed: true, preference_id: id };
+      }
+      if (action === "enable" || action === "disable") {
+        const rows = await db.patch(`user_preferences?id=eq.${id}`, { enabled: action === "enable" });
+        if (!rows.length) throw new ToolError("Preference nenalezena.");
+        return { saved: true, preference_id: id, enabled: action === "enable" };
+      }
+      throw new ToolError("action musí být add, remove, enable nebo disable.");
+    },
+  },
+  {
+    name: "set_greeting_name",
+    title: "Oslovení v aplikaci",
+    description: "Změní přezdívku, kterou aplikace používá v oslovení („Ahoj Pájo“).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name"],
+      properties: { name: { type: "string" } },
+    },
+    readOnly: false,
+    run: async (db, args, userId) => {
+      const name = text(args?.name, 30);
+      if (!name) throw new ToolError("Přezdívka nesmí být prázdná.");
+      const rows = await db.patch(`profiles?id=eq.${userId}`, { greeting_name: name, updated_at: new Date().toISOString() });
+      if (!rows.length) throw new ToolError("Profil nenalezen.");
+      return { saved: true, greeting_name: name, message: `Aplikace vás bude oslovovat „${name}“ (po dalším přihlášení).` };
+    },
+  },
 ];
 
 const instructions =
@@ -2021,8 +3406,15 @@ const instructions =
   "hlavní fotka set_recipe_cover_photo (první fotka = hlavní). " +
   "Nákupní seznamy: get_shopping_lists, get_shopping_list (co zbývá koupit), create_shopping_list, " +
   "add_shopping_items, update_shopping_item (odškrtnutí), remove_shopping_item, clear_checked_items, " +
-  "add_recipe_to_shopping_list (suroviny receptu s přepočtem porcí). Vždy zapisuj do databáze " +
-  "přes tyto nástroje, ne jen do odpovědi.";
+  "add_recipe_to_shopping_list (suroviny receptu s přepočtem porcí). " +
+  "Plán vaření: get_meal_plan, plan_meal, update_meal_plan_entry, remove_meal_plan_entry, " +
+  "shop_for_meal_plan (nákup na celý plán). Deník: log_cooking, get_cooking_history. " +
+  "Oblíbené a hodnocení: set_recipe_favorite, rate_recipe. Koš: get_trash, restore_recipe. " +
+  "Štítky (filtry v aplikaci – způsob přípravy a příležitosti): get_recipe_tags, update_recipe_tags; " +
+  "přiřazuj je podle postupu, vybavení a surovin, jeden recept může mít víc štítků. " +
+  "Rodina a sdílení: get_family, set_recipe_sharing, share_all_recipes. Chutě: " +
+  "update_taste_preferences; oslovení: set_greeting_name. Recept z odkazu bez AI: " +
+  "import_recipe_from_url. Vždy zapisuj do databáze přes tyto nástroje, ne jen do odpovědi.";
 
 function toolList() {
   return tools.map((tool) => ({

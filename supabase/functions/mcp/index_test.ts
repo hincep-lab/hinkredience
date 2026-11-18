@@ -1,7 +1,7 @@
 // Testy MCP serveru – bez sítě, Supabase nahrazuje maketa.
 // Spuštění:  deno test supabase/functions/mcp
 
-import { cleanRecipe, type Env, fold, handle, tools } from "./index.ts";
+import { cleanRecipe, cleanTags, type Env, fold, handle, tools } from "./index.ts";
 
 function assert(condition: unknown, message = "assert"): asserts condition {
   if (!condition) throw new Error(message);
@@ -228,11 +228,12 @@ Deno.test("initialize dohodne verzi protokolu a oznámení vrací 202", async ()
   assertEquals((await missing.json()).error.code, -32601);
 });
 
-Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupních, čtecí jsou označené", async () => {
+Deno.test("tools/list: původní, foto, nákupní a ovládací nástroje, čtecí jsou označené", async () => {
   const response = await handle(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }), env, world().fetchImpl);
   const list = (await response.json()).result.tools as any[];
   assertEquals(list.map((t) => t.name).sort(), [
     "add_cooking_note",
+    "add_meal_wish",
     "add_recipe_to_shopping_list",
     "add_shopping_items",
     "clear_checked_items",
@@ -242,35 +243,63 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     "delete_recipe",
     "delete_recipe_photo",
     "get_cooking_history",
+    "get_family",
     "get_kitchen_equipment",
+    "get_meal_plan",
+    "get_meal_wishes",
+    "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
+    "get_recipe_tags",
     "get_recipe_versions",
     "get_recipes",
     "get_shopping_list",
     "get_shopping_lists",
+    "get_trash",
+    "import_recipe_from_url",
     "list_recipes_with_photos",
+    "log_cooking",
+    "plan_meal",
+    "rate_recipe",
+    "remove_meal_plan_entry",
     "remove_shopping_item",
     "reorder_recipe_photos",
+    "restore_recipe",
+    "save_price_offer",
+    "save_receipt_prices",
     "search_recipes",
+    "set_greeting_name",
     "set_recipe_cover_photo",
+    "set_recipe_favorite",
+    "set_recipe_sharing",
+    "share_all_recipes",
+    "shop_for_meal_plan",
     "update_kitchen_equipment",
+    "update_meal_plan_entry",
     "update_recipe",
+    "update_recipe_tags",
     "update_shopping_item",
+    "update_taste_preferences",
     "upload_recipe_photo",
   ]);
   const readOnly = list.filter((t) => t.annotations.readOnlyHint).map((t) => t.name).sort();
   assertEquals(readOnly, [
     "get_cooking_history",
+    "get_family",
     "get_kitchen_equipment",
+    "get_meal_plan",
+    "get_meal_wishes",
+    "get_price_offers",
     "get_recipe",
     "get_recipe_photo",
     "get_recipe_photos",
+    "get_recipe_tags",
     "get_recipe_versions",
     "get_recipes",
     "get_shopping_list",
     "get_shopping_lists",
+    "get_trash",
     "list_recipes_with_photos",
     "search_recipes",
   ]);
@@ -279,7 +308,7 @@ Deno.test("tools/list: původních 12 nástrojů + 7 fotonástrojů + 8 nákupn�
     assertEquals(tool.securitySchemes, [{ type: "oauth2", scopes: [] }], tool.name);
     assert(tool.description.length > 30, tool.name);
   }
-  assertEquals(tools.length, 27);
+  assertEquals(tools.length, 50);
   const byName = Object.fromEntries(list.map((t) => [t.name, t]));
   assertEquals(byName.list_recipes_with_photos._meta.ui.resourceUri, "ui://hinkredience/photos.html");
   assertEquals(byName.get_recipe_photos._meta["openai/outputTemplate"], "ui://hinkredience/photos.html");
@@ -679,4 +708,63 @@ Deno.test("delete_recipe_photo: soubor smaže, jen když ho nezná historie verz
   const keptResult = await call(kept, "delete_recipe_photo", { recipe_id: ID3, position: 1 });
   assert(keptResult.structuredContent.file_kept_for_history);
   assertEquals(kept.calls.filter((c) => c.method === "DELETE" && c.url.includes("/storage/")).length, 0);
+});
+
+Deno.test("štítky: posílají se jen když je klient uvedl, známé v přesném tvaru", () => {
+  assertEquals("tags" in cleanRecipe({ title: "X" }), false);
+  assertEquals(cleanRecipe({ title: "X", tags: ["sous-vide", "pro deti", "Sous-Vide", " ", "Grilovačka"] }).tags, [
+    "Sous-vide",
+    "Pro děti",
+    "Grilovačka",
+  ]);
+  assertEquals(cleanTags(["Pánev", 5, "pomale vareni"]), ["Pánev", "Pomalé vaření"]);
+});
+
+Deno.test("štítky: get_recipe_tags přehled, jeden recept i bez štítků", async () => {
+  const w = world({
+    recipes: [
+      { ...svickova, tags: ["Trouba", "Slavnostní jídlo", "Vánoce"] },
+      { ...gulas, tags: [] },
+    ],
+  });
+  const one = (await call(w, "get_recipe_tags", { recipe_id: ID1 })).structuredContent;
+  assertEquals(one.recipe.preparation, ["Trouba"]);
+  assertEquals(one.recipe.occasions, ["Slavnostní jídlo"]);
+  assertEquals(one.recipe.custom, ["Vánoce"]);
+  assert(one.available_tags.occasions.includes("Pro děti"));
+  const all = (await call(w, "get_recipe_tags", {})).structuredContent;
+  assertEquals(all.count, 2);
+  assertEquals(all.tag_counts["Trouba"], 1);
+  const untagged = (await call(w, "get_recipe_tags", { untagged_only: true })).structuredContent;
+  assertEquals(untagged.recipes.map((r: any) => r.title), ["Hovězí guláš"]);
+  const byTag = (await call(w, "get_recipe_tags", { tag: "trouba" })).structuredContent;
+  assertEquals(byTag.count, 1);
+});
+
+Deno.test("štítky: update_recipe_tags přidá, odebere, nahradí a hromadně", async () => {
+  const w = world({ recipes: [{ ...svickova, tags: ["Trouba", "Vánoce"] }, { ...gulas, tags: [] }] });
+  const added = (await call(w, "update_recipe_tags", {
+    recipe_id: ID1,
+    add: ["pro deti", "Pánev", "Trouba"],
+    remove: ["vánoce"],
+  })).structuredContent;
+  assertEquals(added.recipes[0].tags, ["Trouba", "Pro děti", "Pánev"]);
+  const patch = w.calls.find((c) => c.method === "PATCH" && c.url.includes("/rest/v1/recipes"))!;
+  assertEquals(patch.body.tags, ["Trouba", "Pro děti", "Pánev"]);
+  assert(typeof patch.body.updated_at === "string", "posune čas úpravy kvůli synchronizaci");
+  assert(!w.calls.some((c) => c.url.includes("api_save_recipe")), "bez nové verze receptu");
+
+  const batch = (await call(w, "update_recipe_tags", {
+    items: [
+      { recipe_id: ID1, set: ["Sous-vide"] },
+      { recipe_id: ID2, add: ["Pomalé vaření", "Na více dní"] },
+    ],
+  })).structuredContent;
+  assertEquals(batch.changed_count, 2);
+  assertEquals(batch.recipes[1].preparation, ["Pomalé vaření"]);
+  assertEquals(batch.recipes[1].occasions, ["Na více dní"]);
+
+  assert((await call(w, "update_recipe_tags", { recipe_id: ID1 })).isError);
+  assert((await call(w, "update_recipe_tags", { recipe_id: ID1, set: [], add: ["Gril"] })).isError);
+  assert((await call(w, "update_recipe_tags", { recipe_id: "spatne", add: ["Gril"] })).isError);
 });

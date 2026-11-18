@@ -10,6 +10,14 @@ on:
         description: Spustit i kontrolní sestavení pro iOS
         type: boolean
         default: true
+      ocr:
+        description: Zkouška čtení receptu z fotky na Android emulátoru
+        type: boolean
+        default: false
+      deploy_mcp:
+        description: Nasadit serverové funkce (mcp, prices, sale-ideas) – jen po úspěšných testech
+        type: boolean
+        default: false
 
 concurrency:
   group: build-${{ github.ref }}
@@ -45,8 +53,33 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check supabase/functions/ai/index.ts supabase/functions/mcp/index.ts
+      - run: deno check supabase/functions/sale-ideas/index.ts supabase/functions/ai/index.ts supabase/functions/mcp/index.ts supabase/functions/push/index.ts supabase/functions/prices/index.ts
       - run: deno test supabase/functions
+
+  deploy-mcp:
+    name: Nasazení serverových funkcí (mcp, prices, sale-ideas)
+    # Jen na vyžádání a až po úspěšných testech databáze a serverových funkcí.
+    # Klíč SUPABASE_ACCESS_TOKEN je jen v GitHub Secrets, nikdy v aplikaci.
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_mcp
+    needs: [database, functions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Nasadit funkce mcp, prices a sale-ideas
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::Chybí GitHub secret SUPABASE_ACCESS_TOKEN."
+            exit 1
+          fi
+          # Všechny tři si přihlášení ověřují samy (verify_jwt je vypnuté už teď).
+          for f in mcp prices sale-ideas; do
+            supabase functions deploy "$f" --project-ref wjqpzoeheonjwdyyezhb --no-verify-jwt --use-api --yes
+          done
 
   android:
     name: Aplikace – analýza, testy, APK
@@ -73,15 +106,57 @@ jobs:
         run: flutter analyze --no-fatal-infos
       - name: Testy
         run: flutter test
+      - name: Snímky obrazovky pro vizuální kontrolu
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: ignore
+      - name: Snímky obrazovky do větve screenshots
+        if: always() && github.event_name == 'workflow_dispatch' && hashFiles('build/screenshots/*.png') != ''
+        working-directory: build/screenshots
+        run: |
+          git init -q -b screenshots
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Snímky ${{ github.run_number }} (${{ github.sha }})"
+          git push -fq "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" screenshots
+      - name: Podpisový klíč z GitHub Secrets
+        # Klíč není v repozitáři (je veřejný). Secret ANDROID_SIGNING_BUNDLE =
+        # base64 archivu s key.properties a hinkredience-release.jks.
+        env:
+          ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "Pull request bez přístupu ke klíči – APK jen ladicím klíčem."
+              exit 0
+            fi
+            echo "::error::Chybí GitHub secret ANDROID_SIGNING_BUNDLE (podpisový klíč APK)."
+            exit 1
+          fi
+          tmp=$(mktemp -d)
+          printf '%s' "$ANDROID_SIGNING_BUNDLE" | base64 -d | tar xz -C "$tmp"
+          mv "$tmp/key.properties" android/key.properties
+          mv "$tmp/hinkredience-release.jks" android/app/hinkredience-release.jks
+          rm -rf "$tmp"
       - name: Sestavení APK
         run: >
-          flutter build apk --release
+          flutter build apk --release --split-per-abi
+          --target-platform android-arm64,android-arm
           --build-number=${{ github.run_number }}
           --dart-define=BUILD_NUMBER=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
       - name: Přejmenování APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk hinkredience.apk
+        # Pro moderní telefony (64bit ARM, např. Galaxy S24) stačí arm64 – je
+        # menší a vejde se i na GitHub Pages; starší 32bit telefony mají vlastní.
+        run: |
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk hinkredience.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk hinkredience-32bit.apk
+          ls -la hinkredience*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: hinkredience-apk
@@ -95,7 +170,9 @@ jobs:
           body: |
             Automatické sestavení z commitu ${{ github.sha }}.
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
-          files: hinkredience.apk
+          files: |
+            hinkredience.apk
+            hinkredience-32bit.apk
       - name: Testovací vydání z jiné větve (ruční spuštění)
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -107,7 +184,9 @@ jobs:
           body: |
             Testovací sestavení z větve `${{ github.ref_name }}` (commit ${{ github.sha }}), ještě není v `main`.
             Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
-          files: hinkredience.apk
+          files: |
+            hinkredience.apk
+            hinkredience-32bit.apk
 
   web:
     name: Web – verze do prohlížeče (Android i iPhone)
@@ -132,6 +211,23 @@ jobs:
           --dart-define=BUILD_NUMBER=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL || env.DEFAULT_SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY || env.DEFAULT_SUPABASE_KEY }}
+      - name: Čtení textu z fotky v prohlížeči (Tesseract, čeština)
+        run: |
+          npm ci --prefix tool/web_ocr --ignore-scripts --no-audit --no-fund
+          tool/web_ocr/copy.sh build/web
+      - name: APK pro aktualizaci jedním klepnutím
+        uses: actions/download-artifact@v4
+        with:
+          name: hinkredience-apk
+          path: build/web
+      - name: Informace o nejnovější verzi pro aplikaci
+        run: |
+          # Kontrolní součet a velikost: aplikace si staženou verzi ověří.
+          sha=$(sha256sum build/web/hinkredience.apk | cut -d' ' -f1)
+          size=$(stat -c %s build/web/hinkredience.apk)
+          printf '{"build": %s, "apk": "hinkredience.apk", "sha256": "%s", "size": %s, "branch": "%s", "commit": "%s"}\n' \
+            "${{ github.run_number }}" "$sha" "$size" "${{ github.ref_name }}" "${{ github.sha }}" > build/web/apk.json
+          cat build/web/apk.json
       - name: Kontrola – žádné tajné klíče v sestavení
         run: |
           # Tajný klíč Supabase (sb_secret_…), JWT s rolí service_role, klíč OpenAI.
@@ -155,6 +251,82 @@ jobs:
           git add -A
           git commit -qm "Web ${{ github.run_number }} z ${{ github.ref_name }} (${{ github.sha }})"
           git push -fq "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" web-build
+
+  ocr:
+    name: OCR v release sestavení na emulátoru
+    if: github.event_name == 'workflow_dispatch' && inputs.ocr
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Uvolnění místa na disku (emulátor potřebuje několik GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+            /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          sudo docker image prune --all --force > /dev/null 2>&1 || true
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Sestavení zkušební aplikace (release, x86_64)
+        run: >
+          flutter build apk --release
+          --target-platform android-x64
+          -t integration_test/ocr_probe.dart
+      - name: Úklid po sestavení
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk ocr-probe.apk
+          cp build/app/outputs/mapping/release/mapping.txt ocr-mapping.txt || true
+          flutter build apk --profile --target-platform android-x64 -t integration_test/ocr_probe.dart
+          cp build/app/outputs/flutter-apk/app-profile.apk ocr-probe-profile.apk
+          rm -rf build ~/.gradle/caches/transforms-* ~/.gradle/caches/build-cache-* || true
+          df -h /
+      - name: Zapnutí KVM pro emulátor
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Emulátor a zkouška
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            adb install -r ocr-probe-profile.apk
+            adb logcat -c
+            adb shell am start -n cz.hink.hinkredience/.MainActivity
+            for i in $(seq 1 90); do sleep 2; if adb logcat -d | grep -q "HINK_OCR DONE"; then break; fi; done
+            adb logcat -d > logcat-profile.txt || true
+            echo "===== PROFILE (bez R8) =====" && grep -E "HINK_OCR" logcat-profile.txt | head -60
+            adb uninstall cz.hink.hinkredience || true
+            adb install -r ocr-probe.apk
+            adb logcat -c
+            adb shell am start -n cz.hink.hinkredience/.MainActivity
+            for i in $(seq 1 90); do sleep 2; if adb logcat -d | grep -q "HINK_OCR DONE"; then break; fi; done
+            adb logcat -d > logcat.txt || true
+            echo "===== RELEASE (R8) =====" && grep -E "HINK_OCR" logcat.txt | head -60
+            echo "===== NATIVNI ZASOBNIK =====" && grep -A40 "E MethodChannel#google_mlkit_text_recognizer" logcat.txt | head -60 | tee stack.txt
+            echo "===== TRIDY ZE ZASOBNIKU PODLE MAPY R8 =====" && for c in $(grep -oE "at [a-z0-9]+\.[<a-z>]+" stack.txt | awk '{print $2}' | cut -d. -f1 | sort -u); do grep -E " -> $c:$" ocr-mapping.txt | head -1; done || true
+            echo "===== PO ODSIFROVANI (retrace) =====" && (R=$(ls $ANDROID_HOME/cmdline-tools/*/bin/retrace 2>/dev/null | head -1); if [ -n "$R" ] && [ -f ocr-mapping.txt ]; then sed 's/^.*E MethodChannel#google_mlkit_text_recognizer: //' stack.txt | $R ocr-mapping.txt | head -60; else echo "retrace neni k dispozici"; fi)
+            grep -q "HINK_OCR PASS" logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ocr-logcat
+          path: |
+            logcat.txt
+            logcat-profile.txt
+          if-no-files-found: ignore
 
   ios:
     name: iOS – kontrolní sestavení bez podpisu

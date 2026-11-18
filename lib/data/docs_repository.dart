@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../core/shopping.dart';
 import 'app_database.dart';
+import '../core/best_buy.dart';
 import 'kitchen_docs.dart';
 
 /// Záznam z tabulky `docs` připravený k odeslání na server.
@@ -191,6 +192,49 @@ class DocsRepository {
 
   Future<void> deleteMeal(String id) => _softDelete([id]);
 
+  // ------------------------------------------------------- „mám chuť na…“
+
+  /// Přání rodiny: čekající první, pak naplánovaná; nejnovější nahoře.
+  Future<List<MealWish>> wishes() async {
+    final today = _clock().toLocal();
+    final list = [
+      for (final json in await _all(DocKind.wish)) MealWish.fromJson(json),
+    ].where((w) => w.isActive(today)).toList();
+    list.sort((a, b) {
+      if (a.isPlanned != b.isPlanned) return a.isPlanned ? 1 : -1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    return list;
+  }
+
+  Future<MealWish> saveWish(MealWish wish) async {
+    final saved = wish.copyWith(updatedAt: _clock());
+    await _put(_db, DocKind.wish, saved.id, saved.toJson(), saved.updatedAt);
+    _notify();
+    return saved;
+  }
+
+  Future<void> deleteWish(String id) => _softDelete([id]);
+
+  // ------------------------------------------------------ ceny z účtenek
+
+  Future<List<ReceiptPrice>> receipts() async => [
+    for (final json in await _all(DocKind.receipt)) ReceiptPrice.fromJson(json),
+  ];
+
+  Future<void> saveReceipts(Iterable<ReceiptPrice> prices) async {
+    final now = _clock();
+    await _db.transaction((txn) async {
+      for (final p in prices) {
+        final json = {...p.toJson(), 'updated_at': now.toIso8601String()};
+        await _put(txn, DocKind.receipt, p.id, json, now);
+      }
+    });
+    _notify();
+  }
+
+  Future<void> deleteReceipt(String id) => _softDelete([id]);
+
   // ------------------------------------------------------ nákupní seznamy
 
   /// Nákupní seznamy, nejnovější první.
@@ -339,6 +383,18 @@ class DocsRepository {
 
   // ------------------------------------------------------- synchronizace
 
+  /// Zná telefon tenhle záznam (i smazaný)?
+  Future<bool> known(String id) async {
+    final rows = await _db.query(
+      'docs',
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<List<DirtyDoc>> dirty(String kind) async {
     final rows = await _db.query(
       'docs',
@@ -371,6 +427,8 @@ class DocsRepository {
       DocKind.plan,
       DocKind.shoppingList,
       DocKind.shopping,
+      DocKind.wish,
+      DocKind.receipt,
     ]) {
       for (final doc in await dirty(kind)) {
         if (kind == DocKind.session &&

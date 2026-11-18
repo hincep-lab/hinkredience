@@ -99,7 +99,10 @@ final _cookPattern = RegExp(
   r'gril|ugril|ud(it|i|ime) |vyud|konfit|sous-vide|sous vide|'
   r'blansir|redukuj|zredukuj|vyvar|tahnout|tahni|probubl|'
   r'v troube|do trouby|na panvi|na plotne|flamb|karameliz|'
-  r'tlakov'
+  r'tlakov|'
+  // Sous-vide a vodní lázeň („ve vodní lázni při 43 °C“), krok s teplotou
+  // ohřevu („při 180 °C“) – jde o tepelnou úpravu, ne o práci u linky.
+  r'lazn|lazen|°c|° c'
   r')',
 );
 

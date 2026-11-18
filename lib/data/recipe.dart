@@ -218,6 +218,7 @@ class Recipe {
     this.totalMinutes = 0,
     this.temperatures = const [],
     this.equipment = const [],
+    this.tags = const [],
     this.notes = '',
     this.rating,
     this.isFavorite = false,
@@ -257,6 +258,9 @@ class Recipe {
   final int totalMinutes;
   final List<String> temperatures;
   final List<String> equipment;
+
+  /// Štítky („Pro děti“, „Rychlá večeře“…) – zadává uživatel.
+  final List<String> tags;
   final String notes;
   final double? rating;
   final bool isFavorite;
@@ -313,6 +317,7 @@ class Recipe {
     int? totalMinutes,
     List<String>? temperatures,
     List<String>? equipment,
+    List<String>? tags,
     String? notes,
     Object? rating = _keep,
     bool? isFavorite,
@@ -343,6 +348,7 @@ class Recipe {
     totalMinutes: totalMinutes ?? this.totalMinutes,
     temperatures: temperatures ?? this.temperatures,
     equipment: equipment ?? this.equipment,
+    tags: tags ?? this.tags,
     notes: notes ?? this.notes,
     rating: identical(rating, _keep) ? this.rating : rating as double?,
     isFavorite: isFavorite ?? this.isFavorite,
@@ -380,6 +386,7 @@ class Recipe {
     'total_minutes': totalMinutes,
     'temperatures': temperatures,
     'equipment': equipment,
+    'tags': tags,
     'notes': notes,
     'rating': rating,
     'is_favorite': isFavorite,
@@ -410,6 +417,7 @@ class Recipe {
     totalMinutes: (json['total_minutes'] as num?)?.toInt() ?? 0,
     temperatures: _stringList(json['temperatures']),
     equipment: _stringList(json['equipment']),
+    tags: _stringList(json['tags']),
     notes: (json['notes'] as String?) ?? '',
     rating: (json['rating'] as num?)?.toDouble(),
     isFavorite: json['is_favorite'] == true,
@@ -496,6 +504,7 @@ class Recipe {
         title,
         description,
         category,
+        ...tags,
         for (final i in ingredients) i.name,
       ].join('\n'),
     );
@@ -535,16 +544,15 @@ class RecipeVersion {
 
 /// Výchozí kategorie podle grafického návrhu. Uživatel si může přidat vlastní.
 const defaultCategories = <String>[
-  'Maso',
-  'Drůbež',
+  'Hovězí maso',
+  'Vepřové maso',
+  'Drůbež a králík',
   'Ryby',
   'Polévky',
   'Omáčky',
+  'Těstoviny a rýže',
+  'Bezmasá jídla',
   'Přílohy',
-  'Pečení',
-  'Dezerty',
-  'Těsta',
-  'Pizza',
-  'Gril',
-  'Zavařování',
+  'Sladká jídla a dezerty',
+  'Pečivo a těsta',
 ];

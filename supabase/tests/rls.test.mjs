@@ -89,8 +89,8 @@ before(async () => {
 test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => {
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
-    'household_members', 'households', 'kitchen_equipment', 'meal_plans',
-    'profiles', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
+    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes', 'price_ai_usage', 'price_cron_key', 'price_offers', 'price_receipts', 'price_runs', 'price_scans',
+    'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
   const { rows } = await db.query(
@@ -665,4 +665,197 @@ test('migrace 11 jde spustit znovu bez chyby', async () => {
   const sql = readFileSync(join(migrationsDir, '20261115000011_share_all_recipes.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql);
+});
+
+test('přání „mám chuť“: vidí je rodina, cizí ne; jde spustit znovu', async () => {
+  const hid = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const w = await as(MARTINKA,
+    `insert into public.meal_wishes (household_id, title, author_name)
+     values ($1, 'Svíčková', 'Martinka') returning id, synced_at`, [hid]);
+  const id = w.rows[0].id;
+  const seen = await as(PAVEL, `select title, author_name from public.meal_wishes where id = $1`, [id]);
+  assert.equal(seen.rows[0].title, 'Svíčková');
+  assert.equal(seen.rows[0].author_name, 'Martinka');
+  assert.equal((await as(CIZI, `select 1 from public.meal_wishes where id = $1`, [id])).rows.length, 0);
+  await denied(as(CIZI, `insert into public.meal_wishes (household_id, title) values ($1, 'Vetřelec')`, [hid]));
+  await denied(as(CIZI, `insert into public.meal_wishes (owner_id, title) values ($1, 'Podvrh')`, [PAVEL]));
+  // Pavel přání naplánuje (úprava cizího přání v rodině je dovolená).
+  await as(PAVEL, `update public.meal_wishes set planned_day = '2026-11-20' where id = $1`, [id]);
+  const after = await as(MARTINKA, `select planned_day, synced_at from public.meal_wishes where id = $1`, [id]);
+  assert.ok(after.rows[0].planned_day);
+  assert.ok(after.rows[0].synced_at >= w.rows[0].synced_at);
+  // Cizí nic nezmění.
+  await as(CIZI, `update public.meal_wishes set title = 'X' where id = $1`, [id]);
+  assert.equal((await as(PAVEL, `select title from public.meal_wishes where id = $1`, [id])).rows[0].title, 'Svíčková');
+  const sql = readFileSync(join(migrationsDir, '20261115000012_meal_wishes.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('oznámení: zařízení vidí jen vlastník, klíč serveru nikdo', async () => {
+  await as(PAVEL, `select public.push_subscribe('https://web.push.apple.com/abc', 'p', 'a', 'iPhone')`);
+  assert.equal((await as(PAVEL, `select endpoint from public.push_subscriptions`)).rows.length, 1);
+  assert.equal((await as(MARTINKA, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  assert.equal((await as(CIZI, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  // Přímý zápis cizího zařízení nejde, jen přes funkci a vždy na sebe.
+  await denied(as(CIZI, `insert into public.push_subscriptions (user_id, endpoint, p256dh, auth) values ($1, 'https://x', 'p', 'a')`, [PAVEL]));
+  // Totéž zařízení převezme jiný účet (odhlášení a přihlášení někoho jiného).
+  await as(MARTINKA, `select public.push_subscribe('https://web.push.apple.com/abc', 'p2', 'a2')`);
+  assert.equal((await as(PAVEL, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  assert.equal((await as(MARTINKA, `select p256dh from public.push_subscriptions`)).rows[0].p256dh, 'p2');
+  await assert.rejects(as(PAVEL, `select public.push_subscribe('http://nezabezpecene', 'p', 'a')`), /Neplatné přihlášení/);
+  await as(MARTINKA, `delete from public.push_subscriptions`);
+  assert.equal((await as(MARTINKA, `select 1 from public.push_subscriptions`)).rows.length, 0);
+  // Klíč serveru: ani číst, ani zapsat.
+  await denied(as(PAVEL, `select * from public.push_server_keys`));
+  await denied(as(PAVEL, `insert into public.push_server_keys (id, public_key, private_jwk) values (1, 'x', '{}')`));
+  // Kdo přidal položku nákupu se vyplní sám.
+  const list = (await as(PAVEL, `insert into public.shopping_lists (name) values ('Push test') returning id`)).rows[0].id;
+  const item = await as(PAVEL, `insert into public.shopping_items (list_id, name) values ($1, 'Mléko') returning added_by`, [list]);
+  assert.equal(item.rows[0].added_by, PAVEL);
+  const sql = readFileSync(join(migrationsDir, '20261115000013_web_push.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('akce: běžná cena se skryje, prohozené ceny s aplikací se opraví, AI samo neověřuje', async () => {
+  const add = (product, key, price, conditions, verify_method, regular = null, chain = 'albert') => db.query(
+    `insert into public.price_offers (chain, product, product_key, price, pack_qty, pack_unit, regular_price, conditions,
+       valid_from, valid_to, source_url, provider, verified, verify_method)
+     values ($1, $2, $3, $4, 250, 'g', $5, $6, '2026-11-18', '2026-11-24', 'https://letaky.albert.cz/x', 'gemini', true, $7)
+     returning id`, [chain, product, key, price, regular, conditions, verify_method]);
+  const app = (await add('Česká chuť Máslo 82%', 'kind-maslo', 32.9, 's Aplikací', 'leták-text', 54.9)).rows[0].id;
+  const plain = (await add('Česká chuť Máslo 82%', 'kind-maslo', 27.9, 'bez Aplikace', 'leták-text', 54.9)).rows[0].id;
+  const club = (await add('Cheddar', 'kind-cheddar', 34.9, 'Clubcard cena', 'leták-2×', null, 'tesco')).rows[0].id;
+  const reg = (await add('Cheddar', 'kind-cheddar', 51.9, 'běžná cena', 'leták-2×', null, 'tesco')).rows[0].id;
+  const penny = (await add('Cizrna', 'kind-cizrna', 14.9, 's PENNY kartou', 'data', null, 'penny')).rows[0].id;
+  const pennyPlain = (await add('Cizrna', 'kind-cizrna', 24.9, 'bez PENNY karty', 'data', null, 'penny')).rows[0].id;
+  const users = (await db.query(`select count(*)::int as n from public.recipes`)).rows[0].n;
+
+  // Spustit smí jen server.
+  await denied(as(PAVEL, `select public.price_offers_classify()`));
+  await db.query(`select public.price_offers_classify()`);
+  await db.query(`select public.price_offers_classify()`); // opakovatelné
+
+  const row = async (id) => (await db.query(`select price, conditions, kind, loyalty, regular_price::float as regular_price, verified,
+    verify_method, source_title from public.price_offers where id = $1`, [id])).rows[0];
+  const a = await row(app);
+  const b = await row(plain);
+  assert.deepEqual([a.price, a.conditions, a.kind, a.loyalty], ['32.9', 'bez Aplikace', 'promo', '']);
+  assert.deepEqual([b.price, b.conditions, b.kind, b.loyalty], ['27.9', 's Aplikací', 'loyalty', 'Můj Albert']);
+  const c = await row(club);
+  assert.deepEqual([c.kind, c.loyalty, c.regular_price, c.verified], ['loyalty', 'Clubcard', 51.9, false]);
+  assert.match(c.source_title, /jen čtení AI/);
+  assert.equal((await row(reg)).kind, 'regular');
+  // Data z webu Penny zůstávají ověřená.
+  assert.deepEqual([(await row(penny)).kind, (await row(penny)).verified], ['loyalty', true]);
+  assert.deepEqual([(await row(pennyPlain)).kind, (await row(pennyPlain)).verified], ['promo', true]);
+  // Text letáku bez kontroly gramáže → znovu ověřit.
+  assert.equal(a.verified, false);
+  assert.match(a.source_title, /čeká na nové ověření/);
+  // Nic se nesmazalo.
+  assert.equal((await db.query(`select count(*)::int as n from public.price_offers where product_key like 'kind-%'`)).rows[0].n, 6);
+  assert.equal((await db.query(`select count(*)::int as n from public.recipes`)).rows[0].n, users);
+
+  // Záznam stažení letáků: čte každý přihlášený, zapisuje jen server.
+  await db.query(`insert into public.price_runs (chain, ok, error, offers) values ('lidl', false, 'leták se nepodařilo stáhnout', 0)`);
+  assert.equal((await as(CIZI, `select error from public.price_runs where chain = 'lidl'`)).rows[0].error, 'leták se nepodařilo stáhnout');
+  await denied(as(PAVEL, `insert into public.price_runs (chain, ok) values ('lidl', true)`));
+  await denied(as(PAVEL, `delete from public.price_runs`));
+  await assert.rejects(db.query(`update public.price_offers set kind = 'jine' where id = $1`, [app]));
+  await db.query(`delete from public.price_offers where product_key like 'kind-%'`);
+  await db.query(`delete from public.price_runs`);
+});
+
+test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async () => {
+  // Uživatel ani AI v aplikaci nesmí vložit akci (jen serverová funkce).
+  await denied(as(PAVEL, `insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'Máslo', 39.9, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+  // Server (role postgres) vloží; přihlášení ji vidí.
+  await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified)
+    values ('penny', 'Máslo 250 g', 'maslo', 39.9, '2026-11-20', 'https://www.penny.cz/nabidky', 'gemini', true)`);
+  assert.equal((await as(CIZI, `select product from public.price_offers`)).rows[0].product, 'Máslo 250 g');
+  // Akce z přehledu letáků kupi.cz (zdroj „kupi“) server uložit smí.
+  await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified, verify_method)
+    values ('lidl', 'Máslo Milkpol', 'maslo milkp', 29.9, '2026-11-22', 'https://www.kupi.cz/letak/lidl-letak-153', 'kupi', true, 'kupi')`);
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'nekdo')`));
+  // Klíč ranního obnovení akcí: vznikne jednou, uživatel ho nevidí ani nezmění.
+  assert.equal((await db.query(`select length(key) as n from public.price_cron_key`)).rows[0].n, 64);
+  await denied(as(PAVEL, `select key from public.price_cron_key`));
+  await denied(as(CIZI, `update public.price_cron_key set key = repeat('x', 40)`));
+  // Fotka zboží jen přes https.
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider, image_url)
+    values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'kupi', 'http://x.cz/a.jpg')`));
+  await denied(as(PAVEL, `update public.price_offers set price = 1`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'X', 0, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
+    values ('penny', 'X', 10, '2026-11-20', 'http://nezabezpecene.cz/', 'manual')`));
+  await assert.rejects(db.query(`insert into public.price_offers (chain, store_id, product, price, valid_to, source_url, provider)
+    values ('penny', 'penny-praha', 'X', 10, '2026-11-20', 'https://www.penny.cz/', 'manual')`));
+
+  const hid = 'bbbbbbbb-0000-0000-0000-000000000001';
+  const r = await as(MARTINKA, `insert into public.price_receipts (household_id, store_id, product, price, bought_on)
+    values ($1, 'lidl-hradecka', 'Mléko 1 l', 21.9, '2026-11-14') returning id`, [hid]);
+  assert.equal((await as(PAVEL, `select price from public.price_receipts where id = $1`, [r.rows[0].id])).rows.length, 1);
+  assert.equal((await as(CIZI, `select 1 from public.price_receipts where id = $1`, [r.rows[0].id])).rows.length, 0);
+  await denied(as(CIZI, `insert into public.price_receipts (owner_id, store_id, product, price) values ($1, 'lidl-hradecka', 'X', 1)`, [PAVEL]));
+  await assert.rejects(as(PAVEL, `insert into public.price_receipts (store_id, product, price) values ('lidl-praha', 'X', 1)`));
+  // Mezipaměť a počítadla AI: uživatel nezapíše.
+  await denied(as(PAVEL, `insert into public.price_scans (chain, product_key) values ('penny', 'maslo')`));
+  await denied(as(PAVEL, `select * from public.price_ai_usage`));
+  const sql = readFileSync(join(migrationsDir, '20261115000014_best_buy.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+});
+
+test('štítky: ChatGPT je uloží, bez pole je nechá, migrace 17 je jen přidává', async () => {
+  const draft = {
+    title: 'Losos sous-vide 43 °C',
+    category: 'Ryby',
+    prep_minutes: 10,
+    cook_minutes: 32,
+    ingredients: [{ name: 'Losos' }],
+    steps: [
+      { instruction: 'Připravujte ve vodní lázni při 43 °C po dobu 30 minut.', duration_minutes: 30 },
+      { instruction: 'Krátce opečte na rozpálené pánvi.', duration_minutes: 2 },
+    ],
+  };
+  const created = (await as(PAVEL, `select public.api_save_recipe($1::jsonb) as r`, [
+    JSON.stringify({ ...draft, tags: ['Pro děti', ' pro děti ', '', 'Vlastní'] }),
+  ])).rows[0].r;
+  const tagsOf = async () =>
+    (await as(PAVEL, `select tags from public.recipes where id = $1`, [created.id])).rows[0].tags;
+  assert.deepEqual(await tagsOf(), ['Pro děti', 'Vlastní']);
+
+  // Úprava bez pole tags štítky nezmění.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [JSON.stringify(draft), created.id]);
+  assert.deepEqual(await tagsOf(), ['Pro děti', 'Vlastní']);
+  // Úprava s polem tags je nahradí.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ ...draft, tags: ['Pro děti'] }),
+    created.id,
+  ]);
+  assert.deepEqual(await tagsOf(), ['Pro děti']);
+  // Štítky jsou i v historii verzí.
+  const snap = (await as(PAVEL, `select snapshot from public.recipe_versions
+    where recipe_id = $1 order by version_number desc limit 1`, [created.id])).rows[0].snapshot;
+  assert.deepEqual(snap.tags, ['Pro děti']);
+
+  // Migrace 17 doplní způsob přípravy z postupu, zachová ruční štítky
+  // a opakované spuštění nic nezdvojí.
+  const sql = readFileSync(join(migrationsDir, '20261117000017_recipe_filter_tags.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+  const tags = await tagsOf();
+  assert.equal(tags[0], 'Pro děti');
+  assert.ok(tags.includes('Sous-vide'), JSON.stringify(tags));
+  assert.ok(tags.includes('Pánev'), JSON.stringify(tags));
+  assert.equal(tags.filter((t) => t === 'Sous-vide').length, 1);
+  assert.ok(!tags.includes('Trouba'), JSON.stringify(tags));
+
+  // Cizí uživatel štítky nezmění.
+  await as(CIZI, `update public.recipes set tags = '["Hack"]' where id = $1`, [created.id]);
+  assert.ok(!(await tagsOf()).includes('Hack'));
 });

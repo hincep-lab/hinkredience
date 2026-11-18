@@ -20,6 +20,8 @@ class FakeRemoteDocs implements RemoteDocs {
     DocKind.plan: {},
     DocKind.shoppingList: {},
     DocKind.shopping: {},
+    DocKind.wish: {},
+    DocKind.receipt: {},
   };
   final pushedHousehold = <String, String?>{};
   var _tick = DateTime.utc(2026, 11, 15, 12);
@@ -74,6 +76,12 @@ class FakeRemoteDocs implements RemoteDocs {
   @override
   Future<Uint8List> downloadPhoto(String remotePath) async =>
       throw Exception('není');
+
+  final announced = <Map<String, String>>[];
+
+  @override
+  Future<void> announce(List<Map<String, String>> items) async =>
+      announced.addAll(items);
 }
 
 void main() {
@@ -239,5 +247,109 @@ void main() {
     );
     await sync.sync();
     expect(await docs.shoppingLists(), isEmpty);
+  });
+
+  test(
+    'novinky od rodiny: přání a nákup od druhého, ne vlastní ani první sync',
+    () async {
+      // První synchronizace jen stáhne historii, nic neohlásí.
+      remote.serverEdit(DocKind.wish, 'w-old', {
+        'id': 'w-old',
+        'title': 'Staré přání',
+        'owner_id': 'user-2',
+        'author_name': 'Martinka',
+      }, env.now);
+      final first = await sync.sync();
+      expect(first.news, isEmpty);
+
+      remote.serverEdit(DocKind.wish, 'w1', {
+        'id': 'w1',
+        'title': 'Svíčková',
+        'owner_id': 'user-2',
+        'author_name': 'Martinka',
+      }, env.now);
+      remote.serverEdit(DocKind.wish, 'w2', {
+        'id': 'w2',
+        'title': 'Moje vlastní',
+        'owner_id': 'user-1',
+      }, env.now);
+      for (final name in ['Mléko', 'Chléb', 'Máslo', 'Vejce', 'Sýr']) {
+        remote.serverEdit(DocKind.shopping, 'i-$name', {
+          'id': 'i-$name',
+          'list_id': 'l1',
+          'name': name,
+        }, env.now);
+      }
+      final second = await sync.sync();
+      expect(second.news.map((n) => n.title).toList(), [
+        'Mléko',
+        'Chléb',
+        'Máslo',
+        'Vejce',
+        'Sýr',
+        'Svíčková',
+      ]);
+      expect(
+        second.news.where((n) => n.kind == DocKind.wish).single.author,
+        'Martinka',
+      );
+      final texts = familyNotifications(second.news);
+      expect(texts.first.title, 'Martinka má chuť na…');
+      expect(texts.first.body, 'Svíčková');
+      expect(texts.last.title, 'Na nákup přibylo 5 položek');
+      expect(texts.last.body, 'Mléko, Chléb, Máslo a 2 další');
+
+      // Podruhé už nic nového.
+      final third = await sync.sync();
+      expect(third.news, isEmpty);
+    },
+  );
+
+  test('nové přání a položka se rodině ohlásí jednou; staré ne', () async {
+    await docs.saveWish(
+      MealWish(
+        id: 'w-new',
+        title: 'Guláš',
+        createdAt: env.now,
+        updatedAt: env.now,
+      ),
+    );
+    await docs.saveWish(
+      MealWish(
+        id: 'w-old',
+        title: 'Staré',
+        createdAt: env.now.subtract(const Duration(days: 2)),
+        updatedAt: env.now,
+      ),
+    );
+    await docs.addToShopping(const [ShoppingDraft(name: 'Mléko')]);
+    await sync.sync();
+    expect(remote.announced, [
+      {'kind': 'shopping', 'title': 'Mléko'},
+      {'kind': 'wish', 'title': 'Guláš'},
+    ]);
+    // Úprava už ohlášeného přání se znovu neohlašuje.
+    final wish = (await docs.wishes()).firstWhere((w) => w.id == 'w-new');
+    await docs.saveWish(wish.copyWith(note: 'v sobotu'));
+    await sync.sync();
+    expect(remote.announced.length, 2);
+  });
+
+  test('vlastní položka z jiného zařízení se neohlásí', () async {
+    await sync.sync();
+    remote.serverEdit(DocKind.shopping, 'i-own', {
+      'id': 'i-own',
+      'list_id': 'l1',
+      'name': 'Moje',
+      'added_by': 'user-1',
+    }, env.now);
+    remote.serverEdit(DocKind.shopping, 'i-her', {
+      'id': 'i-her',
+      'list_id': 'l1',
+      'name': 'Její',
+      'added_by': 'user-2',
+    }, env.now);
+    final result = await sync.sync();
+    expect(result.news.map((n) => n.title), ['Její']);
   });
 }

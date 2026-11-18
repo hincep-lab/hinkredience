@@ -6,14 +6,23 @@ import '../../app/router.dart';
 import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
 import '../../core/material.dart';
+import '../../core/recipe_groups.dart';
 import '../../core/widgets.dart';
+import '../home/home_widgets.dart' show GroupGrid;
 import '../sync/sync_status.dart';
 import '../../data/recipe.dart';
 
 enum RecipeFilter { categories, all, favorites, newest }
 
 /// Ikona kategorie pro dlaždice bez fotografie.
-IconData categoryIcon(String category) => switch (category) {
+IconData categoryIcon(String category) {
+  for (final g in recipeGroups) {
+    if (g.label == category) return g.icon;
+  }
+  return _legacyCategoryIcon(category);
+}
+
+IconData _legacyCategoryIcon(String category) => switch (category) {
   'Maso' => Icons.kebab_dining_rounded,
   'Drůbež' => Icons.egg_alt_rounded,
   'Ryby' => Icons.set_meal_rounded,
@@ -35,11 +44,15 @@ List<Recipe> filterRecipes(
   required RecipeFilter filter,
   String query = '',
   String? category,
+  String? group,
+  String? tag,
 }) {
   final result = [
     for (final recipe in recipes)
       if ((filter != RecipeFilter.favorites || recipe.isFavorite) &&
           (category == null || recipe.category == category) &&
+          (group == null || groupOf(recipe).id == group) &&
+          (tag == null || hasTag(recipe, tag)) &&
           recipe.matches(query))
         recipe,
   ];
@@ -58,11 +71,19 @@ class RecipesScreen extends ConsumerStatefulWidget {
     super.key,
     this.initialQuery = '',
     this.initialCategory,
+    this.initialGroup,
+    this.initialTag,
     this.favoritesOnly = false,
   });
 
   final String initialQuery;
   final String? initialCategory;
+
+  /// Skupina z domovské obrazovky (Hovězí maso, Polévky…).
+  final String? initialGroup;
+
+  /// Štítek ze záložky Štítky.
+  final String? initialTag;
 
   /// Záložka „Oblíbené“ – stejný seznam, jen bez přepínání pohledů.
   final bool favoritesOnly;
@@ -77,6 +98,8 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
       ? RecipeFilter.favorites
       : RecipeFilter.categories;
   late String? _category = widget.initialCategory;
+  late String? _group = widget.initialGroup;
+  late String? _tag = widget.initialTag;
 
   @override
   void didUpdateWidget(RecipesScreen oldWidget) {
@@ -89,6 +112,15 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
     if (widget.initialCategory != oldWidget.initialCategory &&
         widget.initialCategory != null) {
       _category = widget.initialCategory;
+    }
+    if (widget.initialGroup != oldWidget.initialGroup &&
+        widget.initialGroup != null) {
+      _group = widget.initialGroup;
+      _filter = RecipeFilter.categories;
+    }
+    if (widget.initialTag != oldWidget.initialTag &&
+        widget.initialTag != null) {
+      _tag = widget.initialTag;
     }
   }
 
@@ -104,6 +136,8 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
       !widget.favoritesOnly &&
       _filter == RecipeFilter.categories &&
       _category == null &&
+      _group == null &&
+      _tag == null &&
       _query.isEmpty;
 
   @override
@@ -167,11 +201,46 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
                           _filter = filter;
                           if (filter == RecipeFilter.categories) {
                             _category = null;
+                            _group = null;
                           }
                         }),
                       ),
                     ),
                 ],
+              ),
+            ),
+          if (_group != null || _tag != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    if (_group != null)
+                      InputChip(
+                        avatar: Icon(
+                          recipeGroupById(_group!).icon,
+                          size: 18,
+                          color: AppColors.copperGold,
+                        ),
+                        label: Text(recipeGroupById(_group!).label),
+                        onDeleted: () => setState(() => _group = null),
+                        deleteButtonTooltipMessage: 'Zrušit skupinu',
+                      ),
+                    if (_tag != null)
+                      InputChip(
+                        avatar: const Icon(
+                          Icons.sell_outlined,
+                          size: 18,
+                          color: AppColors.copperGold,
+                        ),
+                        label: Text(_tag!),
+                        onDeleted: () => setState(() => _tag = null),
+                        deleteButtonTooltipMessage: 'Zrušit štítek',
+                      ),
+                  ],
+                ),
               ),
             ),
           if (_category != null)
@@ -200,10 +269,15 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
               ),
               data: (all) {
                 if (_showCategoryGrid) {
-                  return _CategoryGrid(
-                    recipes: all,
-                    onSelected: (category) =>
-                        setState(() => _category = category),
+                  return ListView(
+                    padding: const EdgeInsets.only(top: 8, bottom: 96),
+                    children: [
+                      GroupGrid(
+                        recipes: all,
+                        onSelected: (group) =>
+                            setState(() => _group = group.id),
+                      ),
+                    ],
                   );
                 }
                 final visible = filterRecipes(
@@ -211,6 +285,8 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
                   filter: _filter,
                   query: _query,
                   category: _category,
+                  group: _group,
+                  tag: _tag,
                 );
                 if (visible.isEmpty) return _empty(all.isEmpty);
                 return ListView.separated(
@@ -252,75 +328,6 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
           : 'V kategorii $_category zatím není žádný recept.',
       actionLabel: 'Nový recept',
       onAction: () => context.push(Routes.newRecipeIn(_category)),
-    );
-  }
-}
-
-class _CategoryGrid extends ConsumerWidget {
-  const _CategoryGrid({required this.recipes, required this.onSelected});
-
-  final List<Recipe> recipes;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final categories = ref.watch(categoriesProvider).value ?? defaultCategories;
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 150,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.9,
-      ),
-      itemCount: categories.length,
-      itemBuilder: (context, index) {
-        final category = categories[index];
-        final inCategory = [
-          for (final r in recipes)
-            if (r.category == category) r,
-        ];
-        final withPhoto = inCategory.where((r) => r.photos.isNotEmpty);
-        return HkCard(
-          padding: EdgeInsets.zero,
-          onTap: () => onSelected(category),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(17),
-                  ),
-                  child: withPhoto.isEmpty
-                      ? PhotoPlaceholder(icon: categoryIcon(category))
-                      : RecipeCover(recipe: withPhoto.first),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 7, 6, 8),
-                child: Column(
-                  children: [
-                    Text(
-                      category,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text(
-                      '${inCategory.length}',
-                      style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 11.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

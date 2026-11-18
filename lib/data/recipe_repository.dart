@@ -162,6 +162,10 @@ class RecipeRepository {
   Future<void> setFavorite(String id, bool favorite) =>
       _touch(id, (r) => r.copyWith(isFavorite: favorite));
 
+  /// Štítky (způsob přípravy, příležitosti, vlastní) – bez nové verze.
+  Future<void> setTags(String id, List<String> tags) =>
+      _touch(id, (r) => r.copyWith(tags: tags));
+
   Future<void> setRating(String id, double? rating) =>
       _touch(id, (r) => r.copyWith(rating: rating));
 

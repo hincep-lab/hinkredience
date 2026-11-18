@@ -16,6 +16,8 @@ import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
 import '../../core/personalization.dart';
+import '../../core/recipe_groups.dart'
+    show PrepMethod, inferPrepMethods, savedPrepMethods;
 import '../../core/screen_wake.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
@@ -24,6 +26,9 @@ import '../../data/recipe.dart';
 import '../kitchen/diary_screen.dart' show diaryDate;
 import '../kitchen/add_to_shopping_sheet.dart';
 import 'personal_cards.dart';
+import 'recipe_tag_picker.dart';
+import '../cooking/actual_amount.dart';
+import '../kitchen/wishes.dart';
 import '../photos/photo_editor.dart';
 import '../ai/ai_common.dart';
 import '../ai/draft_review_screen.dart';
@@ -347,6 +352,7 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                   'photos' => context.push(Routes.recipePhotos(recipe.id)),
                   'shopping' => _toShopping(recipe),
                   'plan' => _toPlan(recipe),
+                  'wish' => addWish(context, ref, recipe: recipe),
                   'diary' => context.push(Routes.diaryFor(recipe.id)),
                   'ai_improve' => _improve(recipe, withWeb: false),
                   'ai_web' => _improve(recipe, withWeb: true),
@@ -376,6 +382,11 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                     const PopupMenuItem(
                       value: 'plan',
                       child: Text('Naplánovat'),
+                    ),
+                  if (!recipe.isDeleted)
+                    const PopupMenuItem(
+                      value: 'wish',
+                      child: Text('Mám na to chuť'),
                     ),
                   const PopupMenuItem(
                     value: 'diary',
@@ -536,6 +547,17 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                           if (!_checked.remove(id)) _checked.add(id);
                         }),
                         onShopping: () => _toShopping(shown),
+                        onActual: (item) async {
+                          final value = await askActualAmount(
+                            context,
+                            ingredient: item,
+                            recipeServings: shown.servings,
+                            currentServings: servings,
+                          );
+                          if (value != null && mounted) {
+                            setState(() => _servings = value);
+                          }
+                        },
                       ),
                       _Tab.steps => _StepsTab(
                         recipe: recipe,
@@ -832,6 +854,7 @@ class _IngredientsTab extends StatelessWidget {
     required this.onServings,
     required this.onToggle,
     required this.onShopping,
+    required this.onActual,
   });
 
   final Recipe recipe;
@@ -840,6 +863,9 @@ class _IngredientsTab extends StatelessWidget {
   final ValueChanged<double> onServings;
   final ValueChanged<String> onToggle;
   final VoidCallback onShopping;
+
+  /// Klepnutí na množství: „mám jí jinak“ → přepočet celého receptu.
+  final ValueChanged<Ingredient> onActual;
 
   @override
   Widget build(BuildContext context) {
@@ -965,14 +991,26 @@ class _IngredientsTab extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Text(
-                    item.amountLabel(
-                      fromServings: recipe.servings,
-                      toServings: servings,
-                    ),
-                    style: const TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.w600,
+                  InkWell(
+                    onTap: item.quantity == null ? null : () => onActual(item),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 6,
+                      ),
+                      child: Text(
+                        item.amountLabel(
+                          fromServings: recipe.servings,
+                          toServings: servings,
+                        ),
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.underline,
+                          decorationStyle: TextDecorationStyle.dotted,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -980,6 +1018,20 @@ class _IngredientsTab extends StatelessWidget {
             ),
           ),
         if (recipe.ingredients.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          const Text(
+            'Nevážíte předem? Klepněte na množství a zadejte, kolik suroviny '
+            'máte – zbytek se přepočítá.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+          ),
+          Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Poměry surovin'),
+              children: [RatioList(recipe: recipe)],
+            ),
+          ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
@@ -990,12 +1042,17 @@ class _IngredientsTab extends StatelessWidget {
             label: const Text('Přidat do nákupního seznamu'),
           ),
         ],
-        if (time.total > 0) ...[
-          const SizedBox(height: 16),
-          Text('Čas', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          _TimeSummary(time: time),
-        ],
+        const SizedBox(height: 16),
+        Text('Čas', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (time.total > 0)
+          _TimeSummary(time: time)
+        else
+          const Text(
+            'Čas neuveden',
+            key: Key('time-unknown'),
+            style: TextStyle(color: AppColors.textSecondary),
+          ),
         if (recipe.temperatures.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text('Teploty', style: theme.textTheme.titleMedium),
@@ -1008,6 +1065,71 @@ class _IngredientsTab extends StatelessWidget {
           const SizedBox(height: 8),
           _Chips(values: recipe.equipment, icon: Icons.countertops_rounded),
         ],
+        const SizedBox(height: 16),
+        _TagsSection(recipe: recipe),
+      ],
+    );
+  }
+}
+
+/// Štítky receptu (způsob přípravy, příležitosti, vlastní) s rychlou úpravou.
+class _TagsSection extends ConsumerWidget {
+  const _TagsSection({required this.recipe});
+
+  final Recipe recipe;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final saved = savedPrepMethods(recipe);
+    final prep = saved.isNotEmpty ? saved : inferPrepMethods(recipe);
+    final other = [
+      for (final t in recipe.tags)
+        if (PrepMethod.fromTag(t) == null) t,
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Štítky', style: theme.textTheme.titleMedium)),
+            TextButton.icon(
+              key: const Key('edit-tags'),
+              onPressed: () => showRecipeTagsSheet(context, ref, recipe),
+              icon: const Icon(Icons.edit_rounded, size: 18),
+              label: const Text('Upravit'),
+            ),
+          ],
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final m in prep)
+              Chip(
+                avatar: ImageIcon(
+                  AssetImage(m.iconAsset),
+                  size: 18,
+                  color: AppColors.copperGold,
+                ),
+                label: Text(saved.isEmpty ? '${m.label} (odhad)' : m.label),
+              ),
+            for (final t in other)
+              Chip(
+                avatar: const Icon(
+                  Icons.sell_outlined,
+                  size: 18,
+                  color: AppColors.copperGold,
+                ),
+                label: Text(t),
+              ),
+            if (prep.isEmpty && other.isEmpty)
+              const Text(
+                'Zatím bez štítků.',
+                style: TextStyle(color: AppColors.textSecondary),
+              ),
+          ],
+        ),
       ],
     );
   }
