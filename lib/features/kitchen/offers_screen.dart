@@ -504,25 +504,32 @@ class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
       : '${w.name} pod ${w.maxPrice!.toStringAsFixed(w.maxPrice! % 1 == 0 ? 0 : 2).replaceAll('.', ',')} Kč';
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context) => ExpansionTile(
+    key: const PageStorageKey('offers-alerts'),
+    tilePadding: EdgeInsets.zero,
+    title: Text(
+      !_on
+          ? 'Upozornění na akce: vypnutá'
+          : _watch.isEmpty
+          ? 'Upozornění na akce: zboží ze seznamů'
+          : 'Upozornění na akce: hlídáno ${_watch.length} + seznamy',
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+    ),
+    subtitle: const Text(
+      'Oznámení v telefonu (i při zavřené aplikaci), když je hlídané zboží '
+      'nebo věc z nákupního seznamu v ověřené akci.',
+      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+    ),
     children: [
       SwitchListTile(
         key: const ValueKey('sale-alerts'),
+        dense: true,
         contentPadding: EdgeInsets.zero,
-        title: const Text(
-          'Dát vědět, když je hlídané zboží v akci',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-        subtitle: const Text(
-          'Oznámení v telefonu (i při zavřené aplikaci) o nových ověřených '
-          'akcích na hlídané zboží a na věci z nákupních seznamů.',
-          style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-        ),
+        title: const Text('Dát vědět, když je hlídané zboží v akci'),
         value: _on,
         onChanged: _set,
       ),
-      if (_on)
+      if (_on) ...[
         SwitchListTile(
           key: const ValueKey('week-tip'),
           dense: true,
@@ -534,29 +541,33 @@ class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
             await ref.read(sharedPreferencesProvider).setBool(weekTipKey, v);
           },
         ),
-      if (_on)
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            for (final w in _watch)
-              InputChip(
-                key: ValueKey('watch-${w.name}'),
-                label: Text(_label(w)),
-                onDeleted: () => _save([
-                  for (final x in _watch)
-                    if (x != w) x,
-                ]),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final w in _watch)
+                InputChip(
+                  key: ValueKey('watch-${w.name}'),
+                  label: Text(_label(w)),
+                  onDeleted: () => _save([
+                    for (final x in _watch)
+                      if (x != w) x,
+                  ]),
+                ),
+              ActionChip(
+                key: const ValueKey('watch-add'),
+                avatar: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Hlídat zboží'),
+                onPressed: _add,
               ),
-            ActionChip(
-              key: const ValueKey('watch-add'),
-              avatar: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('Hlídat zboží'),
-              onPressed: _add,
-            ),
-          ],
+            ],
+          ),
         ),
+        const SizedBox(height: 8),
+      ],
     ],
   );
 }
