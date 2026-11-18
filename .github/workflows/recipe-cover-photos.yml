@@ -34,6 +34,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.HINK_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.HINK_SUPABASE_SERVICE_ROLE_KEY }}
           HINK_OWNER_ID: ${{ secrets.HINK_OWNER_ID }}
+          HINK_COVER_WRITES_ENABLED: ${{ secrets.HINK_COVER_WRITES_ENABLED }}
           OPENAI_API_KEY: ${{ secrets.HINK_OPENAI_API_KEY }}
           APPLY: ${{ inputs.apply }}
           LIMIT: ${{ inputs.limit }}
