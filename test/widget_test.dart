@@ -605,6 +605,7 @@ void main() {
     for (final label in [
       'Minutka',
       'Co mám doma',
+      'Akce v Sušici',
       'Recepty z akcí',
       'Plán vaření',
       'Teploty',
@@ -633,6 +634,17 @@ void main() {
     );
     expect(find.text('Klepněte na Najít akce'), findsOneWidget);
     expect(find.text('Najít akce'), findsOneWidget);
+  });
+
+  testWidgets('akce bez přihlášení: žádné vymyšlené akce, jen výzva', (
+    tester,
+  ) async {
+    await pumpApp(tester, location: Routes.offers);
+    expect(find.text('Akce v Sušici'), findsOneWidget);
+    expect(find.text('Letáky se zatím nestáhly.'), findsOneWidget);
+    expect(find.text('Zatím žádné uložené akce'), findsOneWidget);
+    expect(find.byKey(const ValueKey('add-offer-a1')), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('převody: hrnek mouky na gramy', (tester) async {

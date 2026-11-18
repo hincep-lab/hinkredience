@@ -144,7 +144,12 @@ class ShoppingScreen extends ConsumerWidget {
     Widget tile(ShoppingItem item) {
       final tag = !prefs.enabled || item.checked
           ? null
-          : bestOfferFor(buyItemOf(item), offers, today);
+          : bestOfferFor(
+              buyItemOf(item),
+              offers,
+              today,
+              loyaltyChains: prefs.cards,
+            );
       return _ItemTile(
         item: item,
         onToggle: () => _toggle(ref, item),

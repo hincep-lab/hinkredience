@@ -47,6 +47,7 @@ final bestBuyProvider = Provider.family<BestBuy?, String>((ref, listId) {
     offers: offers,
     receipts: receipts,
     today: DateTime.now(),
+    loyaltyChains: ref.watch(bestBuyPrefsProvider.select((p) => p.cards)),
   );
 });
 
@@ -658,6 +659,11 @@ Future<void> showOfferDetail(
                 Icons.store_outlined,
                 [for (final s in stores) s.label].join('\n'),
               ),
+              if (offer.needsLoyalty)
+                _DetailRow(
+                  Icons.card_membership_rounded,
+                  'Cena jen s ${offer.loyalty.isEmpty ? 'věrnostní kartou' : offer.loyalty}',
+                ),
               if (offer.conditions.isNotEmpty)
                 _DetailRow(Icons.info_outline_rounded, offer.conditions),
               _DetailRow(
@@ -665,8 +671,13 @@ Future<void> showOfferDetail(
                     ? Icons.verified_outlined
                     : Icons.help_outline_rounded,
                 offer.verified
-                    ? 'Ověřeno: ${offer.verifyMethod == 'stránka' ? 'cena je na oficiální stránce obchodu' : 'cenu dokládá citace oficiálního webu'}.'
-                    : 'Neověřeno – do porovnání se nepočítá.',
+                    ? 'Ověřeno: ${switch (offer.verifyMethod) {
+                        'stránka' => 'cena i gramáž jsou na oficiální stránce obchodu',
+                        'data' => 'cena z dat oficiálního webu obchodu',
+                        'leták-text' => 'cena i gramáž stojí v textu oficiálního letáku',
+                        _ => 'z oficiálního zdroje obchodu',
+                      }}.'
+                    : 'Neověřeno${offer.sourceTitle.isEmpty ? '' : ' (${offer.sourceTitle})'} – do výpočtu nákupu se nepočítá.',
               ),
               _DetailRow(
                 Icons.travel_explore_outlined,

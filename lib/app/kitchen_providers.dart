@@ -143,6 +143,28 @@ final priceOffersProvider =
       PriceOffersNotifier.new,
     );
 
+/// Kdy se letáky jednotlivých řetězců naposledy stáhly (a zda poslední
+/// pokus selhal).
+final priceUpdatesProvider =
+    AsyncNotifierProvider<PriceUpdatesNotifier, Map<String, ChainUpdate>>(
+      PriceUpdatesNotifier.new,
+    );
+
+class PriceUpdatesNotifier extends AsyncNotifier<Map<String, ChainUpdate>> {
+  @override
+  Future<Map<String, ChainUpdate>> build() async {
+    final service = ref.watch(priceServiceProvider);
+    if (service == null) return const {};
+    return service.updates();
+  }
+
+  Future<void> reload() async {
+    final service = ref.read(priceServiceProvider);
+    if (service == null) return;
+    state = AsyncData(await service.updates());
+  }
+}
+
 class PriceOffersNotifier extends AsyncNotifier<List<PriceOffer>> {
   @override
   Future<List<PriceOffer>> build() async {
@@ -166,6 +188,7 @@ class BestBuyPrefs {
     this.collapsed = false,
     this.multiStore = false,
     this.groupByStore = false,
+    this.cards = const {},
   });
 
   final bool enabled;
@@ -173,16 +196,22 @@ class BestBuyPrefs {
   final bool multiStore;
   final bool groupByStore;
 
+  /// Řetězce, jejichž věrnostní kartu / aplikaci uživatel má. Jen u nich
+  /// se počítá s cenou „s kartou“ (Clubcard, Můj Albert, PENNY karta…).
+  final Set<String> cards;
+
   BestBuyPrefs copyWith({
     bool? enabled,
     bool? collapsed,
     bool? multiStore,
     bool? groupByStore,
+    Set<String>? cards,
   }) => BestBuyPrefs(
     enabled: enabled ?? this.enabled,
     collapsed: collapsed ?? this.collapsed,
     multiStore: multiStore ?? this.multiStore,
     groupByStore: groupByStore ?? this.groupByStore,
+    cards: cards ?? this.cards,
   );
 }
 
@@ -202,6 +231,7 @@ class BestBuyPrefsNotifier extends Notifier<BestBuyPrefs> {
       collapsed: p.getBool('${_prefix}collapsed') ?? false,
       multiStore: p.getBool('${_prefix}multi') ?? false,
       groupByStore: p.getBool('${_prefix}group') ?? false,
+      cards: {...?p.getStringList('${_prefix}cards')},
     );
   }
 
@@ -212,6 +242,7 @@ class BestBuyPrefsNotifier extends Notifier<BestBuyPrefs> {
     await p.setBool('${_prefix}collapsed', next.collapsed);
     await p.setBool('${_prefix}multi', next.multiStore);
     await p.setBool('${_prefix}group', next.groupByStore);
+    await p.setStringList('${_prefix}cards', next.cards.toList()..sort());
   }
 }
 

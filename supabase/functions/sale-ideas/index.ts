@@ -265,7 +265,7 @@ class Db {
   async offers(today: string): Promise<any[]> {
     return await this.rest(
       `price_offers?select=id,chain,product,price,regular_price,pack_qty,pack_unit,conditions,valid_to` +
-        `&verified=is.true&valid_to=gte.${today}&order=price.asc&limit=300`,
+        `&verified=is.true&kind=neq.regular&valid_to=gte.${today}&order=price.asc&limit=300`,
     ) ?? [];
   }
 

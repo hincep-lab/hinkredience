@@ -120,6 +120,32 @@ class PriceService {
     }
   }
 
+  static const _runsKey = 'price_runs_cache';
+
+  /// Stav stahování letáků po řetězcích (poslední úspěch, poslední chyba).
+  Future<Map<String, ChainUpdate>> updates() async {
+    try {
+      final List<Map<String, dynamic>> rows = await _client
+          .from('price_runs')
+          .select('chain, ran_at, ok, error')
+          .order('ran_at', ascending: false)
+          .limit(300);
+      await _prefs.setString(_runsKey, jsonEncode(rows));
+      return chainUpdates(rows);
+    } catch (_) {
+      final text = _prefs.getString(_runsKey);
+      if (text == null) return const {};
+      try {
+        return chainUpdates([
+          for (final r in jsonDecode(text) as List)
+            if (r is Map<String, dynamic>) r,
+        ]);
+      } catch (_) {
+        return const {};
+      }
+    }
+  }
+
   /// Nechá Gemini (zdarma) vymyslet recepty z uložených ověřených akcí.
   Future<SaleIdeas> suggestRecipes({
     String wish = '',

@@ -1,4 +1,5 @@
 import {
+  type RawOffer,
   albertFlyer,
   albertLeaflets,
   chooseProvider,
@@ -31,6 +32,9 @@ import {
   unflattenNuxt,
   verifiedByText,
   verifyOffer,
+  classifyPrice,
+  normalizeOffers,
+  packInText,
 } from "./index.ts";
 
 function eq(a: unknown, b: unknown, msg = "") {
@@ -117,26 +121,30 @@ Deno.test("srozumitelné chyby Gemini", () => {
 const offer = {
   product: "Máslo 250 g",
   price: 39.9,
+  pack_qty: 250,
+  pack_unit: "g",
   valid_to: "2026-11-18",
   source_url: "https://www.penny.cz/nabidky/maslo",
 };
 
-Deno.test("ověření: citace oficiálního webu s cenou", async () => {
-  const fetchNever = () => Promise.reject(new Error("nemá se stahovat"));
+Deno.test("ověření: citace z odpovědi AI ani samotný odkaz nestačí", async () => {
+  const fetchNever = () => Promise.reject(new Error("stránka nedostupná"));
   const v = await verifyOffer("penny", offer, {
     supports: [{ text: '"product": "Máslo 250 g", "price": 39.9', sources: ["penny.cz"] }],
     sources: [],
   }, TODAY, fetchNever);
-  eq(v.verified, true);
-  eq(v.method, "citace");
+  eq(v.verified, false);
+  eq(v.method, "");
 });
 
 Deno.test("ověření: citace cizího webu nestačí, rozhodne stránka", async () => {
   const page = (html: string) => (_url: string) => Promise.resolve(new Response(html, { status: 200, headers: { "content-type": "text/html" } }));
   const evidence = { supports: [{ text: "Máslo 39,90", sources: ["kupi.cz"] }], sources: [] };
-  const yes = await verifyOffer("penny", offer, evidence, TODAY, page("<h2>Máslo</h2><b>39,90&nbsp;Kč</b>"));
+  const yes = await verifyOffer("penny", offer, evidence, TODAY, page("<h2>Máslo</h2><i>250 g</i><b>39,90&nbsp;Kč</b>"));
   eq(yes.verified, true);
   eq(yes.method, "stránka");
+  const noPack = await verifyOffer("penny", offer, evidence, TODAY, page("<h2>Máslo</h2><b>39,90&nbsp;Kč</b>"));
+  eq([noPack.verified, noPack.reason], [false, "gramáž zboží na oficiální stránce není"]);
   const no = await verifyOffer("penny", offer, evidence, TODAY, page("<h2>Máslo</h2><b>49,90 Kč</b>"));
   eq(no.verified, false);
 });
@@ -416,6 +424,7 @@ interface Opts {
 function fakeServer(opts: Opts = {}) {
   const scans = new Map<string, string>();
   const offers: any[] = [];
+  const runs: any[] = [];
   const calls = { read: 0, check: 0, openai: 0, site: 0, image: 0, other: [] as string[] };
   let usage = 0;
   const sites = opts.sites ?? SITES;
@@ -438,6 +447,19 @@ function fakeServer(opts: Opts = {}) {
       if (path.startsWith("price_ai_usage?on_conflict")) {
         usage = JSON.parse(init.body as string).requests;
         return new Response("", { status: 201 });
+      }
+      if (path === "price_runs") {
+        runs.push(JSON.parse(init.body as string));
+        return new Response("", { status: 201 });
+      }
+      if (path.startsWith("price_offers?") && init.method === "PATCH") {
+        const f = Object.fromEntries([...path.slice("price_offers?".length).split("&")].map((x) => x.split("=eq.")));
+        for (const o of offers) {
+          if (o.chain === f.chain && o.product_key === f.product_key && String(o.price) === f.price && o.valid_to === f.valid_to) {
+            Object.assign(o, JSON.parse(init.body as string));
+          }
+        }
+        return new Response("", { status: 204 });
       }
       if (path === "price_offers") {
         const row = JSON.parse(init.body as string);
@@ -492,7 +514,7 @@ function fakeServer(opts: Opts = {}) {
     }
     return new Response(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
   };
-  return { fetchImpl, offers, scans, calls, usage: () => usage };
+  return { fetchImpl, offers, scans, calls, runs, usage: () => usage };
 }
 
 const LIST = ["Kuřecí prsní řízky", "Vepřová pečeně bez kosti", "Máslo"];
@@ -519,7 +541,7 @@ const ALBERT_READ = (pages: string) =>
 Deno.test("leták s textem: Gemini čte obrázky, cenu ověří text strany; vymyšlená cena neprojde", async () => {
   const s = fakeServer({ read: ALBERT_READ, check: () => 34.9 });
   const r = await refresh(s, { chains: ["albert"] });
-  eq([r.found, r.verified, r.unverified, r.saved, r.rejected], [4, 3, 1, 4, 1]);
+  eq([r.found, r.verified, r.unverified, r.saved, r.rejected], [3, 3, 0, 3, 2]);
   eq([r.gemini.ok, r.gemini.calls, r.provider], [true, 2, "gemini"], "1× čtení stran 3 a 23, 1× kontrola vymyšlené ceny");
   eq([s.calls.read, s.calls.check, s.calls.openai], [1, 1, 0]);
   const d = r.diag[0];
@@ -527,34 +549,36 @@ Deno.test("leták s textem: Gemini čte obrázky, cenu ověří text strany; vym
   eq(d.offers.map((o: any) => [o.product, o.price, o.verified, o.method]), [
     ["Madeta Jihočeské máslo", 34.9, true, "leták-text"],
     ["Madeta Jihočeské máslo", 44.9, true, "leták-text"],
-    ["Jihočeské máslo", 31.9, false, ""],
     ["Kuřecí prsní a stehenní řízky mix", 109.9, true, "leták-text"],
   ]);
-  ok(d.offers[2].reason.includes("druhé čtení letáku vyšlo jinak"));
-  eq(d.rejected, [{ product: "Mistrovská máslová makovka", reason: "jiné zboží než „Máslo“" }]);
+  eq(d.rejected.map((x: any) => x.product), ["Mistrovská máslová makovka", "Jihočeské máslo"]);
+  ok(d.rejected[1].reason.includes("druhé čtení letáku vyšlo jinak"), "vymyšlená cena se neuloží vůbec");
   const saved = s.offers.find((o) => o.price === 34.9);
   eq([saved.chain, saved.verified, saved.verify_method, saved.valid_from, saved.valid_to, saved.source_url, saved.pack_qty, saved.conditions, saved.provider], [
     "albert", true, "leták-text", "2026-11-11", "2026-11-17", "https://letaky.albert.cz/46sm_akcni_letak/page/3", 250, "s aplikací", "gemini",
   ]);
-  eq(s.offers.find((o) => o.price === 31.9).verified, false);
+  eq(s.offers.find((o) => o.price === 31.9), undefined);
+  eq([saved.kind, saved.loyalty], ["loyalty", "Můj Albert"]);
+  const plain = s.offers.find((o) => o.price === 44.9);
+  eq([plain.kind, plain.loyalty, plain.regular_price], ["promo", "", 54.9], "původní cena se doplní i k ceně bez aplikace");
   eq(s.usage(), 2);
 });
 
-Deno.test("leták bez textu (COOP): cenu musí potvrdit druhé nezávislé čtení strany", async () => {
+Deno.test("leták bez textu (COOP): dvě shodná čtení AI = jen neověřená cena, neshoda = nic", async () => {
   const read = () => JSON.stringify([
     { item: "Máslo", product: "Máslo Madeta", label: "250 g", price: 39.9, pack_qty: 250, pack_unit: "g", page: 1 },
     { item: "Vepřová pečeně bez kosti", product: "Vepřová pečeně bez kosti", price: 129.9, pack_qty: 1, pack_unit: "kg", page: 2 },
   ]);
   const s = fakeServer({ read, check: (_id, line) => (line.includes("Máslo") ? 39.9 : 119.9) });
   const r = await refresh(s, { chains: ["coop"] });
-  eq([r.found, r.verified, r.unverified], [2, 1, 1]);
+  eq([r.found, r.verified, r.unverified], [1, 0, 1]);
   eq([s.calls.read, s.calls.check], [1, 2], "jedno čtení obou stran, kontrola každé strany zvlášť");
   const d = r.diag[0];
-  eq(d.offers.map((o: any) => [o.product, o.verified, o.method]), [["Máslo Madeta", true, "leták-2×"], ["Vepřová pečeně bez kosti", false, ""]]);
+  eq(d.offers.map((o: any) => [o.product, o.verified, o.method]), [["Máslo Madeta", false, "leták-2×"]]);
   eq(s.offers.map((o) => [o.verified, o.valid_to, o.source_url]), [
-    [true, "2026-11-17", "https://www.zkdsusice.cz/letak_tuty"],
     [false, "2026-11-17", "https://www.zkdsusice.cz/letak_tuty"],
   ]);
+  eq(d.rejected.map((x: any) => x.product), ["Vepřová pečeně bez kosti"]);
   ok(d.pages.some((p: any) => p.url === "https://www.zkdsusice.cz/letak_tip" && p.status === 404), "nestažená stránka je v diagnostice");
 });
 
@@ -620,10 +644,15 @@ Deno.test("nabídka z ChatGPT se ověří stránkou; bez přihlášení nic", as
     action: "submit",
     chain: "penny",
     provider: "chatgpt",
-    offer: { product: "Máslo 250 g", price: 39.9, valid_to: "2026-11-17", source_url: "https://www.penny.cz/nabidky/maslo" },
+    offer: { product: "Máslo 250 g", price: 39.9, pack_qty: 250, pack_unit: "g", valid_to: "2026-11-17", source_url: "https://www.penny.cz/nabidky/maslo" },
   }), ENV, s.fetchImpl, NOW)).json();
   eq(r.saved, true);
   eq(r.verified, true);
+  const regular = await handle(req({
+    action: "submit", chain: "penny", provider: "chatgpt",
+    offer: { product: "Máslo 250 g", price: 49.9, conditions: "běžná cena", valid_to: "2026-11-17", source_url: "https://www.penny.cz/nabidky/maslo" },
+  }), ENV, s.fetchImpl, NOW);
+  eq(regular.status, 400, "běžná cena se jako akce neuloží");
   eq(s.offers[0].provider, "chatgpt");
   eq((await handle(req({ action: "status" }, ""), ENV, s.fetchImpl, NOW)).status, 401);
 });
@@ -640,4 +669,94 @@ Deno.test("otisk letáků se mění s novým letákem", () => {
   const a = flyersKey({ flyers: [f], offers: [], log: [] });
   ok(a === flyersKey({ flyers: [f], offers: [], log: [] }));
   ok(a !== flyersKey({ flyers: [{ ...f, id: "47sm_akcni_letak" }], offers: [], log: [] }));
+});
+
+// ---- druh ceny (skutečné případy z letáků 18.–24. 11. 2026)
+
+Deno.test("druh ceny: věrnostní, bez karty, běžná", () => {
+  eq(classifyPrice("s aplikací Můj Albert"), { loyalty: true, without: false, regular: false });
+  eq(classifyPrice("bez aplikace"), { loyalty: false, without: true, regular: false });
+  eq(classifyPrice("Clubcard cena"), { loyalty: true, without: false, regular: false });
+  eq(classifyPrice("s PENNY kartou"), { loyalty: true, without: false, regular: false });
+  eq(classifyPrice("bez PENNY karty"), { loyalty: false, without: true, regular: false });
+  eq(classifyPrice("běžná cena"), { loyalty: false, without: false, regular: true });
+  eq(classifyPrice(""), { loyalty: false, without: false, regular: false });
+});
+
+const BASE = { valid_from: "2026-11-18", valid_to: "2026-11-24", source_url: "https://letaky.albert.cz/x/page/2" };
+
+Deno.test("Albert máslo: prohozené ceny s aplikací a bez aplikace se opraví", () => {
+  // V databázi bylo 32,90 „s aplikací“ a 27,90 „bez aplikace“ – leták říká opak.
+  const r = normalizeOffers("albert", [
+    { ...BASE, product: "Česká chuť máslo 82%", pack_qty: 250, pack_unit: "g", price: 32.9, regular_price: 54.9, conditions: "s aplikací Můj Albert" },
+    { ...BASE, product: "Česká chuť máslo 82%", pack_qty: 250, pack_unit: "g", price: 27.9, regular_price: 54.9, conditions: "bez aplikace" },
+  ]);
+  eq(r.offers.map((o) => [o.price, o.conditions, o.loyalty]), [
+    [27.9, "s aplikací Můj Albert", "Můj Albert"],
+    [32.9, "bez aplikace", ""],
+  ]);
+  ok(r.dropped.some((d) => d.reason.includes("prohozené")));
+});
+
+Deno.test("běžná cena se neuloží jako akce, stane se původní cenou", () => {
+  const t = { ...BASE, source_url: "https://www.itesco.cz/akce" };
+  const r = normalizeOffers<RawOffer>("tesco", [
+    { ...t, product: "Horácký eidam 30%", pack_qty: 100, pack_unit: "g", price: 41.9, conditions: "běžná cena" },
+    { ...t, product: "Horácký eidam 30%", pack_qty: 100, pack_unit: "g", price: 24.9, conditions: "Clubcard" },
+    { ...t, product: "Smetanito", pack_qty: 500, pack_unit: "g", price: 99.9, conditions: "běžná cena" },
+  ]);
+  eq(r.offers.map((o) => [o.product, o.price, o.regular_price, o.loyalty]), [["Horácký eidam 30%", 24.9, 41.9, "Clubcard"]]);
+  eq(r.dropped, [{ product: "Smetanito", reason: "běžná cena, ne akce" }]);
+});
+
+Deno.test("akce dražší než běžná cena se zahodí; jiné balení není totéž zboží", () => {
+  const r = normalizeOffers("penny", [
+    { ...BASE, product: "Máslo", pack_qty: 250, pack_unit: "g", price: 59.9, regular_price: 49.9 },
+    { ...BASE, product: "Máslo", pack_qty: 125, pack_unit: "g", price: 24.9, regular_price: 29.9 },
+  ]);
+  eq(r.offers.map((o) => o.pack_qty), [125]);
+  eq(r.dropped[0].reason, "cena není nižší než běžná cena");
+});
+
+Deno.test("platnost uvedená u zboží zúží platnost letáku (budoucí akce = Platí od)", () => {
+  const r = normalizeOffers("tesco", [
+    { ...BASE, product: "Vepřová krkovice", price: 89.9, pack_qty: 1, pack_unit: "kg", conditions: "Clubcard, platí 20.11.–22.11." },
+    { ...BASE, product: "Moravská šunka", price: 19.9, pack_qty: 100, pack_unit: "g", conditions: "platí 18.11.–01.12.2026" },
+  ]);
+  eq(r.offers.map((o) => [o.product, o.valid_from, o.valid_to]), [
+    ["Vepřová krkovice", "2026-11-20", "2026-11-22"],
+    ["Moravská šunka", "2026-11-18", "2026-11-24"],
+  ], "delší platnost u zboží letáková data neprodlouží");
+});
+
+Deno.test("gramáž v textu: g/kg, ml/l, ks a desetinná čárka", () => {
+  eq(packInText("Madeta máslo • 250 g • 100 g = 17,96 Kč", 250, "g"), true);
+  eq(packInText("Madeta máslo • 250g", 250, "g"), true);
+  eq(packInText("Madeta máslo • 2500 g", 250, "g"), false);
+  eq(packInText("brambory 2 kg", 2000, "g"), true);
+  eq(packInText("řízky 1 kg 189,-", 1, "kg"), true);
+  eq(packInText("mléko 1,5 l", 1.5, "l"), true);
+  eq(packInText("mléko 1 l", 1.5, "l"), false);
+  eq(packInText("vejce M 10 ks", 10, "ks"), true);
+  eq(packInText("máslo", null, "g"), false);
+});
+
+Deno.test("dřív uložená neověřená cena se novým čtením ověří; stažení se zaznamená", async () => {
+  const s = fakeServer({ read: ALBERT_READ, check: () => 34.9 });
+  await refresh(s, { chains: ["albert"] });
+  const row = s.offers.find((o) => o.price === 34.9);
+  Object.assign(row, { verified: false, verify_method: "leták-text", source_title: "čeká na nové ověření" });
+  const r = await refresh(s, { chains: ["albert"], force: true });
+  ok(r.duplicates > 0);
+  eq([row.verified, row.kind, row.loyalty], [true, "loyalty", "Můj Albert"]);
+  eq(s.offers.filter((o) => o.price === 34.9).length, 1, "žádný dvojitý záznam");
+  eq(s.runs.map((x) => [x.chain, x.ok]), [["albert", true], ["albert", true]]);
+});
+
+Deno.test("nedostupný leták: stažení se zaznamená jako chyba", async () => {
+  const s = fakeServer({ sites: {} });
+  await refresh(s, { chains: ["lidl"] });
+  eq(s.runs.length, 1);
+  eq([s.runs[0].chain, s.runs[0].ok], ["lidl", false]);
+  ok(s.runs[0].error.length > 0);
 });

@@ -28,6 +28,8 @@ class PriceOffer {
     this.provider = '',
     this.verified = false,
     this.verifyMethod = '',
+    this.kind = 'promo',
+    this.loyalty = '',
   });
 
   final String id;
@@ -49,6 +51,32 @@ class PriceOffer {
   final String provider;
   final bool verified;
   final String verifyMethod;
+
+  /// `promo` akční cena, `loyalty` jen s věrnostní kartou / aplikací,
+  /// `regular` běžná cena (není akce – nezobrazuje se ani nepočítá).
+  final String kind;
+
+  /// Název věrnostního programu („Clubcard“, „Můj Albert“…), jinak prázdné.
+  final String loyalty;
+
+  bool get isRegular => kind == 'regular';
+  bool get needsLoyalty => kind == 'loyalty';
+
+  /// Akce začne až po [day] („Platí od“).
+  bool startsAfter(DateTime day) =>
+      validFrom != null &&
+      _day(validFrom!).isAfter(DateTime(day.year, day.month, day.day));
+
+  /// Sleva v procentech proti původní ceně (jen když je původní cena známá).
+  int? get discountPercent {
+    final r = regularPrice;
+    if (r == null || r <= price) return null;
+    return ((1 - price / r) * 100).round();
+  }
+
+  /// Cena za kg / l (nebo za kus), když je známé balení.
+  ({double price, String unit})? get unitPrice =>
+      unitPriceOf(price, packQty, packUnit);
 
   bool appliesTo(Store store) =>
       chain == store.chain && (storeId == null || storeId == store.id);
@@ -79,6 +107,8 @@ class PriceOffer {
     provider: j['provider'] as String? ?? '',
     verified: j['verified'] == true,
     verifyMethod: j['verify_method'] as String? ?? '',
+    kind: j['kind'] as String? ?? 'promo',
+    loyalty: j['loyalty'] as String? ?? '',
   );
 
   Map<String, dynamic> toJson() => {
@@ -99,6 +129,77 @@ class PriceOffer {
     'provider': provider,
     'verified': verified,
     'verify_method': verifyMethod,
+    'kind': kind,
+    'loyalty': loyalty,
+  };
+}
+
+/// Cena za kg / l / kus z ceny balení: 250 g za 27,90 → 111,60 Kč/kg.
+({double price, String unit})? unitPriceOf(
+  double price,
+  double? qty,
+  String unit,
+) {
+  if (qty == null || qty <= 0) return null;
+  final u = foldText(unit).replaceAll('.', '').trim();
+  final (double base, String label) = switch (u) {
+    'g' => (qty / 1000, 'kg'),
+    'kg' => (qty, 'kg'),
+    'ml' => (qty / 1000, 'l'),
+    'l' => (qty, 'l'),
+    'ks' => (qty, 'ks'),
+    _ => (0, ''),
+  };
+  if (base <= 0) return null;
+  return (price: (price / base * 100).round() / 100, unit: label);
+}
+
+/// Smí se cena použít v přesném výpočtu? Jen ověřená akce, ne běžná cena,
+/// a věrnostní cena jen u řetězce, jehož kartu / aplikaci uživatel má.
+bool usableOffer(PriceOffer o, Set<String>? loyaltyChains) =>
+    o.verified &&
+    !o.isRegular &&
+    (!o.needsLoyalty ||
+        loyaltyChains == null ||
+        loyaltyChains.contains(o.chain));
+
+/// Stav stahování letáků jednoho řetězce (tabulka `price_runs`).
+class ChainUpdate {
+  const ChainUpdate({this.lastOk, this.lastFail, this.error = ''});
+
+  /// Poslední úspěšné stažení letáků.
+  final DateTime? lastOk;
+
+  /// Poslední nepovedené stažení (jen když je novější než úspěch).
+  final DateTime? lastFail;
+  final String error;
+
+  /// Poslední pokus selhal – zobrazit varování.
+  bool get failing =>
+      lastFail != null && (lastOk == null || lastFail!.isAfter(lastOk!));
+}
+
+/// Poslední úspěch a poslední chyba po řetězcích (řádky od nejnovějšího).
+Map<String, ChainUpdate> chainUpdates(List<Map<String, dynamic>> rows) {
+  final ok = <String, DateTime>{};
+  final fail = <String, (DateTime, String)>{};
+  for (final r in rows) {
+    final chain = r['chain'] as String? ?? '';
+    final at = DateTime.tryParse(r['ran_at'] as String? ?? '')?.toLocal();
+    if (chain.isEmpty || at == null) continue;
+    if (r['ok'] == true) {
+      if (ok[chain] == null || at.isAfter(ok[chain]!)) ok[chain] = at;
+    } else if (fail[chain] == null || at.isAfter(fail[chain]!.$1)) {
+      fail[chain] = (at, r['error'] as String? ?? '');
+    }
+  }
+  return {
+    for (final c in {...ok.keys, ...fail.keys})
+      c: ChainUpdate(
+        lastOk: ok[c],
+        lastFail: fail[c]?.$1,
+        error: fail[c]?.$2 ?? '',
+      ),
   };
 }
 
@@ -279,11 +380,19 @@ BestBuy computeBestBuy({
   required List<ReceiptPrice> receipts,
   required DateTime today,
   List<Store> stores = susiceStores,
+  Set<String>? loyaltyChains,
 }) {
   final prices = <Store, Map<String, ItemPrice>>{};
   for (final store in stores) {
     for (final item in items) {
-      final p = priceInStore(item, store, offers, receipts, today);
+      final p = priceInStore(
+        item,
+        store,
+        offers,
+        receipts,
+        today,
+        loyaltyChains: loyaltyChains,
+      );
       if (p != null) (prices[store] ??= {})[item.id] = p;
     }
   }
@@ -359,10 +468,12 @@ ItemPrice? priceInStore(
   List<ReceiptPrice> receipts,
   DateTime today, {
   Duration receiptMaxAge = const Duration(days: 120),
+  Set<String>? loyaltyChains,
 }) {
   ItemPrice? best;
   for (final o in offers) {
-    if (!o.verified || !o.appliesTo(store) || !o.activeOn(today)) continue;
+    if (!usableOffer(o, loyaltyChains)) continue;
+    if (!o.appliesTo(store) || !o.activeOn(today)) continue;
     if (!productMatches(item.name, o.product)) continue;
     final packs = packsNeeded(item, o.packQty, o.packUnit);
     final p = ItemPrice(
@@ -401,11 +512,12 @@ ItemPrice? priceInStore(
 ({PriceOffer offer, double cost})? bestOfferFor(
   BuyItem item,
   List<PriceOffer> offers,
-  DateTime today,
-) {
+  DateTime today, {
+  Set<String>? loyaltyChains,
+}) {
   ({PriceOffer offer, double cost})? best;
   for (final o in offers) {
-    if (!o.verified || !o.activeOn(today)) continue;
+    if (!usableOffer(o, loyaltyChains) || !o.activeOn(today)) continue;
     if (!productMatches(item.name, o.product)) continue;
     final cost = o.price * packsNeeded(item, o.packQty, o.packUnit);
     if (best == null || cost < best.cost) best = (offer: o, cost: cost);
@@ -421,6 +533,7 @@ List<PriceOffer> unverifiedOffersFor(
 ) => [
   for (final o in offers)
     if (!o.verified &&
+        !o.isRegular &&
         o.activeOn(today) &&
         productMatches(item.name, o.product))
       o,

@@ -268,6 +268,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         onTap: () => context.push(Routes.importRecipe),
                       ),
                       _FeatureTile(
+                        icon: Icons.sell_outlined,
+                        title: 'Akce',
+                        subtitle: 'Letáky v Sušici',
+                        onTap: () => context.push(Routes.offers),
+                      ),
+                      _FeatureTile(
                         icon: Icons.local_offer_outlined,
                         title: 'Recepty z akcí',
                         subtitle: 'Levně v Sušici',

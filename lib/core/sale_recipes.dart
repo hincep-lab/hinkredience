@@ -45,7 +45,7 @@ List<PriceOffer> usableOffers(List<PriceOffer> offers, DateTime today) {
   final day = DateTime(today.year, today.month, today.day);
   return [
     for (final o in offers)
-      if (o.verified && !o.validTo.isBefore(day)) o,
+      if (o.verified && !o.isRegular && o.activeOn(day)) o,
   ];
 }
 

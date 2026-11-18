@@ -376,26 +376,22 @@ export async function verifyOffer(
   if (!isOfficial(chain, offer.source_url)) {
     return { verified: false, method: "", reason: "zdroj není oficiální web řetězce" };
   }
-  if (pageTextKnown !== undefined) {
-    return priceNearProduct(pageTextKnown, offer.product, offer.price)
-      ? { verified: true, method: "stránka", reason: "cena je na oficiální stránce u produktu" }
-      : { verified: false, method: "", reason: "cena u produktu na oficiální stránce není" };
-  }
-  if (evidence) {
-    for (const s of evidence.supports) {
-      if (!mentionsPrice(s.text, offer.price)) continue;
-      if (s.sources.some((src) => isOfficial(chain, src))) {
-        return { verified: true, method: "citace", reason: "cenu dokládá citace oficiálního webu" };
-      }
+  // Ověřená = cena u produktu i gramáž přímo v textu oficiální stránky.
+  // Samotný odkaz ani citace z odpovědi AI nestačí.
+  const onPage = (text: string): Verdict => {
+    if (!priceNearProduct(text, offer.product, offer.price)) {
+      return { verified: false, method: "", reason: "cena u produktu na oficiální stránce není" };
     }
-  }
+    if (!packInText(text, offer.pack_qty, offer.pack_unit)) {
+      return { verified: false, method: "", reason: "gramáž zboží na oficiální stránce není" };
+    }
+    return { verified: true, method: "stránka", reason: "cena i gramáž jsou na oficiální stránce u produktu" };
+  };
+  if (pageTextKnown !== undefined) return onPage(pageTextKnown);
+  void evidence;
   try {
     const page = await fetchPage(chain, offer.source_url, fetchImpl);
-    if (page.text) {
-      return priceNearProduct(page.text, offer.product, offer.price)
-        ? { verified: true, method: "stránka", reason: "cena je na oficiální stránce u produktu" }
-        : { verified: false, method: "", reason: "cenu u produktu se na stránce nepodařilo najít" };
-    }
+    if (page.text) return onPage(page.text);
     return { verified: false, method: "", reason: `zdroj se nepodařilo stáhnout (${page.note})` };
   } catch {
     return { verified: false, method: "", reason: "zdroj se nepodařilo ověřit" };
@@ -578,6 +574,126 @@ export function dateRange(text: string, fallbackYear?: number): { from: string |
   let y1 = Number(m[3] ?? y2);
   if (!m[3] && Number(m[2]) > Number(m[5])) y1 = y2 - 1; // prosinec → leden
   return { from: iso(y1, Number(m[2]), Number(m[1])), to: iso(y2, Number(m[5]), Number(m[4])) };
+}
+
+// ------------------------------------------- druh ceny a věrnostní karty
+
+/** Věrnostní program řetězce (název pro aplikaci). */
+export const LOYALTY: Record<string, string> = {
+  tesco: "Clubcard",
+  albert: "Můj Albert",
+  penny: "PENNY karta",
+  lidl: "Lidl Plus",
+  jip: "věrnostní karta JIP",
+  coop: "věrnostní karta COOP",
+};
+
+/** Co podmínka u ceny znamená: věrnostní cena, cena „bez karty/aplikace“, nebo běžná (neakční) cena. */
+export function classifyPrice(conditions: string): { loyalty: boolean; without: boolean; regular: boolean } {
+  const c = fold(conditions ?? "");
+  const without = /\bbez\b.{0,14}(aplikac|kart|clubcard|lidl ?plus|kupon|clenstv)/.test(c);
+  const loyalty = !without &&
+    /(clubcard|aplikac|penny ?kart|lidl ?plus|muj albert|kupon|clensk|pro cleny|clenove|s kartou|vernostni kart)/.test(c);
+  const regular = !loyalty && !without && /(bezna cena|puvodni cena|cena bez slevy|bezne)/.test(c);
+  return { loyalty, without, regular };
+}
+
+export type Normalized<T> = T & { loyalty: string };
+
+/**
+ * Úklid nabídek jednoho zdroje před uložením:
+ * - běžná (neakční) cena se neukládá jako akce – stane se původní cenou akce,
+ * - věrnostní cena musí být nižší než cena bez karty (AI je občas prohodí),
+ * - cena „bez karty“ bez vlastní původní ceny je běžná cena (Penny),
+ * - akce, která není levnější než běžná cena, se zahodí,
+ * - platnost uvedená přímo u zboží („platí 20.11.–22.11.“) platnost zúží.
+ */
+export function normalizeOffers<T extends RawOffer>(
+  chain: string,
+  list: T[],
+): { offers: Normalized<T>[]; dropped: Rejected[] } {
+  const dropped: Rejected[] = [];
+  const groups = new Map<string, T[]>();
+  for (const o of list) {
+    const key = `${fold(o.product).replace(/[^a-z0-9]+/g, " ").trim()}|${o.pack_qty ?? ""}|${fold(o.pack_unit ?? "")}`;
+    groups.set(key, [...(groups.get(key) ?? []), o]);
+  }
+  const out: Normalized<T>[] = [];
+  for (const group of groups.values()) {
+    const tagged = group.map((o) => ({ o: { ...o }, c: classifyPrice(o.conditions ?? "") }));
+    const regulars = tagged.filter((t) => t.c.regular);
+    const promos = tagged.filter((t) => !t.c.regular);
+    for (const r of regulars) {
+      if (!promos.length) dropped.push({ product: r.o.product, reason: "běžná cena, ne akce" });
+    }
+    if (!promos.length) continue;
+    // Původní cena: řádek „běžná cena“, jinak původní cena uvedená u jiné ceny téhož zboží.
+    const stated = promos.map((t) => t.o.regular_price).filter((x): x is number => typeof x === "number" && x > 0);
+    const regularPrice = regulars.length
+      ? Math.max(...regulars.map((r) => r.o.price))
+      : stated.length ? Math.max(...stated) : null;
+    // Prohozené ceny s kartou a bez karty: věrnostní cena je vždy ta nižší.
+    const loyal = promos.filter((t) => t.c.loyalty);
+    const plain = promos.filter((t) => t.c.without || (!t.c.loyalty && !t.c.regular));
+    if (loyal.length === 1 && plain.length === 1 && loyal[0].o.price > plain[0].o.price) {
+      const lp = loyal[0].o.price;
+      loyal[0].o.price = plain[0].o.price;
+      plain[0].o.price = lp;
+      dropped.push({ product: loyal[0].o.product, reason: "ceny s kartou a bez karty byly prohozené – opraveno" });
+    }
+    for (const t of promos) {
+      const o = t.o;
+      if (o.regular_price == null && regularPrice != null) o.regular_price = regularPrice;
+      if (o.regular_price != null && o.price >= o.regular_price - 0.005) {
+        dropped.push({ product: o.product, reason: "cena není nižší než běžná cena" });
+        continue;
+      }
+      // Platnost přímo u zboží smí platnost letáku jen zúžit.
+      if (o.conditions) {
+        const year = Number(o.valid_to.slice(0, 4)) || undefined;
+        const r = dateRange(o.conditions, year);
+        if (r.from && r.to && r.from <= r.to) {
+          if ((!o.valid_from || r.from > o.valid_from) && r.from <= o.valid_to) o.valid_from = r.from;
+          if (r.to < o.valid_to && (!o.valid_from || r.to >= o.valid_from)) o.valid_to = r.to;
+        }
+      }
+      out.push({ ...o, loyalty: t.c.loyalty ? (LOYALTY[chain] ?? "věrnostní karta") : "" });
+    }
+  }
+  return { offers: out, dropped };
+}
+
+/** Stojí v textu balení / gramáž zboží (např. „250 g“, „0,25 kg“, „1 kg“, „10 ks“)? */
+export function packInText(text: string, qty: number | null | undefined, unit: string | undefined): boolean {
+  if (qty == null || !(qty > 0) || !unit) return false;
+  const u = fold(unit).replace(/\./g, "").trim();
+  const forms: string[] = [];
+  const n = (v: number) => {
+    const s = String(Math.round(v * 1000) / 1000);
+    return [s, s.replace(".", ",")];
+  };
+  const add = (v: number, units: string[]) => {
+    for (const num of n(v)) for (const un of units) forms.push(`${num.replace(/[.,]/, "[.,]")}\\s?${un}`);
+  };
+  if (u === "g") {
+    add(qty, ["g", "gr"]);
+    if (qty >= 100) add(qty / 1000, ["kg"]);
+  } else if (u === "kg") {
+    add(qty, ["kg"]);
+    add(qty * 1000, ["g"]);
+  } else if (u === "ml") {
+    add(qty, ["ml"]);
+    if (qty >= 100) add(qty / 1000, ["l"]);
+  } else if (u === "l") {
+    add(qty, ["l", "litr"]);
+    add(qty * 1000, ["ml"]);
+  } else if (u === "ks") {
+    add(qty, ["ks", "kus"]);
+  } else {
+    add(qty, [u]);
+  }
+  const t = fold(text);
+  return forms.some((f) => new RegExp(`(?<![\\d,.])${f}(?![a-z])`).test(t));
 }
 
 function nextData(html: string): any {
@@ -1049,8 +1165,12 @@ export async function loadSources(chain: string, fetchImpl: FetchLike, today: st
 }
 
 /** Krátký otisk sady letáků – stejné letáky se pro stejný produkt nečtou znovu. */
+/** Verze pravidel třídění a ověřování cen (součást otisku pro mezipaměť). */
+export const RULES = "r3";
+
 export function flyersKey(src: Sources): string {
-  const s = src.flyers.map((f) => `${f.id}|${f.validTo}|${f.pages.length}`).sort().join(";") + `#${src.offers.length}`;
+  // RULES: při změně pravidel ověřování se letáky přečtou znovu.
+  const s = `${RULES}:` + src.flyers.map((f) => `${f.id}|${f.validTo}|${f.pages.length}`).sort().join(";") + `#${src.offers.length}`;
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(36);
@@ -1092,7 +1212,12 @@ export function priceInFlyerText(text: string, price: number): boolean {
  * Ověření v textu strany: název produktu musí být v textu a cena musí stát
  * blízko něj (do 300 znaků) – cena jiného zboží z jiného místa strany nestačí.
  */
-export function verifiedByText(page: FlyerPage, product: string, price: number): boolean {
+export function verifiedByText(
+  page: FlyerPage,
+  product: string,
+  price: number,
+  pack?: { qty: number | null | undefined; unit: string | undefined },
+): boolean {
   if (!page.fullText || !page.text) return false;
   const need = matchStems(product).filter((s) => !/^\d/.test(s));
   if (need.length === 0) return false;
@@ -1107,7 +1232,11 @@ export function verifiedByText(page: FlyerPage, product: string, price: number):
     if (!stemsMatch(main, w.stem)) continue;
     const near = words.filter((o) => Math.abs(o.at - w.at) <= 120).map((o) => o.stem);
     if (matchedCount(need, near) < want) continue;
-    if (priceInFlyerText(text.slice(Math.max(0, w.at - 300), w.at + 300), price)) return true;
+    const around = text.slice(Math.max(0, w.at - 300), w.at + 300);
+    if (!priceInFlyerText(around, price)) continue;
+    // Gramáž musí stát u zboží taky (bez ní cena ověřená není).
+    if (pack && !packInText(around, pack.qty, pack.unit)) continue;
+    return true;
   }
   return false;
 }
@@ -1490,6 +1619,15 @@ class Db {
     });
   }
 
+  /** Záznam o jednom stažení zdrojů řetězce (pro „naposledy aktualizováno“ a varování). */
+  async logRun(chain: string, ok: boolean, error: string, offers: number) {
+    await this.rest("price_runs", {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ chain, ok, error, offers }),
+    });
+  }
+
   /** Uloží nabídku; duplicitní (stejný produkt, cena a konec platnosti) přeskočí. */
   async insertOffer(row: Record<string, unknown>): Promise<boolean> {
     try {
@@ -1500,8 +1638,30 @@ class Db {
       });
       return true;
     } catch (e) {
-      if ((e as { status?: number }).status === 409) return false;
-      throw e;
+      if ((e as { status?: number }).status !== 409) throw e;
+      // Už uložená nabídka: převezme nové roztřídění (oprava prohozených cen,
+      // původní cena) a ověření. Ověřená cena se nikdy nezmění na neověřenou
+      // čtením AI – jen novým ověřením.
+      const q = (v: unknown) => encodeURIComponent(String(v));
+      const filter = `chain=eq.${q(row.chain)}&product_key=eq.${q(row.product_key)}&price=eq.${q(row.price)}&valid_to=eq.${q(row.valid_to)}` +
+        (row.store_id ? `&store_id=eq.${q(row.store_id)}` : "&store_id=is.null");
+      const patch: Record<string, unknown> = {
+        conditions: row.conditions, kind: row.kind, loyalty: row.loyalty,
+      };
+      if (row.regular_price != null) patch.regular_price = row.regular_price;
+      if (row.verified) {
+        Object.assign(patch, {
+          verified: true, verify_method: row.verify_method, verified_at: row.verified_at,
+          source_title: row.source_title, source_url: row.source_url,
+          pack_qty: row.pack_qty, pack_unit: row.pack_unit, valid_from: row.valid_from,
+        });
+      }
+      await this.rest(`price_offers?${filter}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(patch),
+      }).catch(() => {});
+      return false;
     }
   }
 }
@@ -1746,7 +1906,7 @@ export async function handle(
           }
         };
 
-        const save = async (chain: string, offer: RawOffer, item: string, verdict: Verdict, provider: string, d: ChainDiag) => {
+        const save = async (chain: string, offer: RawOffer & { loyalty?: string }, item: string, verdict: Verdict, provider: string, d: ChainDiag) => {
           const storeId = offer.store_id && STORES[offer.store_id] === chain ? offer.store_id : null;
           const inserted = await db.insertOffer({
             chain,
@@ -1759,6 +1919,8 @@ export async function handle(
             pack_unit: offer.pack_unit ?? "",
             regular_price: offer.regular_price ?? null,
             conditions: offer.conditions ?? "",
+            kind: offer.loyalty ? "loyalty" : "promo",
+            loyalty: offer.loyalty ?? "",
             valid_from: offer.valid_from && offer.valid_from <= offer.valid_to ? offer.valid_from : null,
             valid_to: offer.valid_to,
             source_url: /^https:\/\//.test(offer.source_url) ? offer.source_url : `https://${CHAINS[chain].domains[0]}/`,
@@ -1817,6 +1979,7 @@ export async function handle(
           }
           if (todo.length === 0) {
             d.cached = true;
+            await db.logRun(chain, true, "", 0).catch(() => {});
             for (const f of src.flyers) d.sources.push({ kind: "leták", title: f.title, url: f.url, valid_from: f.validFrom, valid_to: f.validTo, size: f.pages.length, text: f.pages.some((p) => !!p.text), picked: [] });
             continue;
           }
@@ -1824,7 +1987,9 @@ export async function handle(
 
           // 3) Strukturovaná data webu (Penny): přesné ceny bez AI.
           let fromData = 0;
-          for (const offer of src.offers) {
+          const data = normalizeOffers(chain, src.offers);
+          d.rejected.push(...data.dropped);
+          for (const offer of data.offers) {
             const item = names.find((n) => productMatches(n, `${offer.product}`));
             if (!item || offer.valid_to < today || (offer.valid_from && offer.valid_from > addDays(today, 7))) continue;
             fromData++;
@@ -1894,7 +2059,9 @@ export async function handle(
             }), 2);
 
             // Ověření: nejdřív text téže strany, jinak kontrolní čtení strany.
-            const offers = results.flat().filter((o) => {
+            const norm = normalizeOffers(chain, results.flat());
+            d.rejected.push(...norm.dropped);
+            const offers = norm.offers.filter((o) => {
               if (o.valid_to < today) {
                 d.rejected.push({ product: o.product, reason: `akce skončila ${o.valid_to}` });
                 return false;
@@ -1905,8 +2072,8 @@ export async function handle(
             const byPage = new Map<number, FlyerOffer[]>();
             for (const o of offers) {
               const page = flyer.pages.find((p) => p.n === o.page)!;
-              if (verifiedByText(page, o.product, o.price)) {
-                verdicts.set(o, { verified: true, method: "leták-text", reason: `cena stojí v textu letáku u názvu zboží (str. ${o.page})` });
+              if (verifiedByText(page, o.product, o.price, { qty: o.pack_qty, unit: o.pack_unit })) {
+                verdicts.set(o, { verified: true, method: "leták-text", reason: `cena i gramáž stojí v textu letáku u názvu zboží (str. ${o.page})` });
               } else {
                 byPage.set(o.page, [...(byPage.get(o.page) ?? []), o]);
               }
@@ -1930,10 +2097,13 @@ export async function handle(
                 const p = prices.get(i + 1);
                 if (typeof p === "number" && Math.abs(p - o.price) < 0.005) {
                   agreed++;
-                  verdicts.set(o, { verified: true, method: "leták-2×", reason: `cenu potvrdilo druhé nezávislé čtení letáku (str. ${n})` });
+                  // Dvě čtení AI se shodla, ale samotná AI cenu neověřuje:
+                  // nabídka se ukáže jako neověřená a do přesného výpočtu nejde.
+                  verdicts.set(o, { verified: false, method: "leták-2×", reason: `jen čtení AI (2× shodně, str. ${n}) – cena v textu letáku není, neověřeno` });
                 } else {
-                  verdicts.set(o, {
-                    verified: false, method: "",
+                  // Čtení se neshodla – takovou cenu vůbec neukládat.
+                  d.rejected.push({
+                    product: o.product,
                     reason: typeof p === "number"
                       ? `druhé čtení letáku vyšlo jinak (${String(p).replace(".", ",")} Kč)`
                       : "druhé čtení letáku cenu nenašlo",
@@ -1943,13 +2113,16 @@ export async function handle(
               d.ai.push({ mode: "kontrola", model: env.geminiExtractModel, status: "ok", pages: label, offers: agreed, note: agreed === list.length ? "" : `shoda ${agreed} z ${list.length}` });
             }), 2);
             for (const o of offers) {
-              await save(chain, o, o.item, verdicts.get(o) ?? { verified: false, method: "", reason: "neověřeno" }, "gemini", d);
+              const v = verdicts.get(o);
+              if (!v) continue; // vyřazeno při kontrole
+              await save(chain, o, o.item, v, "gemini", d);
             }
           }
 
           summary.scanned += todo.length;
           summary.rejected += d.rejected.length;
           for (const e of d.errors) summary.errors.push(`${chain}: ${e}`);
+          await db.logRun(chain, sourceOk && d.errors.length === 0, d.errors.join("; ").slice(0, 500), d.offers.length).catch(() => {});
           if (complete && d.errors.length === 0) {
             await db.markScanned(chain, todo.map(([k]) => k), today, summary.provider ?? "web", `ok:${key}`, d.offers.length)
               .catch(() => {});
@@ -1970,6 +2143,7 @@ export async function handle(
         const offer = offers[0];
         const provider = payload?.provider === "chatgpt" ? "chatgpt" : "manual";
         if (offer.valid_to < today) return reply(400, { error: "Akce už skončila." });
+        if (classifyPrice(offer.conditions ?? "").regular) return reply(400, { error: "Běžná cena není akce." });
         if (!/^https:\/\//.test(offer.source_url)) return reply(400, { error: "Zdroj musí být adresa https://." });
         const verdict = await verifyOffer(chain, offer, null, today, fetchImpl);
         const storeId = offer.store_id && STORES[offer.store_id] === chain ? offer.store_id : null;
@@ -1984,6 +2158,8 @@ export async function handle(
           pack_unit: offer.pack_unit ?? "",
           regular_price: offer.regular_price ?? null,
           conditions: offer.conditions ?? "",
+          kind: classifyPrice(offer.conditions ?? "").loyalty ? "loyalty" : "promo",
+          loyalty: classifyPrice(offer.conditions ?? "").loyalty ? (LOYALTY[chain] ?? "věrnostní karta") : "",
           valid_from: offer.valid_from ?? null,
           valid_to: offer.valid_to,
           source_url: offer.source_url,
@@ -2006,7 +2182,7 @@ export async function handle(
   }
 }
 
-const VERSION = "letaky-2";
+const VERSION = "letaky-3";
 const NO_KEY = "chybí klíč Gemini (GEMINI_API_KEY) – leták nemá kdo přečíst";
 const NO_TIME = "nestihlo se dočíst všechny strany – spusťte hledání znovu, pokračuje se tam, kde se skončilo";
 
