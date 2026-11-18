@@ -124,6 +124,27 @@ class CoverSafetyTests(unittest.TestCase):
             self.assertEqual(url, "https://" + covers.EXPECTED_SUPABASE_HOST)
             self.assertEqual(key, "dummy")
 
+
+    def test_dry_run_does_not_generate_or_upload(self):
+        recipes = [{"id": "one", "title": "Polévka", "photos": []}]
+        with patch.object(sys, "argv", ["covers", "--limit", "1"]), \
+             patch.object(covers, "config", return_value=("https://example.supabase.co", "key", "owner")), \
+             patch.object(covers, "candidates", return_value=recipes), \
+             patch.object(covers, "generate_image") as generate, \
+             patch.object(covers, "upload") as upload, \
+             patch.object(covers, "attach_if_empty") as attach:
+            covers.main()
+            generate.assert_not_called()
+            upload.assert_not_called()
+            attach.assert_not_called()
+
+    def test_preexisting_photo_never_triggers_generation(self):
+        with patch.object(covers, "request", return_value=[
+            {"id": "one", "title": "Polévka", "photos": [{"id": "already"}]}
+        ]):
+            candidates = covers.candidates("https://example.supabase.co", "key", "owner")
+        self.assertEqual(candidates, [])
+
     def test_limit_has_upper_bound(self):
         self.assertEqual(covers.MAX_IMAGES, 5)
 
