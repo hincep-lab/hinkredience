@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 BUCKET = "recipe-photos"
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 10_000_000
+# Pinned to the current HINKredience Supabase project to prevent leaking a service-role key.
+EXPECTED_SUPABASE_HOST = "wjqpzoeheonjwdyyezhb.supabase.co"
 
 
 def request(method, url, headers=None, body=None):
@@ -33,8 +35,10 @@ def config():
     base = os.environ["SUPABASE_URL"].rstrip("/")
     from urllib.parse import urlsplit
     u = urlsplit(base)
-    if u.scheme != "https" or not u.hostname or u.username or u.password or u.query or u.fragment:
-        raise RuntimeError("SUPABASE_URL must be a clean HTTPS URL")
+    if (u.scheme != "https" or u.hostname != EXPECTED_SUPABASE_HOST
+            or u.port is not None or u.path not in ("", "/")
+            or u.username or u.password or u.query or u.fragment):
+        raise RuntimeError("SUPABASE_URL must match the HINKredience HTTPS project exactly")
     key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
     owner = os.environ["HINK_OWNER_ID"]
     uuid.UUID(owner)
