@@ -251,7 +251,6 @@ export async function generateImage(
         quality: settings.quality,
         output_format: "jpeg",
         output_compression: 82,
-        moderation: "auto",
       }),
       signal: AbortSignal.timeout(170_000),
     });
