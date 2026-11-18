@@ -200,11 +200,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('offer-a1')), findsNothing);
     expect(find.byKey(const ValueKey('offer-t1')), findsOneWidget);
-    await tester.dragUntilVisible(
-      find.byKey(const ValueKey('filter-verified')),
-      find.byKey(const PageStorageKey('offers-discount-row')),
-      const Offset(-200, 0),
-    );
     await tester.tap(find.byKey(const ValueKey('filter-verified')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('offer-t1')), findsNothing);

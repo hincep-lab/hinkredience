@@ -377,6 +377,12 @@ class _Filters extends StatelessWidget {
               ),
           ]),
         _row('offers-discount-row', [
+          FilterChip(
+            key: const ValueKey('filter-verified'),
+            label: const Text('Jen ověřené'),
+            selected: filter.verifiedOnly,
+            onSelected: onVerified,
+          ),
           for (final d in const [0, 20, 30, 50])
             ChoiceChip(
               key: ValueKey('filter-discount-$d'),
@@ -384,12 +390,6 @@ class _Filters extends StatelessWidget {
               selected: filter.minDiscount == d,
               onSelected: (_) => onDiscount(d),
             ),
-          FilterChip(
-            key: const ValueKey('filter-verified'),
-            label: const Text('Jen ověřené'),
-            selected: filter.verifiedOnly,
-            onSelected: onVerified,
-          ),
           if (filter.count > 0)
             ActionChip(
               key: const ValueKey('filter-clear'),
