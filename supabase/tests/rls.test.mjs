@@ -90,7 +90,7 @@ test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => 
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
     'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes', 'price_ai_usage', 'price_cron_key', 'price_offers', 'price_receipts', 'price_runs', 'price_scans',
-    'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
+    'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_cover_jobs', 'recipe_cover_settings', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
   const { rows } = await db.query(
@@ -871,4 +871,104 @@ test('štítky: ChatGPT je uloží, bez pole je nechá, migrace 17 je jen přid�
   // Cizí uživatel štítky nezmění.
   await as(CIZI, `update public.recipes set tags = '["Hack"]' where id = $1`, [created.id]);
   assert.ok(!(await tagsOf()).includes('Hack'));
+});
+
+test('automatické fotky: vypnuté, jen recepty bez fotky, limity a nic se nepřepíše', async () => {
+  // Uživatel nastavení, úlohy ani funkce nevidí a nespustí.
+  await denied(as(PAVEL, `select * from public.recipe_cover_settings`));
+  await denied(as(PAVEL, `update public.recipe_cover_settings set enabled = true`));
+  await denied(as(PAVEL, `select * from public.recipe_cover_jobs`));
+  await denied(as(PAVEL, `select * from public.cover_reserve(5, false)`));
+  await denied(as(PAVEL, `select public.cover_attach_if_empty(gen_random_uuid())`));
+  await db.query(`set role anon`);
+  await assert.rejects(db.query(`select * from public.cover_reserve(5, true)`));
+  await db.query(`reset role`);
+
+  // Výchozí stav: vypnuto, limit 5 denně, rozpočet 2 USD, střední kvalita.
+  const s = (await db.query(`select * from public.recipe_cover_settings`)).rows[0];
+  assert.equal(s.enabled, false);
+  assert.equal(s.daily_limit, 5);
+  assert.equal(Number(s.monthly_budget_usd), 2);
+  assert.equal(s.quality, 'medium');
+  await assert.rejects(db.query(`update public.recipe_cover_settings set daily_limit = 50`));
+  await assert.rejects(db.query(`update public.recipe_cover_settings set quality = 'high'`));
+
+  // Starší testovací recepty dostanou fotku, ať je kandidát jednoznačný.
+  await db.query(`update public.recipes set photos = '[{"id":"00000000-aaaa-4aaa-8aaa-000000000000","remote_path":"a/b/c.jpg"}]'
+    where coalesce(jsonb_array_length(photos), 0) = 0`);
+  const bare = (await as(PAVEL, `insert into public.recipes (title, category) values ('Guláš bez fotky', 'Hovězí maso') returning id`)).rows[0].id;
+  await as(PAVEL, `insert into public.recipe_ingredients (recipe_id, name) values ($1, 'Hovězí kližka')`, [bare]);
+  const withPhoto = (await as(PAVEL, `insert into public.recipes (title, photos) values ('Se svou fotkou',
+    '[{"id":"11111111-aaaa-4aaa-8aaa-111111111111","remote_path":"x/y/z.jpg"}]') returning id, photos`)).rows[0];
+  const before = (await db.query(`select id, photos, current_version from public.recipes order by id`)).rows;
+
+  // Vypnuto: ostrý běh nic nerezervuje, zkušební jen ukáže kandidáty.
+  assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.length, 0);
+  const dry = (await db.query(`select * from public.cover_reserve(5, true)`)).rows;
+  assert.ok(dry.some((r) => r.recipe_id === bare), 'recept bez fotky je kandidát');
+  assert.ok(!dry.some((r) => r.recipe_id === withPhoto.id), 'recept s fotkou ne');
+  assert.equal(dry.find((r) => r.recipe_id === bare).ingredients[0].name, 'Hovězí kližka');
+  assert.equal((await db.query(`select count(*)::int n from public.recipe_cover_jobs`)).rows[0].n, 0);
+
+  // Zapnuto, limit 1: rezervuje se jeden recept s cestou ve složce vlastníka.
+  await db.query(`update public.recipe_cover_settings set enabled = true, daily_limit = 1`);
+  const jobs = (await db.query(`select * from public.cover_reserve(5, false)`)).rows;
+  assert.equal(jobs.length, 1);
+  const job = jobs[0];
+  assert.match(job.path, new RegExp(`^${job.owner_id}/${job.recipe_id}/${job.photo_id}\\.jpg$`));
+  // Denní limit vyčerpán: další rezervace nic nevrátí.
+  assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.length, 0);
+  // Stejný recept nejde rezervovat dvakrát.
+  await assert.rejects(db.query(`insert into public.recipe_cover_jobs (recipe_id, owner_id) values ($1, $2)`,
+    [job.recipe_id, job.owner_id]));
+  // Cizí cesta se nepřijme.
+  await assert.rejects(db.query(`select public.cover_progress($1, 'generated', 'cizi/slozka/x.jpg')`, [job.job_id]));
+
+  // Přiřazení jen po nahrání a jen receptu bez fotky.
+  assert.equal((await db.query(`select public.cover_attach_if_empty($1) ok`, [job.job_id])).rows[0].ok, false);
+  await db.query(`select public.cover_progress($1, 'generated', $2)`, [job.job_id, job.path]);
+  await db.query(`select public.cover_progress($1, 'uploaded')`, [job.job_id]);
+  assert.equal(job.recipe_id, bare);
+  {
+    assert.equal((await db.query(`select public.cover_attach_if_empty($1) ok`, [job.job_id])).rows[0].ok, true);
+    const r = (await db.query(`select photos, current_version from public.recipes where id = $1`, [bare])).rows[0];
+    assert.equal(r.photos.length, 1);
+    assert.equal(r.photos[0].remote_path, job.path);
+    // Verze receptu, suroviny ani postup se nemění.
+    assert.equal(r.current_version, before.find((x) => x.id === bare).current_version);
+    assert.equal((await db.query(`select count(*)::int n from public.recipe_ingredients where recipe_id = $1`, [bare])).rows[0].n, 1);
+  }
+  // Ostatní recepty se nezměnily (fotky ani verze).
+  const after = (await db.query(`select id, photos, current_version from public.recipes order by id`)).rows;
+  for (const b of before) {
+    if (b.id === job.recipe_id) continue;
+    assert.deepEqual(after.find((a) => a.id === b.id), b);
+  }
+
+  // Závod: recept mezitím dostal fotku → přiřazení se odmítne, nic se nepřepíše.
+  await db.query(`update public.recipe_cover_settings set daily_limit = 5`);
+  const second = (await as(PAVEL, `insert into public.recipes (title) values ('Závod') returning id`)).rows[0].id;
+  const j2 = (await db.query(`select * from public.cover_reserve(5, false)`)).rows.find((r) => r.recipe_id === second);
+  assert.ok(j2, 'druhý recept rezervovaný');
+  await db.query(`select public.cover_progress($1, 'generated', $2)`, [j2.job_id, j2.path]);
+  await db.query(`select public.cover_progress($1, 'uploaded')`, [j2.job_id]);
+  await as(PAVEL, `update public.recipes set photos = '[{"id":"22222222-aaaa-4aaa-8aaa-222222222222","remote_path":"moje.jpg"}]' where id = $1`, [second]);
+  assert.equal((await db.query(`select public.cover_attach_if_empty($1) ok`, [j2.job_id])).rows[0].ok, false);
+  const kept = (await db.query(`select photos from public.recipes where id = $1`, [second])).rows[0].photos;
+  assert.equal(kept[0].remote_path, 'moje.jpg');
+  assert.equal((await db.query(`select status from public.recipe_cover_jobs where id = $1`, [j2.job_id])).rows[0].status, 'skipped');
+
+  // Rozpočet: při vyčerpání se nic nerezervuje.
+  await db.query(`update public.recipe_cover_settings set monthly_budget_usd = 0.05`);
+  await as(PAVEL, `insert into public.recipes (title) values ('Po rozpočtu')`);
+  assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.filter((r) => r.reason === 'nový').length, 0);
+  // Vypínač: enabled = false zastaví všechno nové.
+  await db.query(`update public.recipe_cover_settings set enabled = false, monthly_budget_usd = 2`);
+  assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.length, 0);
+
+  // Migrace jde spustit znovu a nastavení nepřepíše.
+  await db.query(`update public.recipe_cover_settings set daily_limit = 3`);
+  const sql = readFileSync(join(migrationsDir, '20261118000023_recipe_covers.sql'), 'utf8');
+  await db.exec(sql);
+  assert.equal((await db.query(`select daily_limit from public.recipe_cover_settings`)).rows[0].daily_limit, 3);
 });

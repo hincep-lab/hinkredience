@@ -1,29 +1,83 @@
-# Automatické titulní fotografie – bezpečné testování
+# Automatické hlavní fotografie receptů
 
-Tato experimentální funkce **není zapnutá ani nasazená**. Nemění Flutter aplikaci ani databázové schéma.
+Recepty bez fotky dostanou realistickou fotografii hotového jídla vygenerovanou
+přes OpenAI Images API. **Ve výchozím stavu je vše vypnuté.**
 
-## Ochranná opatření
-- Workflow je jen `workflow_dispatch`; bez pravidelného plánovače.
-- Výchozí spuštění je **dry-run** (žádné placené generování, žádný zápis fotografií).
-- Při `apply=true` nejvýše 1 až 5 obrázků za spuštění, default 1.
-- Cílí pouze na recepty konkrétního `HINK_OWNER_ID`, které mají prázdné `photos`.
-- Před uložením fotografie kontroluje, zda `photos` zůstává prázdné; nezasahuje do stávajících fotek.
-- Pokud podmíněný zápis bezpečně potvrdí, že recept už fotku má, nepřiřazený obrázek se odstraní. Pokud se při PATCH ztratí odpověď nebo není jasné, zda zápis proběhl, obrázek zůstane zachován, aby se nepoškodila případná již uložená hlavní fotografie; operátor musí stav prověřit.
-- GitHub workflow má `contents: read`, jedinou souběžnou instanci a oddělené prostředí `recipe-covers`.
-- Privilegovaný klíč se pošle pouze na pevně ověřenou adresu projektu `wjqpzoeheonjwdyyezhb.supabase.co`. Neplatná adresa ukončí běh ještě před síťovým dotazem.
+## Jak to funguje
 
-## Před použitím
-1. Na GitHubu vytvořit Environment `recipe-covers` s povinným schválením pro `apply=true` (pozor: GitHub Actions nemá podmíněné schvalování podle inputu; doporučuje se schválení každého běhu tohoto prostředí).
-2. Do jeho tajemství vložit `HINK_SUPABASE_URL`, `HINK_SUPABASE_SERVICE_ROLE_KEY`, `HINK_OWNER_ID` a `HINK_OPENAI_API_KEY`. Pro skutečný zápis je navíc nutný samostatný secret `HINK_COVER_WRITES_ENABLED=true`; bez něj je režim `--apply` blokován. **Nikdy je nevkládat do souborů, do chatu ani do veřejného zdrojového kódu.**
-3. `HINK_SUPABASE_SERVICE_ROLE_KEY` obchází RLS. Ideálně nahradit omezenou serverovou funkci před produkčním provozem. Zkontrolovat oprávnění prostředí.
-4. Nejprve v testovacím prostředí ověřit čtení receptů, generování PNG, nahrání do bucketu `recipe-photos`, synchronizaci a závod mezi dvěma změnami.
-5. Teprve potom nastavit `HINK_COVER_WRITES_ENABLED=true` v chráněném Environment a ručně spustit s `apply=true`, `limit=1`. Ověřit v aplikaci obrázek, původní data a běh synchronizace.
-6. Nezapínat denní plánovač, dokud tyto kontroly neprojdou.
+1. Jednou denně (11:13 UTC) databáze sama zavolá serverovou funkci
+   `recipe-covers` (pg_cron + pg_net). Funkci jde spustit jen tajným klíčem
+   plánované úlohy, který je uložený v databázi a nikdy ji neopustí.
+2. Databázová funkce `cover_reserve` v jedné transakci se zámkem:
+   - vybere nejvýš 5 receptů **bez fotky** (nejstarší první),
+   - ohlídá denní limit (`daily_limit`, nejvýš 5) a měsíční rozpočet
+     (`monthly_budget_usd`, nejvýš 20 USD),
+   - každému receptu založí úlohu (`recipe_cover_jobs`), recept má nejvýš 2 pokusy.
+3. Funkce vygeneruje jeden JPEG (výchozí `gpt-image-2`, kvalita `medium`,
+   1536 × 1024 – široký formát, který se dobře ořízne na kartu i záhlaví).
+4. Nahraje ho do `recipe-photos/<vlastník>/<recept>/<fotka>.jpg`
+   s `x-upsert: false` (existující soubor nepřepíše).
+5. `cover_attach_if_empty` ho nastaví jako hlavní fotku **jen když recept
+   žádnou nemá** – podmínka je přímo v příkazu `UPDATE`. Suroviny, postup ani
+   verze receptu se nemění. Aplikace i ChatGPT fotku uvidí po synchronizaci.
+6. Funkce ověří, že recept má právě tuto fotku a soubor existuje; výsledek
+   a případná chyba zůstanou v `recipe_cover_jobs`.
 
-## Ověření
-Offline testy pokrývají výběr prázdných fotografií, podmíněný zápis, prompt, blokování zápisů, nulové zápisy v dry-run režimu, přesnou adresu Supabase, závod při současné změně a nejednoznačný výsledek sítě. **Nenahrazují integrační test se Supabase.**
+## Ochrana
 
-## Limity
-Použití OpenAI Images API je placené a vyžaduje samostatný API kredit. Limit 1–5 za běh **není** rozpočtový limit v korunách; pro produkční provoz je potřeba doplnit účetní limit a přepínač vypnutí. Model lze změnit proměnnou `HINK_IMAGE_MODEL`.
+| Riziko | Ochrana |
+|---|---|
+| Přepsání existující fotky | `UPDATE … where photos je prázdné`; soubor `x-upsert: false`; kód nikde nemaže |
+| Dvojí generování | jedna aktivní úloha na recept (unikátní index), zámek běhu |
+| Dvojí účtování po chybě | nahraný, ale nepřiřazený obrázek se příště jen dokončí; přerušený požadavek se počítá jako zaplacený |
+| Překročení rozpočtu | denní limit a měsíční rozpočet v databázi (útrata = počet objednaných obrázků × cena) |
+| Únik klíčů | servisní klíč zůstává v Supabase; OpenAI má vlastní klíč `COVERS_OPENAI_API_KEY` jen v Secrets funkce; GitHub žádné klíče nepotřebuje |
+| Spuštění cizím | jen s tajným klíčem plánované úlohy; uživatelé ani veřejnost nemají k tabulkám a funkcím přístup |
+| Omyl s adresou projektu | servisní klíč se pošle jen na `wjqpzoeheonjwdyyezhb.supabase.co` |
 
-Záměrně nejsou změněny `main`, release workflow ani nasazená aplikace.
+## Náklady (OpenAI, listopad 2026)
+
+| Model | Kvalita | 1536 × 1024 |
+|---|---|---|
+| gpt-image-2 | medium | ~0,041 USD |
+| gpt-image-2 | low | ~0,005 USD |
+| GPT Image 1 mini | medium | ~0,015 USD |
+
+Výchozí nastavení: `gpt-image-2`, `medium`, cena pro rozpočet 0,041 USD,
+5 fotek denně, rozpočet 2 USD měsíčně. Všech 35 receptů bez fotky ≈ 1,45 USD.
+Kvalita `high` je v databázi záměrně zakázaná (4× dražší).
+
+## Ovládání (SQL, jen správce)
+
+```sql
+-- zapnout / okamžitě vypnout
+update recipe_cover_settings set enabled = true  where id = 1;
+update recipe_cover_settings set enabled = false where id = 1;
+-- limity
+update recipe_cover_settings set daily_limit = 3, monthly_budget_usd = 1.00 where id = 1;
+-- útrata a výsledky
+select * from cover_usage();
+select status, error, created_at from recipe_cover_jobs order by created_at desc limit 20;
+```
+
+Zkušební běh bez generování a zápisu: `{"action": "dry-run", "limit": 5}`.
+
+## Před zapnutím
+
+1. V OpenAI založit samostatný projekt s rozpočtovým limitem (např. 3 USD)
+   a v něm API klíč.
+2. Klíč vložit do Supabase → Edge Functions → Secrets jako
+   `COVERS_OPENAI_API_KEY` (nikdy do repozitáře ani do chatu).
+3. Použít migraci `20261118000023_recipe_covers.sql` a nasadit funkci
+   `recipe-covers` (bez ověření JWT – přihlašuje se klíčem plánované úlohy).
+4. Zkušební běh `dry-run`, pak jeden ostrý obrázek (`daily_limit = 1`),
+   kontrola v aplikaci, teprve potom `daily_limit = 5`.
+
+## Testy
+
+- `supabase/functions/recipe-covers/index_test.ts` – generování, nahrání,
+  závod s jinou fotkou, odmítnutý a přerušený požadavek, dokončení bez
+  nového generování, dry-run, klíče a oprávnění (Deno, bez sítě).
+- `supabase/tests/rls.test.mjs` – migrace v izolované databázi (PGlite):
+  vypnutý stav, výběr jen receptů bez fotky, denní limit, rozpočet, vypínač,
+  zákaz přepsání fotky, neměnnost ostatních receptů, oprávnění.
