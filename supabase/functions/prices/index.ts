@@ -1231,7 +1231,7 @@ function kupiText(html: string): string {
       .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
       .replace(/<a\b[^>]*?\bhref=["']([^"']+)["'][^>]*>/gi, (_, h) => ` ⟦${h.replace(/^https?:\/\/(?:www\.)?kupi\.cz/i, "")}⟧ `)
       .replace(/<[^>]+>/g, " "),
-  ).replace(/\s+/g, " ");
+  ).replace(/ilustrační obrázek/gi, " ").replace(/\s+/g, " ");
 }
 
 /**
