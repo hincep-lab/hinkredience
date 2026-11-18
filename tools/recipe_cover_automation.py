@@ -31,8 +31,10 @@ def request(method, url, headers=None, body=None):
 
 def config():
     base = os.environ["SUPABASE_URL"].rstrip("/")
-    if not base.startswith("https://"):
-        raise RuntimeError("SUPABASE_URL must be HTTPS")
+    from urllib.parse import urlsplit
+    u = urlsplit(base)
+    if u.scheme != "https" or not u.hostname or u.username or u.password or u.query or u.fragment:
+        raise RuntimeError("SUPABASE_URL must be a clean HTTPS URL")
     key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
     owner = os.environ["HINK_OWNER_ID"]
     uuid.UUID(owner)
@@ -53,6 +55,8 @@ def candidates(base, key, owner):
     }))
     # Return all items; select first eligible up to MAX_IMAGES in main.
     data = request("GET", url, headers(key))
+    if not isinstance(data, list):
+        raise RuntimeError("Invalid recipes response")
     return [r for r in data if isinstance(r.get("photos"), list) and not r["photos"]]
 
 
@@ -133,17 +137,21 @@ def main():
         content = generate_image(recipe)
         upload(base, key, path, content)
         try:
-            if not attach_if_empty(base, key, owner, recipe["id"], photo_id, path):
-                print("Skipped: photo was added concurrently.")
-                remove(base, key, path)
-            else:
-                print("Cover saved.")
+            attached = attach_if_empty(base, key, owner, recipe["id"], photo_id, path)
         except Exception:
+            # A network timeout can happen AFTER Supabase has committed the PATCH.
+            # Do not delete the object: that could break a newly saved cover.
+            print("Photo attachment status unknown; keep uploaded image for review.", file=sys.stderr)
+            raise
+        if attached:
+            print("Cover saved.")
+        else:
+            print("Skipped: photo was added concurrently.")
             try:
                 remove(base, key, path)
             except Exception:
                 print("Warning: orphaned uploaded object; manual cleanup needed.", file=sys.stderr)
-            raise
+                raise
 
 
 if __name__ == "__main__":
