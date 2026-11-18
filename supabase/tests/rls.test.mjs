@@ -884,14 +884,13 @@ test('automatické fotky: vypnuté, jen recepty bez fotky, limity a nic se nepř
   await assert.rejects(db.query(`select * from public.cover_reserve(5, true)`));
   await db.query(`reset role`);
 
-  // Výchozí stav: vypnuto, limit 5 denně, rozpočet 2 USD, střední kvalita.
+  // Výchozí stav: vypnuto, limit 5 denně, bezplatný model Cloudflare.
   const s = (await db.query(`select * from public.recipe_cover_settings`)).rows[0];
   assert.equal(s.enabled, false);
   assert.equal(s.daily_limit, 5);
-  assert.equal(Number(s.monthly_budget_usd), 2);
-  assert.equal(s.quality, 'medium');
+  assert.equal(s.model, '@cf/black-forest-labs/flux-1-schnell');
   await assert.rejects(db.query(`update public.recipe_cover_settings set daily_limit = 50`));
-  await assert.rejects(db.query(`update public.recipe_cover_settings set quality = 'high'`));
+  await assert.rejects(db.query(`update public.recipe_cover_settings set model = 'gpt-image-2'`));
 
   // Starší testovací recepty dostanou fotku, ať je kandidát jednoznačný.
   await db.query(`update public.recipes set photos = '[{"id":"00000000-aaaa-4aaa-8aaa-000000000000","remote_path":"a/b/c.jpg"}]'
@@ -958,12 +957,27 @@ test('automatické fotky: vypnuté, jen recepty bez fotky, limity a nic se nepř
   assert.equal(kept[0].remote_path, 'moje.jpg');
   assert.equal((await db.query(`select status from public.recipe_cover_jobs where id = $1`, [j2.job_id])).rows[0].status, 'skipped');
 
-  // Rozpočet: při vyčerpání se nic nerezervuje.
-  await db.query(`update public.recipe_cover_settings set monthly_budget_usd = 0.05`);
-  await as(PAVEL, `insert into public.recipes (title) values ('Po rozpočtu')`);
+  // Vyčerpaný bezplatný příděl: úloha se odloží a recept přijde na řadu znovu
+  // (nepočítá se jako pokus ani do denního limitu).
+  const later = (await as(PAVEL, `insert into public.recipes (title) values ('Zítra') returning id`)).rows[0].id;
+  const j3 = (await db.query(`select * from public.cover_reserve(5, false)`)).rows.find((r) => r.recipe_id === later);
+  assert.ok(j3);
+  const usedBefore = (await db.query(`select today_count from public.cover_usage()`)).rows[0].today_count;
+  await db.query(`select public.cover_progress($1, 'postponed', null, 'Vyčerpaný denní příděl')`, [j3.job_id]);
+  assert.equal((await db.query(`select today_count from public.cover_usage()`)).rows[0].today_count, usedBefore - 1);
+  const again = (await db.query(`select * from public.cover_reserve(5, false)`)).rows.find((r) => r.recipe_id === later);
+  assert.ok(again, 'odložený recept jde znovu na řadu');
+  // Dva neúspěšné pokusy = recept se dál nezkouší.
+  await db.query(`select public.cover_progress($1, 'failed', null, 'x')`, [again.job_id]);
+  const third = (await db.query(`select * from public.cover_reserve(5, false)`)).rows.find((r) => r.recipe_id === later);
+  await db.query(`select public.cover_progress($1, 'failed', null, 'x')`, [third.job_id]);
+  assert.ok(!(await db.query(`select * from public.cover_reserve(5, false)`)).rows.some((r) => r.recipe_id === later));
+  // Denní limit: nastavený na 0 nerezervuje nic nového.
+  await db.query(`update public.recipe_cover_settings set daily_limit = 0`);
+  await as(PAVEL, `insert into public.recipes (title) values ('Po limitu')`);
   assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.filter((r) => r.reason === 'nový').length, 0);
   // Vypínač: enabled = false zastaví všechno nové.
-  await db.query(`update public.recipe_cover_settings set enabled = false, monthly_budget_usd = 2`);
+  await db.query(`update public.recipe_cover_settings set enabled = false, daily_limit = 5`);
   assert.equal((await db.query(`select * from public.cover_reserve(5, false)`)).rows.length, 0);
 
   // Migrace jde spustit znovu a nastavení nepřepíše.

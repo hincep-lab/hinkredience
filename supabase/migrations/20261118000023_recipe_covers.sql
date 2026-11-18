@@ -1,29 +1,28 @@
--- Automatické hlavní fotografie receptů (AI obrázek hotového jídla).
+-- Automatické hlavní fotografie receptů (AI obrázek hotového jídla) přes
+-- Cloudflare Workers AI na bezplatném tarifu (Workers Free): po vyčerpání
+-- denního přídělu požadavky jen selžou, nic se neúčtuje.
 --
 -- Bezpečnost:
 --  * Vše je ve výchozím stavu VYPNUTÉ (recipe_cover_settings.enabled = false).
 --  * Fotku jde přidat jen receptu, který žádnou nemá (podmínka přímo v
 --    UPDATE – existující fotku nic nepřepíše ani nesmaže).
---  * Rozpočet a denní limit hlídá databáze v jedné transakci se zámkem, takže
---    ani dva souběžné běhy limit nepřekročí.
---  * Každý recept má nejvýš 2 pokusy; rozpracovaná úloha se při opakování
---    dokončí (znovu se nahraje / přiřadí), ne vygeneruje a nezaplatí znovu.
+--  * Denní limit hlídá databáze v jedné transakci se zámkem, takže ani dva
+--    souběžné běhy limit nepřekročí.
+--  * Každý recept má nejvýš 2 nepovedené pokusy; vyčerpaný denní příděl
+--    se za pokus nepočítá (recept přijde na řadu další den). Rozpracovaná
+--    úloha se při opakování dokončí, ne vygeneruje znovu.
 --  * Tabulky ani funkce nejsou přístupné přihlášeným ani anonymním
 --    uživatelům – volá je jen serverová funkce recipe-covers.
 -- Opakovatelné.
 
 create table if not exists public.recipe_cover_settings (
-  id                   integer primary key check (id = 1),
-  enabled              boolean not null default false,
-  daily_limit          integer not null default 5 check (daily_limit between 0 and 5),
-  monthly_budget_usd   numeric(8, 2) not null default 2.00
-                         check (monthly_budget_usd >= 0 and monthly_budget_usd <= 20),
-  price_per_image_usd  numeric(8, 4) not null default 0.041 check (price_per_image_usd > 0),
-  model                text not null default 'gpt-image-2',
-  quality              text not null default 'medium' check (quality in ('low', 'medium')),
-  size                 text not null default '1536x1024'
-                         check (size in ('1024x1024', '1536x1024', '1024x1536')),
-  updated_at           timestamptz not null default now()
+  id           integer primary key check (id = 1),
+  enabled      boolean not null default false,
+  daily_limit  integer not null default 5 check (daily_limit between 0 and 5),
+  model        text not null default '@cf/black-forest-labs/flux-1-schnell'
+                 check (model like '@cf/%'),
+  steps        integer not null default 8 check (steps between 1 and 8),
+  updated_at   timestamptz not null default now()
 );
 alter table public.recipe_cover_settings enable row level security;
 revoke all on public.recipe_cover_settings from anon, authenticated;
@@ -34,12 +33,10 @@ create table if not exists public.recipe_cover_jobs (
   recipe_id   uuid not null references public.recipes (id) on delete cascade,
   owner_id    uuid not null,
   status      text not null default 'reserved'
-                check (status in ('reserved', 'generated', 'uploaded', 'attached', 'skipped', 'failed')),
+                check (status in ('reserved', 'generated', 'uploaded', 'attached',
+                                  'skipped', 'failed', 'postponed')),
   photo_id    uuid not null default gen_random_uuid(),
   path        text not null default '',
-  -- Odhad útraty: počítá se od chvíle, kdy byl obrázek objednán (i když
-  -- odpověď nedorazila – OpenAI ho mohlo vyúčtovat).
-  cost_usd    numeric(8, 4) not null default 0,
   model       text not null default '',
   error       text not null default '',
   created_at  timestamptz not null default now(),
@@ -54,25 +51,25 @@ create unique index if not exists recipe_cover_jobs_active_uidx
 alter table public.recipe_cover_jobs enable row level security;
 revoke all on public.recipe_cover_jobs from anon, authenticated;
 
--- Přehled útraty (pro kontrolu a pro rozhodnutí o rozpočtu).
+-- Přehled: kolik obrázků se dnes objednalo a kolik receptů je hotových.
 create or replace function public.cover_usage()
-returns table (today_count integer, month_usd numeric, enabled boolean,
-               daily_limit integer, monthly_budget_usd numeric)
+returns table (today_count integer, attached_total integer, waiting integer,
+               enabled boolean, daily_limit integer)
 language sql stable security definer set search_path = public as $$
   select
     (select count(*)::integer from recipe_cover_jobs
       where (created_at at time zone 'Europe/Prague')::date = (now() at time zone 'Europe/Prague')::date
-        and cost_usd > 0),
-    (select coalesce(sum(cost_usd), 0) from recipe_cover_jobs
-      where date_trunc('month', created_at at time zone 'Europe/Prague')
-          = date_trunc('month', now() at time zone 'Europe/Prague')),
-    s.enabled, s.daily_limit, s.monthly_budget_usd
+        and status <> 'postponed'),
+    (select count(*)::integer from recipe_cover_jobs where status = 'attached'),
+    (select count(*)::integer from recipes
+      where deleted_at is null and coalesce(jsonb_array_length(photos), 0) = 0),
+    s.enabled, s.daily_limit
   from recipe_cover_settings s where s.id = 1
 $$;
 
--- Vybere recepty bez fotky a zarezervuje je (nejvýš p_limit, denní limit
--- a měsíční rozpočet). Nejdřív vrátí rozpracované úlohy (nahraný, ale
--- nepřiřazený obrázek), které se dokončí bez nového generování.
+-- Vybere recepty bez fotky a zarezervuje je (nejvýš p_limit a denní limit).
+-- Nejdřív vrátí rozpracované úlohy (vygenerovaný / nahraný, ale nepřiřazený
+-- obrázek), které se dokončí bez nového generování.
 -- p_dry_run = true: jen ukáže, co by se vybralo, nic nezapíše.
 create or replace function public.cover_reserve(p_limit integer, p_dry_run boolean default false)
 returns table (job_id uuid, recipe_id uuid, owner_id uuid, photo_id uuid, path text,
@@ -83,7 +80,6 @@ language plpgsql security definer set search_path = public as $$
 declare
   s recipe_cover_settings;
   used_today integer;
-  spent numeric;
   room integer;
 begin
   select * into s from recipe_cover_settings where id = 1;
@@ -93,45 +89,35 @@ begin
   -- Jeden běh naráz (zámek drží do konce transakce).
   if not p_dry_run then
     perform pg_advisory_xact_lock(hashtext('recipe_cover_reserve'));
-  end if;
-
-  -- Rozpracované úlohy starší než 30 minut: obrázek mohl být vyúčtován,
-  -- ale výsledek neznáme – úloha selže (útrata zůstane započtená).
-  if not p_dry_run then
+    -- Rezervace starší než 30 minut, u nichž se nic nedokončilo, selžou.
     update recipe_cover_jobs j
-       set status = 'failed', error = 'Přerušeno – výsledek neznámý', updated_at = now()
+       set status = 'failed', error = 'Přerušeno', updated_at = now()
      where j.status = 'reserved' and j.updated_at < now() - interval '30 minutes';
   end if;
 
-  select u.today_count, u.month_usd into used_today, spent from cover_usage() u;
-  room := least(
-    greatest(p_limit, 0),
-    5,
-    greatest(s.daily_limit - used_today, 0),
-    floor(greatest(s.monthly_budget_usd - spent, 0) / s.price_per_image_usd)::integer
-  );
+  select u.today_count into used_today from cover_usage() u;
+  room := least(greatest(p_limit, 0), 5, greatest(s.daily_limit - used_today, 0));
 
-  -- 1) Dokončení: obrázek je nahraný / vygenerovaný, jen nepřiřazený.
-  return query
-    select j.id, j.recipe_id, j.owner_id, j.photo_id, j.path, j.status,
-           r.title, r.description, r.category, r.tags,
-           '[]'::jsonb, '[]'::jsonb, 'dokončení'::text
-      from recipe_cover_jobs j
-      join recipes r on r.id = j.recipe_id
-     where j.status in ('generated', 'uploaded') and j.path <> ''
-     order by j.created_at
-     limit 5;
-
-  if not s.enabled and not p_dry_run then
-    return;
+  -- 1) Dokončení: obrázek je už v úložišti, jen nepřiřazený.
+  if not p_dry_run then
+    return query
+      select j.id, j.recipe_id, j.owner_id, j.photo_id, j.path, j.status,
+             r.title, r.description, r.category, r.tags,
+             '[]'::jsonb, '[]'::jsonb, 'dokončení'::text
+        from recipe_cover_jobs j
+        join recipes r on r.id = j.recipe_id
+       where j.status in ('generated', 'uploaded') and j.path <> ''
+       order by j.created_at
+       limit 5;
   end if;
-  if room <= 0 then
+
+  if (not s.enabled and not p_dry_run) or room <= 0 then
     return;
   end if;
 
   return query
     with picked as (
-      select r.id, r.owner_id, r.title, r.description, r.category, r.tags
+      select r.id, r.owner_id, r.title, r.description, r.category, r.tags, r.created_at
         from recipes r
        where r.deleted_at is null
          and coalesce(jsonb_array_length(r.photos), 0) = 0
@@ -146,13 +132,13 @@ begin
        limit room
     ),
     ins as (
-      insert into recipe_cover_jobs (recipe_id, owner_id, path, cost_usd, model)
-      select p.id, p.owner_id, '', s.price_per_image_usd, s.model
+      insert into recipe_cover_jobs (recipe_id, owner_id, model)
+      select p.id, p.owner_id, s.model
         from picked p
        where not p_dry_run
-      returning id, recipe_id, owner_id, photo_id
+      returning id, recipe_id, photo_id
     )
-    select coalesce(i.id, null), p.id, p.owner_id, coalesce(i.photo_id, null),
+    select i.id, p.id, p.owner_id, i.photo_id,
            coalesce(p.owner_id::text || '/' || p.id::text || '/' || i.photo_id::text || '.jpg', ''),
            case when p_dry_run then 'dry-run' else 'reserved' end,
            p.title, p.description, p.category, p.tags,
@@ -162,40 +148,40 @@ begin
                        from recipe_steps s2 where s2.recipe_id = p.id), '[]'::jsonb),
            'nový'::text
       from picked p
-      left join ins i on i.recipe_id = p.id;
+      left join ins i on i.recipe_id = p.id
+     order by p.created_at;
 end;
 $$;
 
--- Zapíše průběh úlohy (vygenerováno, nahráno, chyba…). Cesta se nastaví
--- jen jednou a jen ve tvaru <vlastník>/<recept>/<fotka>.jpg.
+-- Zapíše průběh úlohy. Cesta jen ve tvaru <vlastník>/<recept>/<fotka>.jpg
+-- (nebo .png, podle toho, co model vrátí).
 create or replace function public.cover_progress(p_job uuid, p_status text,
                                                  p_path text default null,
-                                                 p_error text default null,
-                                                 p_cost numeric default null)
+                                                 p_error text default null)
 returns void
 language plpgsql security definer set search_path = public as $$
 declare
   j recipe_cover_jobs;
+  base text;
 begin
   select * into j from recipe_cover_jobs where id = p_job for update;
   if not found then
     raise exception 'Úloha nenalezena.';
   end if;
-  if p_status not in ('generated', 'uploaded', 'skipped', 'failed') then
+  if p_status not in ('generated', 'uploaded', 'skipped', 'failed', 'postponed') then
     raise exception 'Neplatný stav úlohy.';
   end if;
-  if j.status in ('attached', 'skipped') then
-    return; -- hotové úlohy se už nemění
+  if j.status in ('attached', 'skipped', 'failed', 'postponed') then
+    return; -- uzavřené úlohy se už nemění
   end if;
-  if p_path is not null and p_path <> ''
-     and p_path <> j.owner_id::text || '/' || j.recipe_id::text || '/' || j.photo_id::text || '.jpg' then
+  base := j.owner_id::text || '/' || j.recipe_id::text || '/' || j.photo_id::text;
+  if p_path is not null and p_path <> '' and p_path not in (base || '.jpg', base || '.png') then
     raise exception 'Neplatná cesta fotky.';
   end if;
   update recipe_cover_jobs set
     status = p_status,
     path = case when p_path is not null and p_path <> '' then p_path else path end,
     error = left(coalesce(p_error, error), 500),
-    cost_usd = case when p_cost is not null and p_cost >= 0 then p_cost else cost_usd end,
     updated_at = now()
   where id = p_job;
 end;
@@ -233,14 +219,14 @@ $$;
 
 revoke all on function public.cover_usage() from public, anon, authenticated;
 revoke all on function public.cover_reserve(integer, boolean) from public, anon, authenticated;
-revoke all on function public.cover_progress(uuid, text, text, text, numeric) from public, anon, authenticated;
+revoke all on function public.cover_progress(uuid, text, text, text) from public, anon, authenticated;
 revoke all on function public.cover_attach_if_empty(uuid) from public, anon, authenticated;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function public.cover_usage() to service_role;
     grant execute on function public.cover_reserve(integer, boolean) to service_role;
-    grant execute on function public.cover_progress(uuid, text, text, text, numeric) to service_role;
+    grant execute on function public.cover_progress(uuid, text, text, text) to service_role;
     grant execute on function public.cover_attach_if_empty(uuid) to service_role;
   end if;
 end;

@@ -25,7 +25,8 @@ const HOST = "wjqpzoeheonjwdyyezhb.supabase.co";
 const env: Env = {
   supabaseUrl: `https://${HOST}`,
   serviceKey: "sb_secret_test",
-  openaiKey: "sk-test",
+  cfAccountId: "0123456789abcdef0123456789abcdef",
+  cfToken: "cf-test-token",
   expectedHost: HOST,
 };
 
@@ -64,11 +65,11 @@ interface Call {
   headers: Record<string, string>;
 }
 
-/** Falešný Supabase + OpenAI. `world` drží stav receptu a úloh. */
+/** Falešný Supabase + Cloudflare. `world` drží stav receptu a úloh. */
 function fake(opts: {
   jobs?: Job[];
   photos?: unknown[];
-  openai?: (n: number) => Response | Promise<Response>;
+  ai?: (n: number) => Response | Promise<Response>;
   attachResult?: boolean;
   uploadStatus?: number;
   objectExists?: boolean;
@@ -78,23 +79,21 @@ function fake(opts: {
     photos: opts.photos ?? [] as unknown[],
     progress: [] as Record<string, unknown>[],
     uploaded: [] as string[],
-    openaiCalls: 0,
+    aiCalls: 0,
   };
   const fetchImpl = async (url: string, init: RequestInit = {}): Promise<Response> => {
     const method = init.method ?? "GET";
     const body = typeof init.body === "string" ? init.body : "";
     calls.push({ method, url, body, headers: (init.headers ?? {}) as Record<string, string> });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
-    if (url.startsWith("https://api.openai.com/")) {
-      world.openaiCalls++;
-      return opts.openai
-        ? await opts.openai(world.openaiCalls)
-        : json({ data: [{ b64_json: jpegB64() }] });
+    if (url.startsWith("https://api.cloudflare.com/")) {
+      world.aiCalls++;
+      return opts.ai ? await opts.ai(world.aiCalls) : json({ success: true, result: { image: jpegB64() } });
     }
     assert(url.startsWith(`https://${HOST}/`), `jen na projekt: ${url}`);
     if (url.includes("/rest/v1/price_cron_key")) return json([{ key: CRON }]);
     if (url.includes("/rest/v1/recipe_cover_settings")) {
-      return json([{ model: "gpt-image-2", quality: "medium", size: "1536x1024" }]);
+      return json([{ model: "@cf/black-forest-labs/flux-1-schnell", steps: 8 }]);
     }
     if (url.endsWith("/rpc/cover_reserve")) return json(opts.jobs ?? [job()]);
     if (url.endsWith("/rpc/cover_usage")) return json([{ today_count: 1, month_usd: 0.041 }]);
@@ -144,27 +143,55 @@ Deno.test("úspěch: vygeneruje JPEG, nahraje bez přepisu, přiřadí a ověř�
   const f = fake({});
   const out = await run(env, { limit: 1, dryRun: false }, f.fetchImpl);
   assertEquals(out.results.map((r) => r.status), ["attached"]);
-  assertEquals(f.world.openaiCalls, 1);
-  const openai = f.calls.find((c) => c.url.startsWith("https://api.openai.com/"))!;
-  const req = JSON.parse(openai.body);
-  assertEquals(req.model, "gpt-image-2");
-  assertEquals(req.quality, "medium");
-  assertEquals(req.size, "1536x1024");
-  assertEquals(req.output_format, "jpeg");
-  assertEquals(req.n, 1);
+  assertEquals(f.world.aiCalls, 1);
+  const ai = f.calls.find((c) => c.url.startsWith("https://api.cloudflare.com/"))!;
+  assertEquals(
+    ai.url,
+    "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/black-forest-labs/flux-1-schnell",
+  );
+  const req = JSON.parse(ai.body);
+  assertEquals(req.steps, 8);
+  assert(req.prompt.length <= 2048);
+  assertStringIncludes(req.prompt, "Kung pao");
   const upload = f.calls.find((c) => c.url.includes("/storage/v1/object/recipe-photos/"))!;
   assertEquals(upload.headers["x-upsert"], "false");
+  assertEquals(upload.headers["Content-Type"], "image/jpeg");
   assertStringIncludes(upload.url, `${OWNER}/${RECIPE}/${PHOTO}.jpg`);
   assertEquals(f.world.progress.map((p) => p.p_status), ["generated", "uploaded"]);
-  // Servisní klíč šel jen na projekt, OpenAI dostalo jen svůj klíč.
-  for (const c of f.calls) {
-    if (c.url.startsWith("https://api.openai.com/")) {
-      assertEquals(c.headers.Authorization, "Bearer sk-test");
-      assertFalse(JSON.stringify(c.headers).includes("sb_secret"));
-    }
-  }
+  // Servisní klíč šel jen na projekt, Cloudflare dostal jen svůj token.
+  assertEquals(ai.headers.Authorization, "Bearer cf-test-token");
+  assertFalse(JSON.stringify(ai.headers).includes("sb_secret"));
   // Nikde žádné mazání ani PATCH receptu.
   assertFalse(f.calls.some((c) => c.method === "DELETE" || c.method === "PATCH"));
+});
+
+Deno.test("PNG z modelu se uloží jako .png", async () => {
+  const png = new Uint8Array(6000);
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  let b = "";
+  for (const x of png) b += String.fromCharCode(x);
+  const f = fake({ ai: () => new Response(JSON.stringify({ success: true, result: { image: btoa(b) } })) });
+  const out = await run(env, { limit: 1, dryRun: false }, f.fetchImpl);
+  assertEquals(out.results[0].status, "attached");
+  const upload = f.calls.find((c) => c.url.includes("/storage/v1/object/recipe-photos/"))!;
+  assertStringIncludes(upload.url, `${PHOTO}.png`);
+  assertEquals(upload.headers["Content-Type"], "image/png");
+  assertEquals(f.world.progress[0].p_path, `${OWNER}/${RECIPE}/${PHOTO}.png`);
+});
+
+Deno.test("vyčerpaný bezplatný příděl (429): odložit, další recepty už nezkoušet", async () => {
+  const second = job({ job_id: "aaaaaaaa-0000-4000-8000-000000000002" });
+  const f = fake({
+    jobs: [job(), second],
+    ai: () =>
+      new Response(JSON.stringify({ success: false, errors: [{ code: 4006, message: "daily free allocation of 10,000 neurons used" }] }), {
+        status: 429,
+      }),
+  });
+  const out = await run(env, { limit: 2, dryRun: false }, f.fetchImpl);
+  assertEquals(out.results.length, 2);
+  assertEquals(f.world.aiCalls, 1, "po vyčerpání se další požadavek neposílá");
+  assertEquals(f.world.progress.map((p) => p.p_status), ["postponed", "postponed"]);
 });
 
 Deno.test("recept mezitím dostal fotku: nic se nepřepíše ani nesmaže", async () => {
@@ -176,32 +203,27 @@ Deno.test("recept mezitím dostal fotku: nic se nepřepíše ani nesmaže", asyn
   assertFalse(f.calls.some((c) => c.method === "DELETE"));
 });
 
-Deno.test("odmítnuté generování (HTTP 400): útrata 0, žádné nahrání", async () => {
+Deno.test("odmítnuté generování (HTTP 400): pokus selže, žádné nahrání", async () => {
   const f = fake({
-    openai: () => new Response(JSON.stringify({ error: { code: "moderation_blocked" } }), { status: 400 }),
+    ai: () => new Response(JSON.stringify({ success: false, errors: [{ code: 3030, message: "NSFW" }] }), { status: 400 }),
   });
   const out = await run(env, { limit: 1, dryRun: false }, f.fetchImpl);
   assertEquals(out.results[0].status, "failed");
-  assertStringIncludes(out.results[0].error!, "moderation_blocked");
-  assertEquals(f.world.progress, [{
-    p_job: JOB,
-    p_status: "failed",
-    p_error: "OpenAI: HTTP 400 (moderation_blocked)",
-    p_cost: 0,
-  }]);
+  assertStringIncludes(out.results[0].error!, "3030");
+  assertEquals(f.world.progress.map((p) => p.p_status), ["failed"]);
   assertEquals(f.world.uploaded.length, 0);
 });
 
-Deno.test("přerušené spojení s OpenAI: útrata zůstane započtená (žádné tiché opakování)", async () => {
-  const f = fake({ openai: () => Promise.reject(new TypeError("network")) });
+Deno.test("přerušené spojení: pokus selže, nic se nenahraje", async () => {
+  const f = fake({ ai: () => Promise.reject(new TypeError("network")) });
   const out = await run(env, { limit: 1, dryRun: false }, f.fetchImpl);
   assertEquals(out.results[0].status, "failed");
-  assertEquals(f.world.progress[0].p_cost, null);
-  assertEquals(f.world.openaiCalls, 1);
+  assertEquals(f.world.progress[0].p_status, "failed");
+  assertEquals(f.world.uploaded.length, 0);
 });
 
 Deno.test("neplatný obrázek se nenahraje", async () => {
-  const f = fake({ openai: () => new Response(JSON.stringify({ data: [{ b64_json: btoa("PNG?") }] })) });
+  const f = fake({ ai: () => new Response(JSON.stringify({ success: true, result: { image: btoa("PNG?") } })) });
   const out = await run(env, { limit: 1, dryRun: false }, f.fetchImpl);
   assertEquals(out.results[0].status, "failed");
   assertEquals(f.world.uploaded.length, 0);
@@ -216,26 +238,26 @@ Deno.test("chyba nahrání: úloha zůstane rozpracovaná, další běh ji dokon
   const second = fake({ jobs: [job({ status: "generated", reason: "dokončení" })], objectExists: true });
   const out2 = await run(env, { limit: 1, dryRun: false }, second.fetchImpl);
   assertEquals(out2.results[0].status, "attached");
-  assertEquals(second.world.openaiCalls, 0, "znovu se negeneruje ani neplatí");
+  assertEquals(second.world.aiCalls, 0, "znovu se negeneruje");
 });
 
 Deno.test("dry-run: nic negeneruje, nenahrává ani nezapisuje", async () => {
   const f = fake({ jobs: [job({ job_id: null, status: "dry-run", photo_id: null, path: "" })] });
   const out = await run(env, { limit: 5, dryRun: true }, f.fetchImpl);
   assertEquals(out.results.map((r) => r.status), ["dry-run"]);
-  assertEquals(f.world.openaiCalls, 0);
+  assertEquals(f.world.aiCalls, 0);
   assertEquals(f.world.uploaded.length, 0);
   assertEquals(f.world.progress.length, 0);
   const reserve = f.calls.find((c) => c.url.endsWith("/rpc/cover_reserve"))!;
   assertEquals(JSON.parse(reserve.body), { p_limit: 5, p_dry_run: true });
 });
 
-Deno.test("bez klíče COVERS_OPENAI_API_KEY se nic nerezervuje ani neplatí", async () => {
+Deno.test("bez Cloudflare tokenu se nic nerezervuje", async () => {
   const f = fake({});
-  const out = await run({ ...env, openaiKey: "" }, { limit: 5, dryRun: false }, f.fetchImpl);
+  const out = await run({ ...env, cfToken: "" }, { limit: 5, dryRun: false }, f.fetchImpl);
   assertEquals(out.results.length, 0);
   assertFalse(f.calls.some((c) => c.url.endsWith("/rpc/cover_reserve")));
-  assertEquals(f.world.openaiCalls, 0);
+  assertEquals(f.world.aiCalls, 0);
 });
 
 Deno.test("limit za běh nejvýš 5", async () => {

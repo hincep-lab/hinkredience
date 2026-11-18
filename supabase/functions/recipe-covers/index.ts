@@ -1,22 +1,22 @@
 // HINKredience° – automatické hlavní fotografie receptů.
 //
 // Recepty bez fotky dostanou realistickou fotografii hotového jídla
-// (OpenAI Images API). Bezpečnost a náklady:
+// z Cloudflare Workers AI (FLUX.1 schnell) na bezplatném tarifu Workers
+// Free: po vyčerpání denního přídělu požadavky jen selžou, nic se neúčtuje.
 //  * Spustí se jen s tajným klíčem plánované úlohy (x-cron-key), který je
-//    uložený v databázi a nikdy ji neopustí. Přihlášení uživatelé ani
-//    veřejnost funkci nespustí.
-//  * Placené generování běží, jen když je v databázi zapnuté
-//    (recipe_cover_settings.enabled) A funkce má vlastní klíč
-//    COVERS_OPENAI_API_KEY. Bez kteréhokoli z nich nic nezaplatí.
-//  * Denní limit, měsíční rozpočet a ochranu proti dvojímu účtování hlídá
-//    databáze (cover_reserve) – ne tento kód.
+//    uložený v databázi a nikdy ji neopustí.
+//  * Generování běží, jen když je v databázi zapnuté
+//    (recipe_cover_settings.enabled) A funkce má COVERS_CF_ACCOUNT_ID
+//    a COVERS_CF_API_TOKEN (token jen pro Workers AI).
+//  * Denní limit a ochranu proti dvojímu generování hlídá databáze
+//    (cover_reserve) – ne tento kód.
 //  * Fotka se přiřadí jen receptu, který žádnou nemá (cover_attach_if_empty);
 //    existující fotky ani soubory se nikdy nemažou ani nepřepisují
 //    (nahrání s x-upsert: false, žádné DELETE).
 //  * Servisní klíč projektu zůstává v Supabase (proměnné funkce); funkce
-//    s ním volá jen čtyři úzké databázové funkce a nahrání souboru.
+//    s ním volá jen úzké databázové funkce a nahrání souboru.
 
-export const VERSION = "2026-11-18";
+export const VERSION = "2026-11-19";
 export const BUCKET = "recipe-photos";
 export const MAX_PER_RUN = 5;
 const MAX_IMAGE_BYTES = 8_000_000;
@@ -26,7 +26,9 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export interface Env {
   supabaseUrl: string;
   serviceKey: string;
-  openaiKey: string;
+  /** Cloudflare účet a token jen pro Workers AI. */
+  cfAccountId: string;
+  cfToken: string;
   /** Pevná adresa projektu – servisní klíč se jinam nepošle. */
   expectedHost: string;
   cronKey?: string;
@@ -34,8 +36,7 @@ export interface Env {
 
 export interface Settings {
   model: string;
-  quality: string;
-  size: string;
+  steps: number;
 }
 
 export interface Job {
@@ -62,7 +63,7 @@ export interface RunResult {
 }
 
 class HttpError extends Error {
-  constructor(message: string, readonly status: number, readonly charged = false) {
+  constructor(message: string, readonly status: number, readonly quota = false) {
     super(message);
   }
 }
@@ -162,25 +163,25 @@ export class Db {
   }
 
   async settings(): Promise<Settings> {
-    const res = await this.call(`/rest/v1/recipe_cover_settings?select=model,quality,size&id=eq.1`, {
+    const res = await this.call(`/rest/v1/recipe_cover_settings?select=model,steps&id=eq.1`, {
       headers: this.headers(),
     });
     if (!res.ok) throw new HttpError(`Nastavení: HTTP ${res.status}`, res.status);
     const rows = await res.json();
     const s = Array.isArray(rows) ? rows[0] : null;
-    return {
-      model: typeof s?.model === "string" ? s.model : "gpt-image-2",
-      quality: s?.quality === "low" ? "low" : "medium",
-      size: typeof s?.size === "string" ? s.size : "1536x1024",
-    };
+    const model = typeof s?.model === "string" && /^@cf\/[\w./-]+$/.test(s.model)
+      ? s.model
+      : "@cf/black-forest-labs/flux-1-schnell";
+    const steps = Math.max(1, Math.min(8, Number(s?.steps) || 8));
+    return { model, steps };
   }
 
   /** Nahraje soubor; existující soubor NEPŘEPÍŠE (x-upsert: false). */
-  async upload(path: string, bytes: Uint8Array): Promise<"created" | "exists"> {
+  async upload(path: string, bytes: Uint8Array, type: string): Promise<"created" | "exists"> {
     const res = await this.call(`/storage/v1/object/${BUCKET}/${encodePath(path)}`, {
       method: "POST",
       headers: this.headers({
-        "Content-Type": "image/jpeg",
+        "Content-Type": type,
         "x-upsert": "false",
         "cache-control": "max-age=31536000",
       }),
@@ -221,63 +222,64 @@ function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-/** Cesta souboru musí být přesně <vlastník>/<recept>/<fotka>.jpg. */
+/** Cesta souboru musí být přesně <vlastník>/<recept>/<fotka>.jpg|.png. */
 export function validPath(job: Pick<Job, "owner_id" | "recipe_id" | "photo_id" | "path">): boolean {
+  const base = `${job.owner_id}/${job.recipe_id}/${job.photo_id}`;
   return Boolean(
     job.photo_id && UUID.test(job.owner_id) && UUID.test(job.recipe_id) && UUID.test(job.photo_id) &&
-      job.path === `${job.owner_id}/${job.recipe_id}/${job.photo_id}.jpg`,
+      (job.path === `${base}.jpg` || job.path === `${base}.png`),
   );
 }
 
-// ------------------------------------------------------------------ OpenAI
+// -------------------------------------------------------------- Cloudflare
 
-/** Vygeneruje JPEG. Chyba s `charged` = obrázek mohl být vyúčtován. */
+export interface Image {
+  bytes: Uint8Array;
+  ext: "jpg" | "png";
+  type: string;
+}
+
+/** Vygeneruje obrázek. Chyba s `quota` = vyčerpaný denní příděl (zdarma). */
 export async function generateImage(
   prompt: string,
   settings: Settings,
-  key: string,
+  env: Pick<Env, "cfAccountId" | "cfToken">,
   fetchImpl: FetchLike,
-): Promise<Uint8Array> {
+): Promise<Image> {
+  if (!/^[0-9a-f]{32}$/i.test(env.cfAccountId)) throw new HttpError("Cloudflare: neplatné ID účtu", 0);
+  const url = `https://api.cloudflare.com/client/v4/accounts/${env.cfAccountId}/ai/run/${settings.model}`;
   let res: Response;
   try {
-    res = await fetchImpl("https://api.openai.com/v1/images/generations", {
+    res = await fetchImpl(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: settings.model,
-        prompt,
-        n: 1,
-        size: settings.size,
-        quality: settings.quality,
-        output_format: "jpeg",
-        output_compression: 82,
-      }),
-      signal: AbortSignal.timeout(170_000),
+      headers: { Authorization: `Bearer ${env.cfToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: prompt.slice(0, 2048), steps: settings.steps }),
+      signal: AbortSignal.timeout(120_000),
     });
   } catch (error) {
-    // Přerušené spojení: požadavek mohl doběhnout a být vyúčtován.
-    throw new HttpError(`OpenAI: spojení přerušeno (${(error as Error).name})`, 0, true);
-  }
-  if (!res.ok) {
-    // Odmítnutý požadavek (4xx/5xx) OpenAI neúčtuje.
-    let detail = "";
-    try {
-      const body = await res.json();
-      detail = clean(body?.error?.code ?? body?.error?.type ?? "", 60);
-    } catch {
-      // bez detailu
-    }
-    throw new HttpError(`OpenAI: HTTP ${res.status}${detail ? ` (${detail})` : ""}`, res.status, false);
+    throw new HttpError(`Cloudflare: spojení přerušeno (${(error as Error).name})`, 0);
   }
   const body = await res.json().catch(() => null);
-  const b64 = body?.data?.[0]?.b64_json;
-  if (typeof b64 !== "string" || !b64) throw new HttpError("OpenAI: odpověď bez obrázku", 200, true);
+  if (!res.ok || body?.success === false) {
+    const code = clean(body?.errors?.[0]?.code ?? "", 12);
+    const message = clean(body?.errors?.[0]?.message ?? "", 80);
+    // 429 / „neurons“ = vyčerpaný bezplatný denní příděl.
+    const quota = res.status === 429 || /neuron|daily|quota|limit/i.test(message);
+    throw new HttpError(
+      `Cloudflare: HTTP ${res.status}${code ? ` (${code})` : ""}${message ? ` ${message}` : ""}`,
+      res.status,
+      quota,
+    );
+  }
+  const b64 = body?.result?.image ?? body?.image;
+  if (typeof b64 !== "string" || !b64) throw new HttpError("Cloudflare: odpověď bez obrázku", 200);
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const jpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (!jpeg || bytes.length < 5_000 || bytes.length > MAX_IMAGE_BYTES) {
-    throw new HttpError("OpenAI: obrázek není platný JPEG", 200, true);
+  const png = bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  if ((!jpeg && !png) || bytes.length < 5_000 || bytes.length > MAX_IMAGE_BYTES) {
+    throw new HttpError("Cloudflare: obrázek není platný JPEG ani PNG", 200);
   }
-  return bytes;
+  return jpeg ? { bytes, ext: "jpg", type: "image/jpeg" } : { bytes, ext: "png", type: "image/png" };
 }
 
 // -------------------------------------------------------------------- běh
@@ -303,12 +305,13 @@ export async function run(
     return { results, usage: await db.rpc("cover_usage", {}) };
   }
 
-  // Bez klíče se nic nerezervuje (a tedy ani nezaplatí).
-  if (!env.openaiKey) {
-    return { results, usage: { error: "Chybí COVERS_OPENAI_API_KEY – generování je vypnuté." } };
+  // Bez Cloudflare údajů se nic nerezervuje.
+  if (!env.cfAccountId || !env.cfToken) {
+    return { results, usage: { error: "Chybí COVERS_CF_ACCOUNT_ID nebo COVERS_CF_API_TOKEN – generování je vypnuté." } };
   }
   const settings = await db.settings();
   const jobs = await db.rpc<Job[]>("cover_reserve", { p_limit: limit, p_dry_run: false });
+  let quotaHit = false;
 
   for (const job of jobs ?? []) {
     const id = job.job_id;
@@ -316,35 +319,41 @@ export async function run(
       results.push({ recipe_id: job.recipe_id, title: job.title, status: "failed", error: "Neplatná úloha" });
       continue;
     }
+    let path = job.path;
     try {
-      // Dokončení přerušené úlohy: obrázek už je zaplacený.
+      // Dokončení přerušené úlohy: obrázek už je v úložišti.
       if (job.status === "generated" || job.status === "uploaded") {
-        if (!(await db.exists(job.path))) {
+        if (!(await db.exists(path))) {
           await db.rpc("cover_progress", { p_job: id, p_status: "failed", p_error: "Soubor se nenašel" });
           results.push({ recipe_id: job.recipe_id, title: job.title, status: "failed", error: "Soubor se nenašel" });
           continue;
         }
         await db.rpc("cover_progress", { p_job: id, p_status: "uploaded" });
       } else {
-        const prompt = buildPrompt(job);
-        let image: Uint8Array;
+        if (quotaHit) {
+          // Denní příděl je vyčerpaný – recept počká na zítřek (bez pokusu).
+          await db.rpc("cover_progress", { p_job: id, p_status: "postponed", p_error: "Vyčerpaný denní příděl" });
+          results.push({ recipe_id: job.recipe_id, title: job.title, status: "skipped", error: "Zítra" });
+          continue;
+        }
+        let image: Image;
         try {
-          image = await generateImage(prompt, settings, env.openaiKey, fetchImpl);
+          image = await generateImage(buildPrompt(job), settings, env, fetchImpl);
         } catch (error) {
           const e = error as HttpError;
-          // Neúčtovaná chyba: útrata 0 a recept to zkusí jindy (nejvýš 2×).
+          if (e.quota) quotaHit = true;
           await db.rpc("cover_progress", {
             p_job: id,
-            p_status: "failed",
+            p_status: e.quota ? "postponed" : "failed",
             p_error: e.message,
-            p_cost: e.charged ? null : 0,
           });
           results.push({ recipe_id: job.recipe_id, title: job.title, status: "failed", error: e.message });
           continue;
         }
+        path = job.path.replace(/\.jpg$/, `.${image.ext}`);
         // Cesta se zapíše před nahráním – po přerušení se úloha dokončí.
-        await db.rpc("cover_progress", { p_job: id, p_status: "generated", p_path: job.path });
-        await db.upload(job.path, image);
+        await db.rpc("cover_progress", { p_job: id, p_status: "generated", p_path: path });
+        await db.upload(path, image.bytes, image.type);
         await db.rpc("cover_progress", { p_job: id, p_status: "uploaded" });
       }
       const attached = await db.rpc<boolean>("cover_attach_if_empty", { p_job: id });
@@ -357,7 +366,7 @@ export async function run(
         });
         continue;
       }
-      const ok = (await db.coverIs(job.recipe_id, job.photo_id!)) && (await db.exists(job.path));
+      const ok = (await db.coverIs(job.recipe_id, job.photo_id!)) && (await db.exists(path));
       results.push(
         ok
           ? { recipe_id: job.recipe_id, title: job.title, status: "attached" }
@@ -440,9 +449,8 @@ export function envFromDeno(get: (name: string) => string | undefined): Env {
   return {
     supabaseUrl: (get("SUPABASE_URL") ?? "").replace(/\/+$/, ""),
     serviceKey: serviceKeyFrom(get),
-    // Vlastní klíč jen pro fotky (s rozpočtovým limitem v OpenAI) – záměrně
-    // se nepoužije obecný OPENAI_API_KEY, aby nic nezaplatilo omylem.
-    openaiKey: get("COVERS_OPENAI_API_KEY") ?? "",
+    cfAccountId: (get("COVERS_CF_ACCOUNT_ID") ?? "").trim(),
+    cfToken: (get("COVERS_CF_API_TOKEN") ?? "").trim(),
     expectedHost: "wjqpzoeheonjwdyyezhb.supabase.co",
     cronKey: "",
   };
