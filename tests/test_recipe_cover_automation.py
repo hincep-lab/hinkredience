@@ -46,7 +46,7 @@ class CoverSafetyTests(unittest.TestCase):
 
     def test_image_prompt_uses_recipe_ingredients(self):
         import base64
-        fake_png = b"\\x89PNG\\r\\n\\x1a\\n" + b"test"
+        fake_png = bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b"test"
         with patch.dict(os.environ, {"OPENAI_API_KEY": "fake"}), patch.object(
                 covers, "request", return_value={"data": [{"b64_json": base64.b64encode(fake_png).decode()}]}) as req:
             covers.generate_image({"title": "Kuře na paprice", "description": "Nepálivé",
