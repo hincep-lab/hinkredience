@@ -1,0 +1,44 @@
+name: Recipe cover photos (manual safety gate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Generate and upload photos (false = dry run)'
+        required: true
+        type: boolean
+        default: false
+      limit:
+        description: 'Maximum recipes (1-5)'
+        required: true
+        type: choice
+        default: '1'
+        options: ['1', '2', '3', '4', '5']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recipe-cover-generator
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    environment: recipe-covers
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run safely (dry-run unless explicitly enabled)
+        env:
+          SUPABASE_URL: ${{ secrets.HINK_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.HINK_SUPABASE_SERVICE_ROLE_KEY }}
+          HINK_OWNER_ID: ${{ secrets.HINK_OWNER_ID }}
+          OPENAI_API_KEY: ${{ secrets.HINK_OPENAI_API_KEY }}
+          APPLY: ${{ inputs.apply }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          set -euo pipefail
+          ARGS=(--limit "$LIMIT")
+          if [ "$APPLY" = "true" ]; then ARGS+=(--apply); fi
+          python3 tools/recipe_cover_automation.py "${ARGS[@]}"
