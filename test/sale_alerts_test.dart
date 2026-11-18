@@ -1,6 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hinkredience/app/sale_alerts_runner.dart';
 import 'package:hinkredience/core/best_buy.dart';
+import 'package:hinkredience/core/family_alerts.dart';
 import 'package:hinkredience/core/sale_alerts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class _Alerts implements FamilyAlerts {
+  final shown = <({String title, String body})>[];
+  @override
+  Future<bool> requestPermission() async => true;
+  @override
+  Future<void> show(List<({String title, String body})> n) async =>
+      shown.addAll(n);
+}
 
 void main() {
   final today = DateTime(2026, 11, 18);
@@ -95,5 +107,63 @@ void main() {
     expect(a.length, 3);
     expect(a.last.title, 'Další zboží ze seznamu v akci');
     expect(a.last.body, 'vejce, mouka, cukr');
+  });
+
+  test('hlídané zboží s cenou „pod … Kč“', () {
+    final a = saleAlerts(
+      offers: offers,
+      watched: ['máslo'],
+      seen: const {},
+      today: today,
+      maxPrice: {'máslo': 30},
+    );
+    expect(a.single.body, startsWith('Máslo Milkpol: Lidl 29,90 Kč'));
+    expect(
+      saleAlerts(
+        offers: offers,
+        watched: ['máslo'],
+        seen: const {},
+        today: today,
+        maxPrice: {'máslo': 25},
+      ),
+      isEmpty,
+    );
+  });
+
+  test('hlídané zboží se uloží a načte', () {
+    final raw = WatchItem.encode([
+      const WatchItem('Máslo', maxPrice: 30),
+      const WatchItem('Krkovice'),
+    ]);
+    final back = WatchItem.decode(raw);
+    expect(
+      [for (final w in back) '${w.name}|${w.maxPrice}'],
+      ['Máslo|30.0', 'Krkovice|null'],
+    );
+    expect(WatchItem.decode('nesmysl'), isEmpty);
+  });
+
+  test('kontrola: poprvé jen zapamatovat, pak ohlásit jen nové', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    await saveWatchItems(prefs, [const WatchItem('kuřecí stehna')]);
+    final alerts = _Alerts();
+    var list = [offers[0]];
+    Future<int> run(DateTime t) => runSaleAlerts(
+      prefs: prefs,
+      loadOffers: () async => list,
+      alerts: alerts,
+      now: t,
+      shopping: ['máslo'],
+    );
+    expect(await run(DateTime(2026, 11, 18, 8)), 0, reason: 'poprvé ticho');
+    list = [offers[0], offers[4]];
+    expect(await run(DateTime(2026, 11, 18, 8, 10)), 0, reason: 'za 10 min ne');
+    expect(await run(DateTime(2026, 11, 18, 9)), 1);
+    expect(alerts.shown.single.title, 'Kuřecí stehna je v akci');
+    expect(await run(DateTime(2026, 11, 18, 10)), 0, reason: 'už ohlášeno');
+    await prefs.setBool(saleAlertsKey, false);
+    list = [...list, offer('n', 'lidl', 'Kuřecí stehna XXL', 49.9)];
+    expect(await run(DateTime(2026, 11, 18, 11)), 0, reason: 'vypnuto');
   });
 }

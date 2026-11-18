@@ -144,6 +144,17 @@ class PriceService {
     }
   }
 
+  /// Aktuální ověřené akce bez přihlášení (funkce databáze
+  /// current_sale_offers) – pro upozornění na pozadí.
+  static Future<List<PriceOffer>> publicOffers(SupabaseClient client) async {
+    final rows = await client.rpc('current_sale_offers');
+    if (rows is! List) return const [];
+    return [
+      for (final r in rows)
+        if (r is Map<String, dynamic>) PriceOffer.fromJson(r),
+    ];
+  }
+
   static const _runsKey = 'price_runs_cache';
 
   /// Stav stahování letáků po řetězcích (poslední úspěch, poslední chyba).

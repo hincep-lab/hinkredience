@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app/app.dart';
 import 'app/app_config.dart';
+import 'app/background_alerts.dart';
 import 'app/providers.dart';
 import 'core/app_colors.dart';
 import 'core/material.dart';
@@ -40,6 +43,9 @@ Future<void> main() async {
       debugPrint('Supabase se nepodařilo inicializovat: $error');
     }
   }
+
+  // Kontrola akcí na pozadí (Android); nesmí zdržet spuštění aplikace.
+  if (!kIsWeb) unawaited(scheduleBackgroundSaleAlerts());
 
   // Webová verze nemá složku aplikace: fotky se zobrazují ze serveru.
   final documents = kIsWeb ? null : await getApplicationDocumentsDirectory();

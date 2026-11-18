@@ -2,10 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/kitchen_providers.dart';
 import '../../app/providers.dart';
+import '../../app/sale_alerts_runner.dart';
 import '../../core/app_colors.dart';
 import '../../core/best_buy.dart';
 import '../../core/material.dart';
 import '../../core/offer_browse.dart';
+import '../../core/sale_alerts.dart';
 import '../../core/sale_dishes.dart' show saleSearchTerms;
 import '../../core/shopping.dart';
 import '../../core/stores.dart';
@@ -404,7 +406,7 @@ class _Filters extends StatelessWidget {
   }
 }
 
-/// Vypínač upozornění na akce zboží z nákupních seznamů.
+/// Upozornění na akce: vypínač a hlídané zboží (s cenou „pod … Kč“).
 class _SaleAlertsTile extends ConsumerStatefulWidget {
   const _SaleAlertsTile();
 
@@ -414,6 +416,7 @@ class _SaleAlertsTile extends ConsumerStatefulWidget {
 
 class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
   late bool _on = saleAlertsEnabled(ref.read(sharedPreferencesProvider));
+  late List<WatchItem> _watch = watchItems(ref.read(sharedPreferencesProvider));
 
   Future<void> _set(bool value) async {
     setState(() => _on = value);
@@ -425,21 +428,123 @@ class _SaleAlertsTileState extends ConsumerState<_SaleAlertsTile> {
     }
   }
 
+  Future<void> _save(List<WatchItem> next) async {
+    setState(() => _watch = next);
+    await saveWatchItems(ref.read(sharedPreferencesProvider), next);
+  }
+
+  Future<void> _add() async {
+    final name = TextEditingController();
+    final price = TextEditingController();
+    final item = await showDialog<WatchItem>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hlídat zboží'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const ValueKey('watch-name'),
+              controller: name,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Zboží',
+                hintText: 'např. máslo, krkovice, smetana ke šlehání',
+              ),
+            ),
+            TextField(
+              key: const ValueKey('watch-price'),
+              controller: price,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Jen když balení stojí nejvýš (Kč)',
+                hintText: 'nepovinné',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Zrušit'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final n = name.text.trim();
+              if (n.isEmpty) return;
+              final p = double.tryParse(
+                price.text.trim().replaceAll(',', '.').replaceAll(' ', ''),
+              );
+              Navigator.pop(
+                context,
+                WatchItem(n, maxPrice: p != null && p > 0 ? p : null),
+              );
+            },
+            child: const Text('Hlídat'),
+          ),
+        ],
+      ),
+    );
+    name.dispose();
+    price.dispose();
+    if (item == null) return;
+    await _save([
+      for (final w in _watch)
+        if (w.name.toLowerCase() != item.name.toLowerCase()) w,
+      item,
+    ]);
+  }
+
+  String _label(WatchItem w) => w.maxPrice == null
+      ? w.name
+      : '${w.name} pod ${w.maxPrice!.toStringAsFixed(w.maxPrice! % 1 == 0 ? 0 : 2).replaceAll('.', ',')} Kč';
+
   @override
-  Widget build(BuildContext context) => SwitchListTile(
-    key: const ValueKey('sale-alerts'),
-    contentPadding: EdgeInsets.zero,
-    title: const Text(
-      'Dát vědět, když je zboží ze seznamu v akci',
-      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-    ),
-    subtitle: const Text(
-      'Oznámení v telefonu o nových ověřených akcích na věci, '
-      'které máte (nebo jste měli) v nákupních seznamech.',
-      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-    ),
-    value: _on,
-    onChanged: _set,
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SwitchListTile(
+        key: const ValueKey('sale-alerts'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text(
+          'Dát vědět, když je hlídané zboží v akci',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+        subtitle: const Text(
+          'Oznámení v telefonu (i při zavřené aplikaci) o nových ověřených '
+          'akcích na hlídané zboží a na věci z nákupních seznamů.',
+          style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+        value: _on,
+        onChanged: _set,
+      ),
+      if (_on)
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (final w in _watch)
+              InputChip(
+                key: ValueKey('watch-${w.name}'),
+                label: Text(_label(w)),
+                onDeleted: () => _save([
+                  for (final x in _watch)
+                    if (x != w) x,
+                ]),
+              ),
+            ActionChip(
+              key: const ValueKey('watch-add'),
+              avatar: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Hlídat zboží'),
+              onPressed: _add,
+            ),
+          ],
+        ),
+    ],
   );
 }
 

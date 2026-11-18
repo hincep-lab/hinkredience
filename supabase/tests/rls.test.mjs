@@ -784,6 +784,19 @@ test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async
   assert.equal((await db.query(`select length(key) as n from public.price_cron_key`)).rows[0].n, 64);
   await denied(as(PAVEL, `select key from public.price_cron_key`));
   await denied(as(CIZI, `update public.price_cron_key set key = repeat('x', 40)`));
+  // Aktuální ověřené akce smí číst i telefon bez přihlášení – bez autora akce.
+  await db.query(`insert into public.price_offers (chain, product, product_key, price, valid_to, source_url, provider, verified, created_by)
+    values ('albert', 'Máslo Česká chuť', 'ceska chut maslo', 27.9, (now() at time zone 'Europe/Prague')::date + 3, 'https://www.kupi.cz/a', 'kupi', true, null),
+           ('albert', 'Máslo neověřené', 'maslo neove', 9.9, (now() at time zone 'Europe/Prague')::date + 3, 'https://www.kupi.cz/b', 'gemini', false, null)`);
+  await db.query(`set role anon`);
+  const pub = await db.query(`select * from public.current_sale_offers()`);
+  await db.query(`reset role`);
+  assert.ok(pub.rows.some((r) => r.product === 'Máslo Česká chuť'), 'ověřená akce');
+  assert.ok(!pub.rows.some((r) => r.product === 'Máslo neověřené'), 'neověřená ne');
+  assert.ok(!('created_by' in pub.rows[0]), 'bez autora');
+  await db.query(`set role anon`);
+  await assert.rejects(db.query(`select * from public.price_offers`));
+  await db.query(`reset role`);
   // Fotka zboží jen přes https.
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider, image_url)
     values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'kupi', 'http://x.cz/a.jpg')`));

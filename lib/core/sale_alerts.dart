@@ -1,5 +1,43 @@
+import 'dart:convert';
+
 import 'best_buy.dart';
 import 'stores.dart';
+
+/// Hlídané zboží: název a volitelně cena balení, pod kterou chci vědět.
+class WatchItem {
+  const WatchItem(this.name, {this.maxPrice});
+
+  final String name;
+  final double? maxPrice;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    if (maxPrice != null) 'max': maxPrice,
+  };
+
+  static List<WatchItem> decode(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw);
+      if (list is! List) return const [];
+      return [
+        for (final j in list)
+          if (j is Map &&
+              j['name'] is String &&
+              (j['name'] as String).trim().isNotEmpty)
+            WatchItem(
+              (j['name'] as String).trim(),
+              maxPrice: (j['max'] as num?)?.toDouble(),
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static String encode(List<WatchItem> items) =>
+      jsonEncode([for (final i in items) i.toJson()]);
+}
 
 /// Upozornění „zboží, které kupujete, je v akci“: nové ověřené akce, které
 /// odpovídají položce z nákupních seznamů (i odškrtnuté = běžně kupované).
@@ -11,6 +49,7 @@ List<({String title, String body})> saleAlerts({
   required Set<String> seen,
   required DateTime today,
   Set<String> cards = const {},
+  Map<String, double> maxPrice = const {},
   int max = 3,
 }) {
   final day = DateTime(today.year, today.month, today.day);
@@ -29,9 +68,12 @@ List<({String title, String body})> saleAlerts({
   for (final raw in watched) {
     final item = raw.trim();
     if (item.isEmpty || !names.add(item.toLowerCase())) continue;
+    final limit = maxPrice[item.toLowerCase()];
     final hits = [
       for (final o in fresh)
-        if (productMatches(item, o.product)) o,
+        if (productMatches(item, o.product) &&
+            (limit == null || o.price <= limit + 0.005))
+          o,
     ];
     if (hits.isEmpty) continue;
     hits.sort((a, b) {

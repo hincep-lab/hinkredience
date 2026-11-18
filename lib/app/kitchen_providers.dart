@@ -1,17 +1,15 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/best_buy.dart';
 import '../core/personalization.dart';
-import '../core/sale_alerts.dart';
 import '../data/docs_repository.dart';
 import '../data/kitchen_docs.dart';
 import '../data/price_service.dart';
 import 'providers.dart';
+import 'sale_alerts_runner.dart';
 
 /// Proud, který se obnoví při každé změně deníku, plánu nebo nákupu.
 Stream<T> _watch<T>(Ref ref, Future<T> Function(DocsRepository docs) read) {
@@ -451,52 +449,18 @@ final householdProvider = FutureProvider<Household?>((ref) async {
   return store.current();
 });
 
-/// Upozornění na akce zboží z nákupních seznamů (vypínač na obrazovce Akce).
-const saleAlertsKey = 'sale_alerts';
-const _saleAlertsSeenKey = 'sale_alerts_seen';
-const _saleAlertsLastKey = 'sale_alerts_last';
-
-bool saleAlertsEnabled(SharedPreferences prefs) =>
-    prefs.getBool(saleAlertsKey) ?? true;
-
-/// Po synchronizaci (nejvýš jednou za 30 minut): nové ověřené akce na
-/// zboží ze seznamů → oznámení v telefonu. Při prvním spuštění si jen
-/// zapamatuje, co už v akci je, aby nepřišla vlna oznámení najednou.
+/// Po synchronizaci: nové akce na hlídané zboží a zboží ze seznamů → oznámení.
 Future<void> checkSaleAlerts(WidgetRef ref, {DateTime? now}) async {
-  try {
-    final prefs = ref.read(sharedPreferencesProvider);
-    if (!saleAlertsEnabled(prefs)) return;
-    final service = ref.read(priceServiceProvider);
-    final docs = ref.read(docsRepositoryProvider).value;
-    if (service == null || docs == null) return;
-    final time = now ?? DateTime.now();
-    final last = prefs.getInt(_saleAlertsLastKey) ?? 0;
-    if (time.millisecondsSinceEpoch - last < 30 * 60 * 1000) return;
-    await prefs.setInt(_saleAlertsLastKey, time.millisecondsSinceEpoch);
-    final offers = await service.offers(time);
-    if (offers.isEmpty) return;
-    final items = await docs.shopping();
-    final first = !prefs.containsKey(_saleAlertsSeenKey);
-    final seen = (prefs.getStringList(_saleAlertsSeenKey) ?? const []).toSet();
-    final alerts = saleAlerts(
-      offers: offers,
-      watched: [for (final i in items) i.name],
-      seen: seen,
-      today: time,
-      cards: ref.read(bestBuyPrefsProvider).cards,
-    );
-    // Pamatovat jen platné akce (prošlé samy vypadnou).
-    await prefs.setStringList(_saleAlertsSeenKey, [
-      for (final o in offers) o.id,
-    ]);
-    if (first || alerts.isEmpty) return;
-    final notifier = ref.read(familyAlertsProvider);
-    if (!(prefs.getBool('family_notifications_asked') ?? false)) {
-      await prefs.setBool('family_notifications_asked', true);
-      await notifier.requestPermission();
-    }
-    await notifier.show(alerts);
-  } catch (error) {
-    debugPrint('Upozornění na akce se nepodařilo: $error');
-  }
+  final service = ref.read(priceServiceProvider);
+  final docs = ref.read(docsRepositoryProvider).value;
+  if (service == null || docs == null) return;
+  final items = await docs.shopping();
+  final time = now ?? DateTime.now();
+  await runSaleAlerts(
+    prefs: ref.read(sharedPreferencesProvider),
+    loadOffers: () => service.offers(time),
+    alerts: ref.read(familyAlertsProvider),
+    now: time,
+    shopping: [for (final i in items) i.name],
+  );
 }
