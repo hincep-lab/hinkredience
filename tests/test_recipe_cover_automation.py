@@ -104,6 +104,26 @@ class CoverSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTPS"):
                 covers.config()
 
+
+    def test_config_rejects_wrong_https_host_before_using_service_key(self):
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://lookalike.example",
+            "SUPABASE_SERVICE_ROLE_KEY": "dummy",
+            "HINK_OWNER_ID": "11111111-1111-1111-1111-111111111111",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "HINKredience HTTPS project"):
+                covers.config()
+
+    def test_config_accepts_only_exact_project_host(self):
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://wjqpzoeheonjwdyyezhb.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "dummy",
+            "HINK_OWNER_ID": "11111111-1111-1111-1111-111111111111",
+        }):
+            url, key, owner = covers.config()
+            self.assertEqual(url, "https://" + covers.EXPECTED_SUPABASE_HOST)
+            self.assertEqual(key, "dummy")
+
     def test_limit_has_upper_bound(self):
         self.assertEqual(covers.MAX_IMAGES, 5)
 
