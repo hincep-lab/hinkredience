@@ -10,6 +10,7 @@ Tato experimentální funkce **není zapnutá ani nasazená**. Nemění Flutter 
 - Před uložením fotografie kontroluje, zda `photos` zůstává prázdné; nezasahuje do stávajících fotek.
 - Pokud podmíněný zápis bezpečně potvrdí, že recept už fotku má, nepřiřazený obrázek se odstraní. Pokud se při PATCH ztratí odpověď nebo není jasné, zda zápis proběhl, obrázek zůstane zachován, aby se nepoškodila případná již uložená hlavní fotografie; operátor musí stav prověřit.
 - GitHub workflow má `contents: read`, jedinou souběžnou instanci a oddělené prostředí `recipe-covers`.
+- Privilegovaný klíč se pošle pouze na pevně ověřenou adresu projektu `wjqpzoeheonjwdyyezhb.supabase.co`. Neplatná adresa ukončí běh ještě před síťovým dotazem.
 
 ## Před použitím
 1. Na GitHubu vytvořit Environment `recipe-covers` s povinným schválením pro `apply=true` (pozor: GitHub Actions nemá podmíněné schvalování podle inputu; doporučuje se schválení každého běhu tohoto prostředí).
@@ -20,7 +21,7 @@ Tato experimentální funkce **není zapnutá ani nasazená**. Nemění Flutter 
 6. Nezapínat denní plánovač, dokud tyto kontroly neprojdou.
 
 ## Ověření
-Offline testy pokrývají výběr prázdných fotografií, podmíněný zápis, prompt, blokování zápisů, závod při současné změně a nejednoznačný výsledek sítě. **Nenahrazují integrační test se Supabase.**
+Offline testy pokrývají výběr prázdných fotografií, podmíněný zápis, prompt, blokování zápisů, nulové zápisy v dry-run režimu, přesnou adresu Supabase, závod při současné změně a nejednoznačný výsledek sítě. **Nenahrazují integrační test se Supabase.**
 
 ## Limity
 Použití OpenAI Images API je placené a vyžaduje samostatný API kredit. Limit 1–5 za běh **není** rozpočtový limit v korunách; pro produkční provoz je potřeba doplnit účetní limit a přepínač vypnutí. Model lze změnit proměnnou `HINK_IMAGE_MODEL`.
