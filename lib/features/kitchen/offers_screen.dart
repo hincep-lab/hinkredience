@@ -10,7 +10,8 @@ import '../../core/sale_dishes.dart' show saleSearchTerms;
 import '../../core/shopping.dart';
 import '../../core/stores.dart';
 import '../../core/widgets.dart';
-import 'best_buy_panel.dart' show kc, refreshMessage, shortDay, showOfferDetail;
+import 'best_buy_panel.dart'
+    show OfferImage, kc, refreshMessage, shortDay, showOfferDetail;
 
 // „Akce v Sušici“: aktuální akce z letáků Tesco, Penny, Lidl, Albert, JIP
 // a COOP. Ukazuje jen uložené nabídky z oficiálních zdrojů; neověřené jsou
@@ -510,23 +511,42 @@ class OfferCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              o.product,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            if (pack.isNotEmpty || unit.isNotEmpty)
-              Text(
-                [
-                  if (pack.isNotEmpty) pack,
-                  if (unit.isNotEmpty) unit,
-                ].join(' · '),
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  color: AppColors.textSecondary,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (o.imageUrl.isNotEmpty) ...[
+                  OfferImage(o.imageUrl, size: 64),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        o.product,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (pack.isNotEmpty || unit.isNotEmpty)
+                        Text(
+                          [
+                            if (pack.isNotEmpty) pack,
+                            if (unit.isNotEmpty) unit,
+                          ].join(' · '),
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
+            ),
             const SizedBox(height: 6),
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.end,

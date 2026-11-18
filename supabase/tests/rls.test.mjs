@@ -780,6 +780,9 @@ test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async
     values ('lidl', 'Máslo Milkpol', 'maslo milkp', 29.9, '2026-11-22', 'https://www.kupi.cz/letak/lidl-letak-153', 'kupi', true, 'kupi')`);
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
     values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'nekdo')`));
+  // Fotka zboží jen přes https.
+  await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider, image_url)
+    values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'kupi', 'http://x.cz/a.jpg')`));
   await denied(as(PAVEL, `update public.price_offers set price = 1`));
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
     values ('penny', 'X', 0, '2026-11-20', 'https://www.penny.cz/', 'manual')`));

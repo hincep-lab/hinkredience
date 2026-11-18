@@ -1,4 +1,4 @@
-import { handle, kupiOffers, kupiPack, kupiSearchUrl, kupiValidity, normalizeOffers, productMatches } from "./index.ts";
+import { handle, kupiImage, kupiOffers, kupiPack, kupiSearchUrl, kupiValidity, normalizeOffers, productMatches } from "./index.ts";
 import { KUPI_MASLO } from "./testdata/kupi_maslo.ts";
 
 function eq(a: unknown, b: unknown, msg = "") {
@@ -104,4 +104,14 @@ Deno.test("kupi.cz v celém hledání: uloží ověřenou akci bez AI a leták p
   ]);
   ok(!saved.some((o) => o.product.startsWith("Margarín")), "margarín");
   eq(body.verified, 3);
+});
+
+Deno.test("kupi.cz: fotka zboží (líné načítání), ne zástupný obrázek ani logo obchodu", () => {
+  const { offers } = kupiOffers(html, TODAY);
+  eq(offers[0].image, "https://img.kupi.cz/kupi/thumbs/maslo-jihoceske-madeta_250.jpg");
+  eq(offers[1].image, "", "Milkpol fotku nemá");
+  eq(kupiImage('<img src="/img/no_img/no_discounts.png">'), "");
+  eq(kupiImage('<img src="data:image/gif;base64,R0l" data-srcset="//img.kupi.cz/a.webp 1x, //img.kupi.cz/b.webp 2x">'), "https://img.kupi.cz/a.webp");
+  eq(kupiImage('<img src="/foto/x.jpg?w=200&amp;h=200">'), "https://www.kupi.cz/foto/x.jpg?w=200&h=200");
+  eq(kupiImage('<img src="http://nezabezpecene.cz/x.jpg">'), "");
 });

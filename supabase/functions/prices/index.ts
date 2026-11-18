@@ -1172,6 +1172,25 @@ export interface KupiOffer extends RawOffer {
   shop: string;
   /** Adresa letáku na kupi.cz (část za doménou). */
   leaflet: string;
+  /** Fotka zboží z kupi.cz (https), jinak prázdné. */
+  image: string;
+}
+
+/** Skutečná fotka z obrázku (líné načítání: data-src, srcset), ne zástupný obrázek. */
+export function kupiImage(tag: string): string {
+  const attr = (name: string) => tag.match(new RegExp(`\\s${name}=["']([^"']+)["']`, "i"))?.[1] ?? "";
+  const candidates = [
+    attr("data-src"), attr("data-lazy-src"), attr("data-original"),
+    attr("data-srcset").split(/[\s,]+/)[0] ?? "", attr("srcset").split(/[\s,]+/)[0] ?? "", attr("src"),
+  ];
+  for (const raw of candidates) {
+    const c = decodeEntities(raw.trim());
+    if (!c || /^data:|no_img|placeholder|blank|loader|lazy\.|\.svg(\?|$)/i.test(c)) continue;
+    const url = c.startsWith("//") ? `https:${c}` : c.startsWith("/") ? `https://www.kupi.cz${c}` : c;
+    if (!/^https:\/\/[a-z0-9.-]+\//i.test(url)) continue;
+    return url.slice(0, 500);
+  }
+  return "";
 }
 
 /** Den a měsíc bez roku („24. 11.“) → ISO datum nejblíž dnešku. */
@@ -1229,6 +1248,10 @@ function kupiText(html: string): string {
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<img\b[^>]*>/gi, (tag) => {
+        const src = kupiImage(tag);
+        return src ? ` ⟦img:${src}⟧ ` : " ";
+      })
       .replace(/<a\b[^>]*?\bhref=["']([^"']+)["'][^>]*>/gi, (_, h) => ` ⟦${h.replace(/^https?:\/\/(?:www\.)?kupi\.cz/i, "")}⟧ `)
       .replace(/<[^>]+>/g, " "),
   ).replace(/ilustrační obrázek/gi, " ").replace(/\s+/g, " ");
@@ -1254,7 +1277,9 @@ export function kupiOffers(html: string, today: string): { offers: KupiOffer[]; 
     else products.push({ slug, body });
   }
   for (const { slug, body } of products) {
-    const head = body.split(/⟦|Přidat produkt|Běžná cena|Doporučené akce|Akce dle ceny/)[0].trim();
+    // Fotka produktu: první obrázek před nabídkami (loga obchodů jsou až v nich).
+    const image = body.split(/⟦\/letaky\//)[0].match(/⟦img:([^⟧]+)⟧/)?.[1] ?? "";
+    const head = body.replace(/⟦img:[^⟧]*⟧/g, " ").trim().split(/⟦|Přidat produkt|Běžná cena|Doporučené akce|Akce dle ceny/)[0].trim();
     const name = head.replace(/\s+\d+(?:[.,]\d+)?\s*(?:kg|g|ml|l|ks)\s*$/i, "").replace(/\s+v akci za .*$/i, "").trim();
     if (!name) continue;
     // Nabídky: začínají odkazem na obchod ⟦/letaky/obchod⟧ a končí odkazem do letáku ⟦/letak/…⟧.
@@ -1317,6 +1342,7 @@ export function kupiOffers(html: string, today: string): { offers: KupiOffer[]; 
         chain,
         shop: o.shop,
         leaflet: o.leaflet,
+        image,
         product: name.slice(0, 160),
         label: pack.label,
         price,
@@ -1878,6 +1904,14 @@ class Db {
         (row.store_id ? `&store_id=eq.${q(row.store_id)}` : "&store_id=is.null");
       // kupi.cz je přepis letáku: ověří jen dosud neověřenou nabídku (např.
       // čtení AI), nabídku z oficiálního zdroje nikdy nepřepíše.
+      if (row.image_url) {
+        // Fotka z kupi.cz se doplní i k už uložené (oficiální) nabídce bez fotky.
+        await this.rest(`price_offers?${filter}&image_url=eq.`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ image_url: row.image_url }),
+        }).catch(() => {});
+      }
       if (row.verify_method === "kupi") {
         await this.rest(`price_offers?${filter}&verified=is.false`, {
           method: "PATCH",
@@ -2171,6 +2205,7 @@ export async function handle(
             valid_to: offer.valid_to,
             source_url: /^https:\/\//.test(offer.source_url) ? offer.source_url : `https://${CHAINS[chain].domains[0]}/`,
             source_title: verdict.reason,
+            ...((offer as { image?: string }).image ? { image_url: (offer as { image?: string }).image } : {}),
             provider,
             verified: verdict.verified,
             verify_method: verdict.method,

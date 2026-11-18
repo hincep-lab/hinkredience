@@ -602,6 +602,10 @@ Future<void> showOfferDetail(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (offer.imageUrl.isNotEmpty) ...[
+                Center(child: OfferImage(offer.imageUrl, size: 140)),
+                const SizedBox(height: 12),
+              ],
               Text(
                 offer.product,
                 style: Theme.of(context).textTheme.titleLarge,
@@ -1161,4 +1165,34 @@ class PriceDiagnostics extends StatelessWidget {
         ? iso
         : '${int.parse(m.group(3)!)}. ${int.parse(m.group(2)!)}.';
   }
+}
+
+/// Fotka zboží u akce (bílé pozadí jako na produktových fotkách). Když se
+/// nenačte (bez internetu, web bez povolení), místo ní je jen ikona.
+class OfferImage extends StatelessWidget {
+  const OfferImage(this.url, {super.key, this.size = 64});
+
+  final String url;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(10),
+    child: Container(
+      key: const ValueKey('offer-image'),
+      width: size,
+      height: size,
+      color: Colors.white,
+      padding: const EdgeInsets.all(4),
+      child: Image.network(
+        url,
+        fit: BoxFit.contain,
+        cacheWidth: (size * 3).round(),
+        errorBuilder: (context, error, stack) => const Icon(
+          Icons.shopping_basket_outlined,
+          color: AppColors.textSecondary,
+        ),
+      ),
+    ),
+  );
 }

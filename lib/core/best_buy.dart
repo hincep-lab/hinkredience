@@ -30,6 +30,7 @@ class PriceOffer {
     this.verifyMethod = '',
     this.kind = 'promo',
     this.loyalty = '',
+    this.imageUrl = '',
   });
 
   final String id;
@@ -58,6 +59,9 @@ class PriceOffer {
 
   /// Název věrnostního programu („Clubcard“, „Můj Albert“…), jinak prázdné.
   final String loyalty;
+
+  /// Fotka zboží (https, zatím z kupi.cz), jinak prázdné.
+  final String imageUrl;
 
   bool get isRegular => kind == 'regular';
   bool get needsLoyalty => kind == 'loyalty';
@@ -109,6 +113,7 @@ class PriceOffer {
     verifyMethod: j['verify_method'] as String? ?? '',
     kind: j['kind'] as String? ?? 'promo',
     loyalty: j['loyalty'] as String? ?? '',
+    imageUrl: j['image_url'] as String? ?? '',
   );
 
   Map<String, dynamic> toJson() => {
@@ -131,6 +136,7 @@ class PriceOffer {
     'verify_method': verifyMethod,
     'kind': kind,
     'loyalty': loyalty,
+    'image_url': imageUrl,
   };
 }
 
