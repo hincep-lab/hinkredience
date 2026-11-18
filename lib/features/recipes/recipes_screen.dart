@@ -8,7 +8,7 @@ import '../../core/formatters.dart';
 import '../../core/material.dart';
 import '../../core/recipe_groups.dart';
 import '../../core/widgets.dart';
-import '../home/home_widgets.dart' show GroupGrid;
+import '../home/home_widgets.dart' show GroupGrid, NoPhotoBadge;
 import '../sync/sync_status.dart';
 import '../../data/recipe.dart';
 
@@ -354,7 +354,18 @@ class RecipeListTile extends ConsumerWidget {
               child: SizedBox(
                 width: 92,
                 height: 92,
-                child: RecipeCover(recipe: recipe),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    RecipeCover(recipe: recipe),
+                    if (recipe.photos.isEmpty)
+                      const Positioned(
+                        left: 4,
+                        bottom: 4,
+                        child: NoPhotoBadge(),
+                      ),
+                  ],
+                ),
               ),
             ),
             Expanded(

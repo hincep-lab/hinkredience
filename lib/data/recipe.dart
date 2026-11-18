@@ -117,8 +117,11 @@ class RecipeStep {
   );
 
   /// Druh kroku, jak se s ním počítá – ručně zvolený, jinak rozpoznaný z textu.
-  String get effectiveKind =>
-      kind == StepKind.auto ? inferKind(instruction) : kind;
+  /// Pečení/dušení označené jako pasivní se počítá jako vaření (viz
+  /// [effectiveStepKind]).
+  String get effectiveKind => effectiveStepKind(
+    TimedStep(instruction: instruction, kind: kind, temperatureC: temperatureC),
+  );
 
   /// Běží krok souběžně s předchozím (ručně označeno, nebo „mezitím…“)?
   bool get runsInParallel => parallel || inferParallel(instruction);
@@ -291,6 +294,7 @@ class Recipe {
           durationMinutes: step.durationMinutes,
           kind: step.kind,
           parallel: step.parallel,
+          temperatureC: step.temperatureC,
         ),
     ],
   );

@@ -300,26 +300,153 @@ void main() {
     );
   });
 
-  test('příležitost jen ze štítků, v jedné skupině OR, mezi skupinami AND', () {
+  test('štítky se kombinují: recept musí mít všechny vybrané', () {
     final kids = r('Kaše', tags: ['Pro děti'], prep: 5, cook: 10);
     final party = r('Svíčková', tags: ['Slavnostní jídlo'], cook: 200);
+    final both = r(
+      'Dort',
+      tags: ['Pro děti', 'Slavnostní jídlo'],
+      prep: 30,
+      cook: 60,
+    );
     final none = r('Guláš', cook: 120);
-    final all = [kids, party, none];
-    expect(const RecipeFilters(occasions: {'Pro děti'}).apply(all), [kids]);
+    final all = [kids, party, both, none];
+    expect(const RecipeFilters(occasions: {'Pro děti'}).apply(all), [
+      kids,
+      both,
+    ]);
     expect(
       const RecipeFilters(occasions: {'Pro děti', 'Slavnostní jídlo'})
           .apply(all),
-      [kids, party],
+      [both],
+    );
+    expect(
+      const RecipeFilters(occasions: {'Pro děti', 'Slavnostní jídlo'})
+          .reasonsAgainst(kids),
+      ['nemá štítek Slavnostní jídlo'],
     );
     expect(
       const RecipeFilters(
-        occasions: {'Pro děti', 'Slavnostní jídlo'},
+        occasions: {'Pro děti'},
         times: {TimeFilter.h1to3, TimeFilter.over3},
       ).apply(all),
-      [party],
+      [both],
     );
     expect(const RecipeFilters(query: 'gulas').apply(all), [none]);
-    expect(const RecipeFilters(tag: 'pro deti').apply(all), [kids]);
+    expect(const RecipeFilters(tags: {'pro deti'}).apply(all), [kids, both]);
+  });
+
+  test('způsoby přípravy se kombinují: Trouba + Pánev = obojí', () {
+    final ovenOnly = r('Pečeně', tags: ['Trouba']);
+    final panOnly = r('Řízek', tags: ['Pánev']);
+    final both = r('Parmigiana', tags: ['Trouba', 'Pánev']);
+    final all = [ovenOnly, panOnly, both];
+    expect(const RecipeFilters(prep: {PrepMethod.oven}).apply(all), [
+      ovenOnly,
+      both,
+    ]);
+    const combo = RecipeFilters(prep: {PrepMethod.oven, PrepMethod.pan});
+    expect(combo.apply(all), [both]);
+    expect(combo.reasonsAgainst(panOnly), ['chybí Trouba (má Pánev)']);
+  });
+
+  test('kuchyně: kterákoli z vybraných, ve spojení se štítky', () {
+    final it = r('Cacciatore', tags: ['Italská kuchyně', 'Rodinný oběd']);
+    final gr = r('Musaka', tags: ['Řecká kuchyně', 'Rodinný oběd']);
+    final cz = r('Svíčková', tags: ['Nedělní oběd']);
+    final all = [it, gr, cz];
+    expect(
+      const RecipeFilters(cuisines: {'Italská kuchyně', 'Řecká kuchyně'})
+          .apply(all),
+      [it, gr],
+    );
+    expect(
+      const RecipeFilters(
+            cuisines: {'Italská kuchyně', 'Řecká kuchyně'},
+            occasions: {'Rodinný oběd'},
+            prep: {PrepMethod.oven},
+          )
+          .apply([
+            ...all,
+            r('Lasagne', tags: ['Italská kuchyně', 'Rodinný oběd', 'Trouba']),
+          ])
+          .map((r) => r.title),
+      ['Lasagne'],
+    );
+    expect(cuisinesIn([cz, gr, it]), ['Italská kuchyně', 'Řecká kuchyně']);
+    expect(
+      cuisinesIn([
+        r('X', tags: ['Gruzínská kuchyně']),
+      ]),
+      ['Gruzínská kuchyně'],
+    );
+  });
+
+  test('Rychlá večeře a Rychlé jídlo jsou jeden filtr', () {
+    final old = r('Omeleta', tags: ['Rychlá večeře']);
+    final fresh = r('Pad thai', tags: ['Rychlé jídlo']);
+    expect(occasionTags.first, 'Rychlé jídlo');
+    expect(occasionTags.contains('Rychlá večeře'), isFalse);
+    expect(
+      const RecipeFilters(occasions: {'Rychlé jídlo'}).apply([old, fresh]),
+      [old, fresh],
+    );
+    expect(tagCounts([old, fresh]), [const MapEntry('Rychlé jídlo', 2)]);
+    expect(tagKindOf('Rychlá večeře'), TagKind.occasion);
+    expect(tagKindOf('Hrnec'), TagKind.prep);
+    expect(tagKindOf('Italská kuchyně'), TagKind.cuisine);
+    expect(tagKindOf('Do mrazáku'), TagKind.other);
+  });
+
+  test('Hrnec, Vaflovač, Bez vaření a Bez pečení jsou způsoby přípravy', () {
+    expect(PrepMethod.fromTag('hrnec'), PrepMethod.pot);
+    expect(PrepMethod.fromTag('Vaflovač'), PrepMethod.waffle);
+    expect(PrepMethod.fromTag('bez vareni'), PrepMethod.noCook);
+    expect(PrepMethod.fromTag('Bez pečení'), PrepMethod.noBake);
+    expect(prepMethodsOf(r('Vafle', tags: ['Vaflovač', 'Sladká snídaně'])), {
+      PrepMethod.waffle,
+    });
+    expect(
+      inferPrepMethods(r('Guláš', steps: ['V hrnci duste 2 hodiny.'])),
+      contains(PrepMethod.pot),
+    );
+    expect(
+      inferPrepMethods(
+        r('Vafle', steps: ['Pečte ve vyhřátém vaflovači 5 minut.']),
+      ),
+      {PrepMethod.waffle},
+    );
+    final salad = r(
+      'Okurkový salát',
+      category: 'Přílohy',
+      steps: ['Okurku nastrouhejte a zalijte nálevem.'],
+    );
+    expect(inferPrepMethods(salad), {PrepMethod.noCook});
+    final tiramisu = r(
+      'Jahodové tiramisu',
+      category: 'Sladká jídla a dezerty',
+      steps: ['Vrstvěte piškoty a krém.', 'Chlaďte 4 hodiny.'],
+    );
+    expect(
+      inferPrepMethods(tiramisu),
+      containsAll([PrepMethod.noCook, PrepMethod.noBake]),
+    );
+    // Recept s více způsoby přípravy.
+    expect(prepMethodsOf(r('Pierogi', tags: ['Hrnec', 'Pánev'])), {
+      PrepMethod.pot,
+      PrepMethod.pan,
+    });
+  });
+
+  test('filtr Bez fotky', () {
+    final bare = r('Bez fotky');
+    final photo = r('S fotkou').copyWith(
+      photos: const [RecipePhoto(id: 'p1', remotePath: 'x.jpg')],
+    );
+    const filters = RecipeFilters(withoutPhoto: true);
+    expect(filters.apply([bare, photo]), [bare]);
+    expect(filters.reasonsAgainst(photo), ['má fotografii']);
+    expect(filters.count, 1);
   });
 
   test('Drůbež a králík + Pro děti + Do 60 minut', () {
@@ -391,6 +518,7 @@ void main() {
 
   test('štítky: stejné bez diakritiky, starší „Na víc dní“ platí', () {
     expect(occasionTags, hasLength(7));
+    expect(sameTag('Rychlá večeře', 'Rychlé jídlo'), isTrue);
     expect(sameTag('pro deti', 'Pro děti'), isTrue);
     expect(hasTag(r('Guláš', tags: ['Na víc dní']), 'Na více dní'), isTrue);
     expect(toggleTag(['Pro děti'], 'pro deti', false), isEmpty);

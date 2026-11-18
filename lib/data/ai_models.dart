@@ -583,17 +583,22 @@ class MemoryItem {
     required this.id,
     required this.label,
     this.detail = '',
+    this.kind = '',
     this.enabled = true,
   });
 
   final String id;
   final String label;
   final String detail;
+
+  /// Druh vybavení („trouba“, „hrnec“…); u preferencí prázdný.
+  final String kind;
   final bool enabled;
 
   factory MemoryItem.equipment(Map<String, dynamic> row) => MemoryItem(
     id: row['id'] as String,
     label: (row['name'] as String?) ?? '',
+    kind: (row['kind'] as String?) ?? '',
     detail: [
       ..._strings(row['capabilities']),
       if (((row['notes'] as String?) ?? '').trim().isNotEmpty)

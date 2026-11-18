@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/best_buy.dart';
+import '../core/equipment_fit.dart';
 import '../core/personalization.dart';
 import '../data/docs_repository.dart';
 import '../data/kitchen_docs.dart';
@@ -66,6 +67,10 @@ final tasteProfileProvider = Provider.autoDispose<TasteProfile>((ref) {
         if (p.enabled) p.label,
     ],
     equipment: [for (final e in kitchen.equipment) e.label],
+    appliances: [
+      for (final e in kitchen.equipment)
+        Appliance(name: e.label, kind: e.kind, detail: e.detail),
+    ],
   );
 });
 

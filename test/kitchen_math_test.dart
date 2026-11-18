@@ -180,6 +180,24 @@ void main() {
     });
   });
 
+  test(
+    'palačinky na kusy: 12 ks → 18, 10 a 8 ks, vejce se nezaokrouhlí potichu',
+    () {
+      // Recept: 12 palačinek, 3 vejce, 500 ml mléka. Přepočet je poměr kusů.
+      String eggs(double pieces) =>
+          formatAmount(3, 'ks', factor: pieces / 12, name: 'Vejce');
+      expect(eggs(18), '4 ½ ks (4 celá + ½ rozšlehaného)');
+      expect(eggs(8), '2 ks');
+      expect(eggs(10), '2 ½ ks (2 celá + ½ rozšlehaného)');
+      expect(eggs(12), '3 ks');
+      expect(formatAmount(500, 'ml', factor: 18 / 12, name: 'Mléko'), '750 ml');
+      expect(yieldLabel(18, 'ks'), '18 ks');
+      // Dvě porce polévky ze čtyř: porce se dělí stejně.
+      expect(formatAmount(2, 'ks', factor: 2 / 4, name: 'Vejce'), '1 ks');
+      expect(yieldLabel(2, 'porce'), '2 porce');
+    },
+  );
+
   test('výtěžnost slovy', () {
     expect(yieldLabel(1, ''), '1 porce');
     expect(yieldLabel(4, 'porce'), '4 porce');

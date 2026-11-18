@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../data/kitchen_docs.dart';
 import '../data/recipe.dart';
+import 'equipment_fit.dart';
 import 'formatters.dart';
 import 'kitchen_math.dart';
 
@@ -19,12 +20,15 @@ class TasteProfile {
     this.noChilli = false,
     this.experimenting = false,
     this.equipment = const [],
+    this.appliances = const [],
   });
 
   /// Profil z popisků preferencí a názvů spotřebičů (jen zapnuté položky).
+  /// [appliances] je vybavení i s druhem a schopnostmi (trouba se sondou…).
   factory TasteProfile.fromLabels(
     Iterable<String> preferences, {
     Iterable<String> equipment = const [],
+    List<Appliance> appliances = const [],
   }) {
     final text = [for (final p in preferences) foldText(p)].join(' | ');
     bool has(List<String> stems) => stems.any(text.contains);
@@ -39,7 +43,11 @@ class TasteProfile {
       equipment: [
         for (final e in equipment)
           if (e.trim().isNotEmpty) e.trim(),
+        for (final a in appliances)
+          if (a.name.trim().isNotEmpty && !equipment.contains(a.name))
+            a.name.trim(),
       ],
+      appliances: appliances,
     );
   }
 
@@ -53,6 +61,10 @@ class TasteProfile {
   final bool noChilli;
   final bool experimenting;
   final List<String> equipment;
+
+  /// Vybavení s druhem a schopnostmi – pro posouzení, jestli recept jde
+  /// udělat na tom, co uživatel má (viz [equipmentFit]).
+  final List<Appliance> appliances;
 }
 
 // ------------------------------------------------------------- chilli
@@ -257,8 +269,27 @@ List<Recommendation> recommend({
       add(0.4, '');
     }
 
-    final appliance = _matchingEquipment(recipe, profile.equipment);
-    if (appliance != null) add(0.5, 'Na ${_shortName(appliance)}');
+    final fit = equipmentFit(recipe, profile.appliances);
+    if (!fit.fits) {
+      // Recept potřebuje něco, co uživatel nemá (vaflovač, sous-vide…).
+      add(-1.5, '');
+    } else {
+      final specific = [
+        for (final t in fit.tips)
+          if (t.appliance.isNotEmpty &&
+              !t.text.startsWith('Pečení v troubě') &&
+              !t.text.startsWith('Pánev:') &&
+              !t.text.startsWith('Hrnec:'))
+            t,
+      ];
+      if (specific.isNotEmpty) {
+        // Využije něco navíc: sondu, páru, robota, pizza kámen…
+        add(0.7, 'Využije ${_shortName(specific.first.appliance)}');
+      } else {
+        final appliance = _matchingEquipment(recipe, profile.equipment);
+        if (appliance != null) add(0.5, 'Na ${_shortName(appliance)}');
+      }
+    }
 
     if (minutes > 0) {
       if (weekend && minutes >= 120) {

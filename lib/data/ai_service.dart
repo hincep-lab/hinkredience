@@ -241,7 +241,7 @@ class KitchenStore {
   Future<List<MemoryItem>> equipment() async {
     final rows = await _client
         .from('kitchen_equipment')
-        .select('id,name,capabilities,notes')
+        .select('id,name,kind,capabilities,notes')
         .order('position')
         .order('created_at');
     return [for (final row in rows) MemoryItem.equipment(row)];

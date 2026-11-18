@@ -282,18 +282,23 @@ String? _firstMeat(String text) {
 enum PrepMethod {
   oven('Trouba', Icons.kitchen_rounded, 'trouba'),
   pan('Pánev', Icons.egg_rounded, 'panev'),
+  pot('Hrnec', Icons.soup_kitchen_rounded),
   sousVide('Sous-vide', Icons.hot_tub_rounded, 'sousvide'),
   grill('Gril', Icons.outdoor_grill_rounded, 'gril'),
-  slow('Pomalé vaření', Icons.soup_kitchen_outlined, 'pomale');
+  slow('Pomalé vaření', Icons.soup_kitchen_outlined, 'pomale'),
+  waffle('Vaflovač', Icons.grid_on_rounded),
+  noCook('Bez vaření', Icons.no_food_outlined),
+  noBake('Bez pečení', Icons.icecream_outlined);
 
-  const PrepMethod(this.label, this.icon, this._asset);
+  const PrepMethod(this.label, this.icon, [this._asset]);
 
   final String label;
   final IconData icon;
-  final String _asset;
+  final String? _asset;
 
-  /// Obrysová ikona podle předlohy.
-  String get iconAsset => 'assets/images/icons/$_asset.png';
+  /// Obrysová ikona podle předlohy, nebo null (pak se použije [icon]).
+  String? get iconAsset =>
+      _asset == null ? null : 'assets/images/icons/$_asset.png';
 
   /// Štítek, pod kterým se způsob přípravy ukládá u receptu.
   String get tag => label;
@@ -339,15 +344,55 @@ Set<PrepMethod> savedPrepMethods(Recipe r) => {
 Set<PrepMethod> inferPrepMethods(Recipe r) {
   final text = _recipeText(r);
   final title = foldText(r.title);
+  final waffle = text.contains('vaflovac');
   // Vafle ve vaflovači nejsou pečení v troubě.
-  final waffleOnly = text.contains('vaflovac') && !text.contains('troub');
+  final waffleOnly = waffle && !text.contains('troub');
+  final oven = _oven.hasMatch(text) && !waffleOnly;
+  final pan = _pan.hasMatch(text);
+  final pot = _pot.hasMatch(text);
+  final sousVide = _sousVide.hasMatch(text);
+  final grill = RegExp(r'\bgril').hasMatch(text);
+  final heat =
+      oven ||
+      pan ||
+      pot ||
+      sousVide ||
+      grill ||
+      waffle ||
+      r.cookMinutes > 0 ||
+      _heatWords.hasMatch(text);
   return {
-    if (_oven.hasMatch(text) && !waffleOnly) PrepMethod.oven,
-    if (_pan.hasMatch(text)) PrepMethod.pan,
-    if (_sousVide.hasMatch(text)) PrepMethod.sousVide,
-    if (RegExp(r'\bgril').hasMatch(text)) PrepMethod.grill,
+    if (oven) PrepMethod.oven,
+    if (pan) PrepMethod.pan,
+    if (pot) PrepMethod.pot,
+    if (sousVide) PrepMethod.sousVide,
+    if (grill) PrepMethod.grill,
     if (title.contains('pomal') || r.cookMinutes >= 180) PrepMethod.slow,
+    if (waffle) PrepMethod.waffle,
+    // Nic se nevaří ani nepeče (saláty, tiramisu, nakládané…). Recept
+    // musí mít postup – prázdný recept se neodhaduje.
+    if (!heat && r.steps.isNotEmpty) PrepMethod.noCook,
+    // Dezert bez trouby a vaflovače (nepečený dort, tiramisu, krém).
+    if (!oven && !waffle && r.steps.isNotEmpty && _isSweet(r))
+      PrepMethod.noBake,
   };
+}
+
+final _pot = RegExp(
+  r'\bhrnc|\bhrnec|\bkastrol|\bkastrul|\btlakov|multifunkcni hrn|'
+  r'\bvarte\b|\buvarte\b|\bprovarte\b|\bpovarte\b|\bduste\b|\bpoduste\b|'
+  r'vrouci|osolene vod|k varu',
+);
+
+final _heatWords = RegExp(
+  r'\bvar(it|i|te|ime)\b|\buvar|\bpovar|\bopec|\bopek|\bsmaz|\bdus|'
+  r'\bpec(te|e|eni)\b|\bzaprazk|\bjisk|°c',
+);
+
+bool _isSweet(Recipe r) {
+  final category = foldText(r.category);
+  return _any(category, ['dezert', 'sladk', 'cukr']) ||
+      _any(foldText(r.title), ['dezert', 'tiramisu', 'dort', 'krem', 'pudink']);
 }
 
 /// Způsoby přípravy receptu: uložené štítky, jinak odhad.
@@ -427,8 +472,9 @@ String timeLabelOf(Recipe r, {TimeMode mode = TimeMode.total}) {
 // ----------------------------------------------------------- příležitost
 
 /// Příležitosti – berou se jen ze štítků, které recept opravdu má.
+/// „Rychlá večeře“ a „Rychlé jídlo“ jsou jeden filtr (viz [_tagAliases]).
 const occasionTags = [
-  'Rychlá večeře',
+  'Rychlé jídlo',
   'Rodinný oběd',
   'Pro děti',
   'Nedělní oběd',
@@ -438,14 +484,92 @@ const occasionTags = [
 ];
 
 /// Štítky nabízené v úpravě receptu jedním klepnutím (kromě způsobů
-/// přípravy, které mají vlastní řadu).
-const suggestedTags = [...occasionTags, 'Nepálivé'];
+/// přípravy a kuchyní, které mají vlastní řadu).
+const suggestedTags = [...occasionTags, 'Nepálivé', 'Do mrazáku'];
+
+/// Světové kuchyně nabízené v úpravě receptu. Ve filtrech se ukazují jen
+/// ty, které nějaký recept opravdu má (i vlastní, např. „Gruzínská kuchyně“).
+const cuisineTags = [
+  'Česká kuchyně',
+  'Světová kuchyně',
+  'Asijská kuchyně',
+  'Italská kuchyně',
+  'Francouzská kuchyně',
+  'Řecká kuchyně',
+  'Španělská kuchyně',
+  'Mexická kuchyně',
+  'Americká kuchyně',
+  'Anglická kuchyně',
+  'Polská kuchyně',
+  'Ruská kuchyně',
+  'Maďarská kuchyně',
+  'Blízkovýchodní kuchyně',
+  'Marocká kuchyně',
+  'Indická kuchyně',
+  'Čínská kuchyně',
+  'Japonská kuchyně',
+  'Korejská kuchyně',
+  'Thajská kuchyně',
+  'Vietnamská kuchyně',
+];
 
 /// Názvy způsobů přípravy, které jsou zároveň štítky.
 final prepTags = [for (final m in PrepMethod.values) m.tag];
 
-/// Starší podoby štítků, které znamenají totéž.
-const _tagAliases = {'na vic dni': 'na vice dni'};
+/// Starší a souběžné podoby štítků, které znamenají totéž. Uložené štítky
+/// se nepřepisují – jen se stejně filtrují a počítají.
+const _tagAliases = {
+  'na vic dni': 'na vice dni',
+  'rychla vecere': 'rychle jidlo',
+  'rychle jidla': 'rychle jidlo',
+  'rychlovka': 'rychle jidlo',
+  'bez peceni': 'bez peceni',
+  'nepecene': 'bez peceni',
+  'bez vareni': 'bez vareni',
+  'vaflovac': 'vaflovac',
+  'vafle': 'vaflovac',
+  'v hrnci': 'hrnec',
+};
+
+/// Do které skupiny štítek patří.
+enum TagKind {
+  prep('Způsob přípravy'),
+  occasion('Příležitost'),
+  cuisine('Světová kuchyně'),
+  other('Další štítky');
+
+  const TagKind(this.label);
+
+  final String label;
+}
+
+bool isCuisineTag(String tag) {
+  final folded = _canonTag(tag);
+  return folded.endsWith(' kuchyne') || folded == 'kuchyne';
+}
+
+TagKind tagKindOf(String tag) {
+  if (PrepMethod.fromTag(tag) != null) return TagKind.prep;
+  if (occasionTags.any((o) => sameTag(o, tag))) return TagKind.occasion;
+  if (isCuisineTag(tag)) return TagKind.cuisine;
+  return TagKind.other;
+}
+
+/// Kuchyně, které mají recepty (v pořadí [cuisineTags], vlastní nakonec).
+List<String> cuisinesIn(List<Recipe> recipes) {
+  final present = <String, String>{};
+  for (final r in recipes) {
+    if (r.isDeleted) continue;
+    for (final t in r.tags) {
+      if (isCuisineTag(t)) present.putIfAbsent(_canonTag(t), () => t.trim());
+    }
+  }
+  final out = [
+    for (final c in cuisineTags)
+      if (present.remove(_canonTag(c)) != null) c,
+  ];
+  return [...out, ...present.values.toList()..sort()];
+}
 
 String _canonTag(String tag) {
   final folded = foldText(tag.trim()).replaceAll(RegExp(r'\s+'), ' ');
@@ -471,6 +595,14 @@ List<String> toggleTag(List<String> tags, String tag, bool on) {
   return on ? [...rest, tag] : rest;
 }
 
+/// Přesný název známého štítku (způsob přípravy, příležitost, kuchyně).
+String? _knownLabel(String canon) {
+  for (final t in [...prepTags, ...occasionTags, ...cuisineTags]) {
+    if (_canonTag(t) == canon) return t;
+  }
+  return null;
+}
+
 /// Všechny štítky v receptech s počtem receptů (nejčastější první).
 List<MapEntry<String, int>> tagCounts(List<Recipe> recipes) {
   final counts = <String, int>{};
@@ -481,7 +613,7 @@ List<MapEntry<String, int>> tagCounts(List<Recipe> recipes) {
       for (final t in r.tags) _canonTag(t): t.trim(),
     }.entries) {
       if (tag.key.isEmpty) continue;
-      names.putIfAbsent(tag.key, () => tag.value);
+      names.putIfAbsent(tag.key, () => _knownLabel(tag.key) ?? tag.value);
       counts[tag.key] = (counts[tag.key] ?? 0) + 1;
     }
   }
@@ -495,9 +627,12 @@ List<MapEntry<String, int>> tagCounts(List<Recipe> recipes) {
 
 // --------------------------------------------------------- kombinace
 
-/// Zvolené filtry. V rámci jedné skupiny (příprava, čas, příležitost,
-/// kategorie) stačí shoda s kterýmkoli zvoleným, mezi skupinami musí platit
-/// všechny.
+/// Zvolené filtry.
+///
+/// Štítky se kombinují tak, že recept musí mít **všechny** zvolené
+/// (Trouba + Pánev = recept, který používá obojí; Pro děti + Rychlé jídlo =
+/// obojí zároveň). U kategorie, času a kuchyně stačí shoda s **kteroukoli**
+/// zvolenou možností (Italská nebo Řecká). Mezi skupinami musí platit vše.
 @immutable
 class RecipeFilters {
   const RecipeFilters({
@@ -507,7 +642,9 @@ class RecipeFilters {
     this.timeMode = TimeMode.total,
     this.occasions = const {},
     this.groups = const {},
-    this.tag,
+    this.cuisines = const {},
+    this.tags = const {},
+    this.withoutPhoto = false,
   });
 
   final String query;
@@ -516,7 +653,13 @@ class RecipeFilters {
   final TimeMode timeMode;
   final Set<String> occasions;
   final Set<String> groups;
-  final String? tag;
+  final Set<String> cuisines;
+
+  /// Další (vlastní) štítky – recept musí mít všechny.
+  final Set<String> tags;
+
+  /// Jen recepty bez fotografie.
+  final bool withoutPhoto;
 
   bool get isEmpty =>
       query.trim().isEmpty &&
@@ -524,7 +667,9 @@ class RecipeFilters {
       times.isEmpty &&
       occasions.isEmpty &&
       groups.isEmpty &&
-      tag == null;
+      cuisines.isEmpty &&
+      tags.isEmpty &&
+      !withoutPhoto;
 
   /// Počet zvolených filtrů (bez hledaného textu).
   int get count =>
@@ -532,7 +677,9 @@ class RecipeFilters {
       times.length +
       occasions.length +
       groups.length +
-      (tag == null ? 0 : 1);
+      cuisines.length +
+      tags.length +
+      (withoutPhoto ? 1 : 0);
 
   RecipeFilters copyWith({
     String? query,
@@ -541,7 +688,9 @@ class RecipeFilters {
     TimeMode? timeMode,
     Set<String>? occasions,
     Set<String>? groups,
-    Object? tag = _keep,
+    Set<String>? cuisines,
+    Set<String>? tags,
+    bool? withoutPhoto,
   }) => RecipeFilters(
     query: query ?? this.query,
     prep: prep ?? this.prep,
@@ -549,7 +698,9 @@ class RecipeFilters {
     timeMode: timeMode ?? this.timeMode,
     occasions: occasions ?? this.occasions,
     groups: groups ?? this.groups,
-    tag: identical(tag, _keep) ? this.tag : tag as String?,
+    cuisines: cuisines ?? this.cuisines,
+    tags: tags ?? this.tags,
+    withoutPhoto: withoutPhoto ?? this.withoutPhoto,
   );
 
   /// Ponechá hledaný text a režim času, ostatní filtry zruší.
@@ -567,14 +718,18 @@ class RecipeFilters {
       final g = groupOf(r);
       if (!groups.contains(g.id)) out.add('patří do kategorie ${g.label}');
     }
-    if (tag != null && !hasTag(r, tag!)) out.add('nemá štítek $tag');
     if (prep.isNotEmpty) {
       final has = prepMethodsOf(r);
-      if (has.intersection(prep).isEmpty) {
+      final missing = [
+        for (final m in PrepMethod.values)
+          if (prep.contains(m) && !has.contains(m)) m.label,
+      ];
+      if (missing.isNotEmpty) {
         out.add(
           has.isEmpty
               ? 'nemá uvedený způsob přípravy'
-              : 'způsob přípravy: ${has.map((m) => m.label).join(', ')}',
+              : 'chybí ${missing.join(' a ')} '
+                    '(má ${has.map((m) => m.label).join(', ')})',
         );
       }
     }
@@ -591,13 +746,27 @@ class RecipeFilters {
         );
       }
     }
-    if (occasions.isNotEmpty && !occasions.any((o) => hasTag(r, o))) {
+    final missingTags = [
+      for (final o in occasions)
+        if (!hasTag(r, o)) o,
+      for (final t in tags)
+        if (!hasTag(r, t)) t,
+    ];
+    if (missingTags.isNotEmpty) {
       out.add(
-        occasions.length == 1
-            ? 'nemá štítek ${occasions.first}'
-            : 'nemá žádný ze štítků ${occasions.join(', ')}',
+        missingTags.length == 1
+            ? 'nemá štítek ${missingTags.first}'
+            : 'nemá štítky ${missingTags.join(', ')}',
       );
     }
+    if (cuisines.isNotEmpty && !cuisines.any((c) => hasTag(r, c))) {
+      out.add(
+        cuisines.length == 1
+            ? 'nemá štítek ${cuisines.first}'
+            : 'nemá žádný ze štítků ${cuisines.join(', ')}',
+      );
+    }
+    if (withoutPhoto && r.photos.isNotEmpty) out.add('má fotografii');
     return out;
   }
 
@@ -619,8 +788,6 @@ class RecipeFilters {
     return out;
   }
 }
-
-const Object _keep = Object();
 
 /// Počet receptů v každé skupině.
 Map<String, int> groupCounts(List<Recipe> recipes) {

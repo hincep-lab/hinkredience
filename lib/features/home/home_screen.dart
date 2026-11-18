@@ -72,6 +72,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _setFilters(_filters.copyWith(occasions: next));
   }
 
+  void _toggleCuisine(String c) {
+    final next = {..._filters.cuisines};
+    if (!next.remove(c)) next.add(c);
+    _setFilters(_filters.copyWith(cuisines: next));
+  }
+
+  void _toggleTag(String t) {
+    final next = {..._filters.tags};
+    if (!next.remove(t)) next.add(t);
+    _setFilters(_filters.copyWith(tags: next));
+  }
+
   void _toggleGroup(String id) {
     final next = {..._filters.groups};
     if (!next.remove(id)) next.add(id);
@@ -103,6 +115,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         .length;
     final aiBadge = ref.watch(aiEnabledProvider) ? null : 'Vypnuto';
     final results = _filters.isEmpty ? null : _filters.apply(recipes);
+    final cuisines = cuisinesIn(recipes);
 
     return Scaffold(
       body: SafeArea(
@@ -162,6 +175,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
               ],
             ),
+            if (cuisines.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _FilterRow(
+                icon: Icons.public_rounded,
+                title: 'Světová kuchyně',
+                children: [
+                  for (final c in cuisines)
+                    FilterPill(
+                      key: Key('cuisine-$c'),
+                      label: c.replaceAll(RegExp(r'\s+kuchyně$'), ''),
+                      selected: _filters.cuisines.contains(c),
+                      onTap: () => _toggleCuisine(c),
+                    ),
+                ],
+              ),
+            ],
             if (results != null)
               ..._results(recipes, results)
             else ...[
@@ -335,6 +364,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
       for (final o in occasionTags)
         if (f.occasions.contains(o)) (o, () => _toggleOccasion(o)),
+      for (final c in f.cuisines) (c, () => _toggleCuisine(c)),
+      for (final t in f.tags) (t, () => _toggleTag(t)),
+      if (f.withoutPhoto)
+        ('Bez fotky', () => _setFilters(f.copyWith(withoutPhoto: false))),
     ];
     final misses = results.isEmpty
         ? f.nearMisses(all)
@@ -642,7 +675,9 @@ class _PrepRow extends StatelessWidget {
         itemBuilder: (context, index) {
           final p = PrepMethod.values[index];
           return FilterPill(
+            key: Key('prep-${p.name}'),
             iconAsset: p.iconAsset,
+            icon: p.icon,
             label: p.label,
             selected: selected.contains(p),
             onTap: () => onToggle(p),

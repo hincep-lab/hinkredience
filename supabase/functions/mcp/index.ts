@@ -146,12 +146,22 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
   return result;
 }
 
-/** Způsoby přípravy, podle kterých filtruje aplikace. */
-export const PREP_TAGS = ["Trouba", "Pánev", "Sous-vide", "Gril", "Pomalé vaření"];
+/** Způsoby přípravy, podle kterých filtruje aplikace (recept jich může mít víc). */
+export const PREP_TAGS = [
+  "Trouba",
+  "Pánev",
+  "Hrnec",
+  "Sous-vide",
+  "Gril",
+  "Pomalé vaření",
+  "Vaflovač",
+  "Bez vaření",
+  "Bez pečení",
+];
 
 /** Příležitosti, podle kterých filtruje aplikace. */
 export const OCCASION_TAGS = [
-  "Rychlá večeře",
+  "Rychlé jídlo",
   "Rodinný oběd",
   "Pro děti",
   "Nedělní oběd",
@@ -160,6 +170,21 @@ export const OCCASION_TAGS = [
   "Sladká snídaně",
 ];
 
+/** Starší a souběžné názvy téhož štítku. */
+const TAG_ALIASES: Record<string, string> = {
+  "rychla vecere": "Rychlé jídlo",
+  "rychle jidla": "Rychlé jídlo",
+  "na vic dni": "Na více dní",
+  "v hrnci": "Hrnec",
+  "vafle": "Vaflovač",
+  "nepecene": "Bez pečení",
+};
+
+/** Je štítek světová kuchyně („Italská kuchyně“)? */
+export function isCuisineTag(tag: string): boolean {
+  return /(^| )kuchyne$/.test(fold(tag.trim()));
+}
+
 /** Štítky: oříznuté, bez duplicit, nejvýš 30. Známé štítky v přesném tvaru. */
 export function cleanTags(value: unknown): string[] {
   const known = [...PREP_TAGS, ...OCCASION_TAGS];
@@ -167,6 +192,8 @@ export function cleanTags(value: unknown): string[] {
   for (const item of Array.isArray(value) ? value : []) {
     let tag = text(item, 40);
     if (!tag) continue;
+    const alias = TAG_ALIASES[fold(tag).replace(/\s+/g, " ")];
+    if (alias) tag = alias;
     const canonical = known.find((k) => fold(k) === fold(tag));
     if (canonical) tag = canonical;
     if (!out.some((t) => fold(t) === fold(tag))) out.push(tag);
@@ -185,7 +212,10 @@ export function describeTags(row: any) {
     tags,
     preparation: tags.filter((t) => PREP_TAGS.includes(t)),
     occasions: tags.filter((t) => OCCASION_TAGS.includes(t)),
-    custom: tags.filter((t) => !PREP_TAGS.includes(t) && !OCCASION_TAGS.includes(t)),
+    cuisines: tags.filter((t) => isCuisineTag(t)),
+    custom: tags.filter(
+      (t) => !PREP_TAGS.includes(t) && !OCCASION_TAGS.includes(t) && !isCuisineTag(t),
+    ),
   };
 }
 

@@ -209,4 +209,110 @@ void main() {
     expect(time.cook, 32);
     expect(time.total, 42);
   });
+
+  test('pečení označené jako pasivní se nepočítá dvakrát (Carnitas)', () {
+    // Recept má 210 min vaření a kroky „Pečte 2 hodiny“ jsou označené jako
+    // pasivní – dřív se přičetly ještě jednou jako čekání (7 h místo 4 h).
+    final time = computeRecipeTime(
+      prepMinutes: 20,
+      cookMinutes: 210,
+      steps: const [
+        TimedStep(
+          instruction: 'Maso osolte a potřete kořením.',
+          durationMinutes: 10,
+          kind: StepKind.active,
+        ),
+        TimedStep(
+          instruction: 'Pečte v troubě na 160 °C 2 hodiny.',
+          durationMinutes: 120,
+          kind: StepKind.passive,
+          temperatureC: 160,
+        ),
+        TimedStep(
+          instruction: 'Alobal sundejte a pečte dalších 60–90 minut.',
+          durationMinutes: 75,
+          kind: StepKind.passive,
+          temperatureC: 160,
+        ),
+        TimedStep(
+          instruction: 'Maso natrhejte a opečte na pánvi dokřupava.',
+          durationMinutes: 10,
+          kind: StepKind.cook,
+        ),
+      ],
+    );
+    expect(time.passive, 0);
+    expect(time.cook, 210);
+    expect(time.total, 230);
+  });
+
+  test('marinování zůstává pasivní, dušení pod pokličkou je vaření', () {
+    expect(
+      effectiveStepKind(
+        const TimedStep(
+          instruction: 'Nechte v lednici marinovat 3 hodiny.',
+          kind: StepKind.passive,
+        ),
+      ),
+      StepKind.passive,
+    );
+    expect(
+      effectiveStepKind(
+        const TimedStep(
+          instruction: 'Přikryjte a duste 10 minut.',
+          kind: StepKind.passive,
+        ),
+      ),
+      StepKind.cook,
+    );
+    expect(
+      effectiveStepKind(
+        const TimedStep(
+          instruction: 'Nechte 10 minut odpočinout.',
+          kind: StepKind.passive,
+        ),
+      ),
+      StepKind.passive,
+    );
+    // Marináda 24 h + pečení + odpočinek: nic se nezapočítá dvakrát.
+    final charSiu = computeRecipeTime(
+      prepMinutes: 10,
+      cookMinutes: 90,
+      restMinutes: 1440,
+      steps: const [
+        TimedStep(
+          instruction: 'Nechte v lednici 24–48 hodin.',
+          durationMinutes: 1440,
+          kind: StepKind.passive,
+        ),
+        TimedStep(
+          instruction: 'Pečte 90 minut, potírejte glazurou.',
+          durationMinutes: 90,
+          kind: StepKind.passive,
+          temperatureC: 160,
+        ),
+        TimedStep(
+          instruction: 'Nechte 10 minut odpočinout.',
+          durationMinutes: 10,
+          kind: StepKind.passive,
+        ),
+      ],
+    );
+    expect(charSiu.cook, 90);
+    expect(charSiu.passive, 1450);
+    expect(charSiu.total, 10 + 90 + 1450);
+  });
+
+  test('souběžný krok neprodlouží celkový čas', () {
+    final time = computeRecipeTime(
+      steps: [
+        s('Brambory vařte doměkka.', d: 25, kind: StepKind.cook),
+        s('Mezitím opečte maso.', d: 15, kind: StepKind.cook),
+        s('Podávejte.', d: 2),
+      ],
+    );
+    expect(time.cook, 40);
+    expect(time.overlap, 15);
+    expect(time.total, 27);
+  });
 }

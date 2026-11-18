@@ -720,6 +720,16 @@ Deno.test("štítky: posílají se jen když je klient uvedl, známé v přesné
   assertEquals(cleanTags(["Pánev", 5, "pomale vareni"]), ["Pánev", "Pomalé vaření"]);
 });
 
+Deno.test("štítky: Rychlá večeře = Rychlé jídlo, nové způsoby přípravy", () => {
+  assertEquals(cleanTags(["Rychlá večeře", "rychlé jídlo", "hrnec", "VAFLOVAČ", "bez peceni"]), [
+    "Rychlé jídlo",
+    "Hrnec",
+    "Vaflovač",
+    "Bez pečení",
+  ]);
+  assertEquals(cleanTags(["Na víc dní", "Bez vaření"]), ["Na více dní", "Bez vaření"]);
+});
+
 Deno.test("štítky: get_recipe_tags přehled, jeden recept i bez štítků", async () => {
   const w = world({
     recipes: [

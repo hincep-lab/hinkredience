@@ -16,8 +16,9 @@ import '../../core/formatters.dart';
 import '../../core/kitchen_math.dart';
 import '../../core/material.dart';
 import '../../core/personalization.dart';
+import '../../core/equipment_fit.dart';
 import '../../core/recipe_groups.dart'
-    show PrepMethod, inferPrepMethods, savedPrepMethods;
+    show PrepMethod, inferPrepMethods, isCuisineTag, savedPrepMethods;
 import '../../core/screen_wake.dart';
 import '../../core/recipe_time.dart';
 import '../../core/widgets.dart';
@@ -141,6 +142,19 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   Future<void> _toggleFavorite(Recipe recipe) async {
     final repository = await ref.read(recipeRepositoryProvider.future);
     await repository.setFavorite(recipe.id, !recipe.isFavorite);
+  }
+
+  /// Přesune fotku na první místo – stane se hlavní fotkou receptu. Žádná
+  /// fotka se nemaže, mění se jen pořadí (bez nové verze receptu).
+  Future<void> _makeMainPhoto(Recipe recipe, int index) async {
+    if (index <= 0 || index >= recipe.photos.length) return;
+    final photos = [...recipe.photos];
+    photos.insert(0, photos.removeAt(index));
+    final repository = await ref.read(recipeRepositoryProvider.future);
+    await repository.setPhotos(recipe.id, photos);
+    if (!mounted) return;
+    setState(() => _photoIndex = 0);
+    showMessage(context, 'Hlavní fotka změněna.');
   }
 
   /// Nechá AI navrhnout úpravu receptu. Návrh se jen zobrazí ke kontrole;
@@ -436,6 +450,12 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                 recipe: recipe,
                 index: _photoIndex,
                 onChanged: (index) => setState(() => _photoIndex = index),
+                onMakeMain: recipe.isDeleted
+                    ? null
+                    : (index) => _makeMainPhoto(recipe, index),
+                onAddPhoto: recipe.isDeleted
+                    ? null
+                    : () => context.push(Routes.recipePhotos(recipe.id)),
               ),
             ),
           ),
@@ -754,11 +774,19 @@ class _PhotoHeader extends StatelessWidget {
     required this.recipe,
     required this.index,
     required this.onChanged,
+    this.onMakeMain,
+    this.onAddPhoto,
   });
 
   final Recipe recipe;
   final int index;
   final ValueChanged<int> onChanged;
+
+  /// Udělá z fotky na dané pozici hlavní (první) fotku receptu.
+  final ValueChanged<int>? onMakeMain;
+
+  /// Recept bez fotky – otevře správu fotografií.
+  final VoidCallback? onAddPhoto;
 
   @override
   Widget build(BuildContext context) {
@@ -770,6 +798,8 @@ class _PhotoHeader extends StatelessWidget {
           const PhotoPlaceholder()
         else
           PageView.builder(
+            // Po změně hlavní fotky začne galerie znovu od první fotky.
+            key: ValueKey(photos.first.id),
             itemCount: photos.length,
             onPageChanged: onChanged,
             itemBuilder: (context, i) => GestureDetector(
@@ -798,6 +828,28 @@ class _PhotoHeader extends StatelessWidget {
             ),
           ),
         ),
+        if (photos.isEmpty && onAddPhoto != null)
+          Positioned(
+            right: 16,
+            bottom: 24,
+            child: FilledButton.tonalIcon(
+              key: const Key('add-main-photo'),
+              onPressed: onAddPhoto,
+              icon: const Icon(Icons.add_a_photo_outlined, size: 18),
+              label: const Text('Bez fotky – přidat'),
+            ),
+          ),
+        if (index > 0 && index < photos.length && onMakeMain != null)
+          Positioned(
+            right: 16,
+            bottom: 36,
+            child: FilledButton.tonalIcon(
+              key: const Key('make-main-photo'),
+              onPressed: () => onMakeMain!(index),
+              icon: const Icon(Icons.star_outline_rounded, size: 18),
+              label: const Text('Nastavit jako hlavní'),
+            ),
+          ),
         if (photos.length > 1)
           Positioned(
             left: 0,
@@ -1065,6 +1117,7 @@ class _IngredientsTab extends StatelessWidget {
           const SizedBox(height: 8),
           _Chips(values: recipe.equipment, icon: Icons.countertops_rounded),
         ],
+        _EquipmentFitSection(recipe: recipe),
         const SizedBox(height: 16),
         _TagsSection(recipe: recipe),
       ],
@@ -1073,6 +1126,66 @@ class _IngredientsTab extends StatelessWidget {
 }
 
 /// Štítky receptu (způsob přípravy, příležitosti, vlastní) s rychlou úpravou.
+/// Jak recept využije vlastní vybavení (Více → Kuchyně a chutě) a co
+/// případně chybí. Bez uloženého vybavení se nic neukazuje.
+class _EquipmentFitSection extends ConsumerWidget {
+  const _EquipmentFitSection({required this.recipe});
+
+  final Recipe recipe;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(tasteProfileProvider);
+    final fit = equipmentFit(recipe, profile.appliances);
+    if (fit.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        key: const Key('equipment-fit'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Na vašem vybavení', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          for (final missing in fit.missing)
+            _FitLine(
+              icon: Icons.report_gmailerrorred_rounded,
+              color: AppColors.danger,
+              text: 'Chybí: $missing',
+            ),
+          for (final tip in fit.tips)
+            _FitLine(
+              icon: Icons.check_circle_outline_rounded,
+              color: AppColors.copperGold,
+              text: tip.text,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FitLine extends StatelessWidget {
+  const _FitLine({required this.icon, required this.color, required this.text});
+
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: const TextStyle(height: 1.35))),
+      ],
+    ),
+  );
+}
+
 class _TagsSection extends ConsumerWidget {
   const _TagsSection({required this.recipe});
 
@@ -1107,17 +1220,19 @@ class _TagsSection extends ConsumerWidget {
           children: [
             for (final m in prep)
               Chip(
-                avatar: ImageIcon(
-                  AssetImage(m.iconAsset),
-                  size: 18,
-                  color: AppColors.copperGold,
-                ),
+                avatar: m.iconAsset != null
+                    ? ImageIcon(
+                        AssetImage(m.iconAsset!),
+                        size: 18,
+                        color: AppColors.copperGold,
+                      )
+                    : Icon(m.icon, size: 18, color: AppColors.copperGold),
                 label: Text(saved.isEmpty ? '${m.label} (odhad)' : m.label),
               ),
             for (final t in other)
               Chip(
-                avatar: const Icon(
-                  Icons.sell_outlined,
+                avatar: Icon(
+                  isCuisineTag(t) ? Icons.public_rounded : Icons.sell_outlined,
                   size: 18,
                   color: AppColors.copperGold,
                 ),

@@ -41,12 +41,32 @@ class TimedStep {
     this.durationMinutes,
     this.kind = StepKind.auto,
     this.parallel = false,
+    this.temperatureC,
   });
 
   final String instruction;
   final int? durationMinutes;
   final String kind;
   final bool parallel;
+
+  /// Teplota kroku (trouba, olej, vodní lázeň), je-li zadaná.
+  final double? temperatureC;
+}
+
+/// Druh kroku, jak se počítá do času. Pečení, dušení nebo vaření je vždy
+/// „vaření/pečení“, i když je krok označený jako pasivní (člověk u něj
+/// nemusí stát) – jinak by se zároveň započítalo do času vaření u receptu
+/// i do čekání a celkový čas by vyšel dvakrát. Pasivní zůstává jen
+/// skutečné čekání: kynutí, marinování, chlazení, odpočinek.
+String effectiveStepKind(TimedStep step) {
+  final kind = StepKind.normalize(step.kind);
+  if (kind == StepKind.auto) return inferKind(step.instruction);
+  if (kind != StepKind.passive) return kind;
+  final text = foldText(step.instruction).replaceAll(_subordinate, ' ');
+  if (_passivePattern.hasMatch(text)) return StepKind.passive;
+  final hot = (step.temperatureC ?? 0) >= 60;
+  if (hot || _cookPattern.hasMatch(text)) return StepKind.cook;
+  return StepKind.passive;
 }
 
 /// Rozpad času receptu v minutách.
@@ -214,10 +234,7 @@ _Resolved _resolve(TimedStep step) {
   final explicit = step.durationMinutes;
   final kind = StepKind.normalize(step.kind);
   if (explicit != null && explicit > 0) {
-    final effective = kind == StepKind.auto
-        ? inferKind(step.instruction)
-        : kind;
-    switch (effective) {
+    switch (effectiveStepKind(step)) {
       case StepKind.passive:
         resolved.passive = explicit;
       case StepKind.cook:

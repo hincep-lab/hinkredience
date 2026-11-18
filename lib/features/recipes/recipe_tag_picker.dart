@@ -6,7 +6,8 @@ import '../../core/material.dart';
 import '../../core/recipe_groups.dart';
 import '../../data/recipe.dart';
 
-/// Výběr štítků receptu: způsob přípravy (lze víc najednou) a příležitosti.
+/// Výběr štítků receptu: způsob přípravy (lze víc najednou), příležitosti
+/// a světová kuchyně.
 /// Ostatní (vlastní) štítky v seznamu zůstanou beze změny.
 class RecipeTagPicker extends StatelessWidget {
   const RecipeTagPicker({
@@ -54,7 +55,7 @@ class RecipeTagPicker extends StatelessWidget {
           runSpacing: 6,
           children: [
             for (final m in PrepMethod.values)
-              _chip(m.label, iconAsset: m.iconAsset),
+              _chip(m.label, iconAsset: m.iconAsset, icon: m.icon),
           ],
         ),
         if (suggest != null)
@@ -88,6 +89,22 @@ class RecipeTagPicker extends StatelessWidget {
           spacing: 6,
           runSpacing: 6,
           children: [for (final t in suggestedTags) _chip(t)],
+        ),
+        const SizedBox(height: 8),
+        const _Label('Světová kuchyně'),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final t in {
+              ...cuisineTags,
+              // Vlastní kuchyně, které recept už má (např. „Gruzínská“).
+              for (final t in tags)
+                if (isCuisineTag(t) && !cuisineTags.any((c) => sameTag(c, t)))
+                  t,
+            })
+              _chip(t),
+          ],
         ),
       ],
     );

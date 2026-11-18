@@ -335,6 +335,37 @@ class GroupGrid extends StatelessWidget {
   }
 }
 
+/// Štítek „Bez fotky“ – recept zatím nemá vlastní fotografii (ukazuje se
+/// ilustrační obrázek kategorie).
+class NoPhotoBadge extends StatelessWidget {
+  const NoPhotoBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Recept nemá fotografii',
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.no_photography_outlined, size: 13, color: Colors.white),
+            SizedBox(width: 4),
+            Text(
+              'Bez fotky',
+              style: TextStyle(fontSize: 11, color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 /// Fotografická karta receptu se srdíčkem (oblíbené, výsledky hledání).
 class RecipePhotoCard extends ConsumerWidget {
   const RecipePhotoCard({
@@ -376,6 +407,8 @@ class RecipePhotoCard extends ConsumerWidget {
                     right: 6,
                     child: _HeartButton(recipe: recipe),
                   ),
+                  if (recipe.photos.isEmpty)
+                    const Positioned(left: 6, top: 6, child: NoPhotoBadge()),
                 ],
               ),
             ),

@@ -381,7 +381,8 @@ void main() {
         ),
       ],
     );
-    await tapPill(tester, find.text('Rychlá večeře'), occasionRow);
+    // Starší štítek „Rychlá večeře“ patří do filtru Rychlé jídlo.
+    await tapPill(tester, find.text('Rychlé jídlo'), occasionRow);
     expect(find.text('Přílohy · Čas neuveden'), findsOneWidget);
   });
 
