@@ -114,8 +114,7 @@ OfferBrowse browseOffers(
   final current = <PriceOffer>[];
   final upcoming = <PriceOffer>[];
   // Z dvojic zůstane ověřená akce, pak ta s fotkou.
-  int keep(PriceOffer o) =>
-      (o.verified ? 0 : 2) + (o.imageUrl.isEmpty ? 1 : 0);
+  int keep(PriceOffer o) => (o.verified ? 0 : 2) + (o.imageUrl.isEmpty ? 1 : 0);
   final ordered = offers.indexed.toList();
   ordered.sort((a, b) {
     final k = keep(a.$2).compareTo(keep(b.$2));
