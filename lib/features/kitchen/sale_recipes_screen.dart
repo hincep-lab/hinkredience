@@ -12,7 +12,8 @@ import '../../core/sale_recipes.dart';
 import '../../core/stores.dart';
 import '../../core/widgets.dart';
 import '../../data/price_service.dart';
-import 'best_buy_panel.dart' show PriceDiagnostics, kc, refreshMessage;
+import 'best_buy_panel.dart'
+    show OfferPhotos, PriceDiagnostics, kc, refreshMessage;
 import 'sale_dish_screen.dart';
 import 'sale_plan.dart';
 import 'week_menu_screen.dart';
@@ -397,7 +398,7 @@ class _DishCard extends StatelessWidget {
             ].join(' · '),
             style: muted,
           ),
-          const SizedBox(height: 4),
+          OfferPhotos(item.onSale.values),
           for (final entry in item.onSale.entries)
             Text(
               '• ${entry.value.product}: ${offerLine(entry.value)}',

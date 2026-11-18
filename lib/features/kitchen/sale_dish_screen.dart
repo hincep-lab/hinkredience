@@ -9,7 +9,7 @@ import '../../core/sale_dishes.dart';
 import '../../core/widgets.dart';
 import '../../data/recipe.dart';
 import 'add_to_shopping_sheet.dart';
-import 'best_buy_panel.dart' show kc;
+import 'best_buy_panel.dart' show OfferImage, kc;
 import 'sale_plan.dart';
 import 'sale_recipes_screen.dart' show offerLine;
 
@@ -168,13 +168,27 @@ class _SaleDishScreenState extends ConsumerState<SaleDishScreen> {
                           ),
                         ),
                         if (onSale[i.group] case final offer?)
-                          Text(
-                            'V akci: ${salePacks(i.quantity, i.unit, offer)}× '
-                            '${offer.product} – ${offerLine(offer)}',
-                            style: const TextStyle(
-                              color: AppColors.success,
-                              fontSize: 12.5,
-                            ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (offer.imageUrl.isNotEmpty) ...[
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: OfferImage(offer.imageUrl, size: 44),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  'V akci: ${salePacks(i.quantity, i.unit, offer)}× '
+                                  '${offer.product} – ${offerLine(offer)}',
+                                  style: const TextStyle(
+                                    color: AppColors.success,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                       ],
                     ),

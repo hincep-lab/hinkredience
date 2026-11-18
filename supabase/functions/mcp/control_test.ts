@@ -241,3 +241,19 @@ Deno.test("přání z ChatGPT: uloží se s autorem a rodina dostane oznámení"
   assert(r2.saved);
   assert((await tool.run(db as any, { title: "  " }, "u1", fetch).catch((e) => e)) instanceof Error);
 });
+
+Deno.test("akce pro ChatGPT: druh potravin (maso), jen ověřené, bez běžných cen, s fotkou", async () => {
+  const paths: string[] = [];
+  const db = { select: async (path: string) => (paths.push(path), [{ product: "Kuřecí stehna", price: 59.9 }]) };
+  const tool = tools.find((t) => t.name === "get_price_offers")!;
+  const r = await tool.run(db as any, { category: "maso", chain: "lidl" }, "u", fetch);
+  const p = decodeURIComponent(paths[0]);
+  assert(p.includes("kind=neq.regular"), p);
+  assert(p.includes("verified=is.true"), p);
+  assert(p.includes("image_url"), p);
+  assert(p.includes("&or=(product.ilike.*maso*,product.ilike.*kuřec*"), p);
+  assert(p.includes("chain=eq.lidl"), p);
+  assertEquals((r as any).count, 1);
+  await tool.run(db as any, { only_verified: false }, "u", fetch);
+  assert(!decodeURIComponent(paths[1]).includes("verified=is.true"), "i neověřené");
+});

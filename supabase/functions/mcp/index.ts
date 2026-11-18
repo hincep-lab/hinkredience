@@ -1293,6 +1293,18 @@ export async function importRecipeFromUrl(fetchImpl: FetchLike, url: string) {
 
 // -------------------------------------------- plán vaření, deník, rodina
 
+/** Druhy potravin pro hledání akcí (typická slova v názvu zboží, bez diakritiky i s ní). */
+export const OFFER_CATEGORIES: Record<string, string[]> = {
+  maso: ["maso", "kuřec", "kuřat", "vepřov", "hověz", "krkovic", "kotlet", "řízk", "plec", "stehn", "prsa", "mlet", "krůt", "kachn", "játr", "bůč", "svíčkov", "karabáč", "panenk"],
+  uzeniny: ["šunk", "salám", "slanin", "klobás", "párk", "uzen", "špekáč", "prosciutto", "guanciale"],
+  mlecne: ["máslo", "mléko", "smetan", "sýr", "jogurt", "tvaroh", "eidam", "mascarpone", "hermelín", "kefír"],
+  vejce: ["vejce"],
+  zelenina: ["brambor", "cibul", "mrkev", "zelí", "paprik", "rajč", "okurk", "česnek", "žampion", "salát", "ředkvič"],
+  ovoce: ["jabl", "banán", "pomeranč", "mandarink", "hrozn", "citron", "hrušk", "mango", "kiwi"],
+  pecivo: ["chléb", "chleb", "rohlík", "bagetk", "kobli", "pečivo", "croissant"],
+  trvanlive: ["rýže", "těstovin", "mouk", "cukr", "olej", "konzerv", "noky"],
+};
+
 const MEAL_TYPES = ["breakfast", "lunch", "dinner"];
 const MEAL_LABELS: Record<string, string> = { breakfast: "snídaně", lunch: "oběd", dinner: "večeře" };
 
@@ -2658,14 +2670,23 @@ export const tools: Tool[] = [
     name: "get_price_offers",
     title: "Akce v obchodech v Sušici",
     description:
-      "Vrátí platné akční nabídky uložené v HINKredience (Tesco, Penny, Lidl, Albert, JIP, COOP v Sušici), " +
-      "volitelně jen pro řetězec nebo produkt. U každé je zdroj, platnost a zda je ověřená.",
+      "Vrátí platné akční nabídky uložené v HINKredience (Tesco, Penny, Lidl, Albert, JIP, COOP v Sušici; " +
+      "z oficiálních webů, letáků a kupi.cz), seřazené od nejlevnější. Lze filtrovat podle řetězce, části názvu " +
+      "produktu nebo druhu potravin (např. maso = kuřecí, vepřové, hovězí, mleté…). U každé je cena, balení, " +
+      "platnost, zda jde o cenu jen s věrnostní kartou (kind=loyalty), zdroj, fotka a zda je ověřená. " +
+      "Běžné (neakční) ceny se nevrací. Ceny nikdy nedopočítávej ani nevymýšlej – uváděj jen ty vrácené.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         chain: { type: "string", enum: ["tesco", "penny", "lidl", "albert", "jip", "coop"] },
-        product: { type: "string", description: "Část názvu produktu." },
+        product: { type: "string", description: "Část názvu produktu (např. máslo, kuřecí stehna)." },
+        category: {
+          type: "string",
+          enum: Object.keys(OFFER_CATEGORIES),
+          description: "Druh potravin – hledá podle typických slov v názvu.",
+        },
+        only_verified: { type: "boolean", description: "Jen ověřené akce (výchozí ano)." },
       },
     },
     readOnly: true,
@@ -2673,10 +2694,16 @@ export const tools: Tool[] = [
       const today = new Date().toISOString().slice(0, 10);
       let path =
         "price_offers?select=chain,store_id,product,label,price,pack_qty,pack_unit,regular_price,conditions," +
-        `valid_from,valid_to,source_url,provider,verified&valid_to=gte.${today}&order=price.asc&limit=200`;
+        "kind,loyalty,valid_from,valid_to,source_url,image_url,provider,verified" +
+        `&valid_to=gte.${today}&kind=neq.regular&order=price.asc&limit=200`;
+      if (args?.only_verified !== false) path += "&verified=is.true";
       if (typeof args?.chain === "string") path += `&chain=eq.${encodeURIComponent(args.chain)}`;
       if (typeof args?.product === "string" && args.product.trim()) {
         path += `&product=ilike.${encodeURIComponent(`*${text(args.product, 60).replace(/[*,()]/g, " ")}*`)}`;
+      }
+      const words = typeof args?.category === "string" ? OFFER_CATEGORIES[args.category] : undefined;
+      if (words) {
+        path += `&or=(${words.map((w) => `product.ilike.${encodeURIComponent(`*${w}*`)}`).join(",")})`;
       }
       const offers = await db.select(path);
       return { count: offers.length, offers };

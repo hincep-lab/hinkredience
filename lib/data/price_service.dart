@@ -120,6 +120,30 @@ class PriceService {
     }
   }
 
+  /// Dřívější ověřené akce na stejné zboží (posledních [days] dní) – pro
+  /// porovnání „bývá i levněji“. Bez připojení prázdné.
+  Future<List<PriceOffer>> history(String product, {int days = 120}) async {
+    final key = productKey(product);
+    if (key.isEmpty) return const [];
+    final since = DateTime.now().subtract(Duration(days: days));
+    final day =
+        '${since.year.toString().padLeft(4, '0')}-${since.month.toString().padLeft(2, '0')}-${since.day.toString().padLeft(2, '0')}';
+    try {
+      final List<Map<String, dynamic>> rows = await _client
+          .from('price_offers')
+          .select()
+          .eq('product_key', key)
+          .eq('verified', true)
+          .neq('kind', 'regular')
+          .gte('valid_to', day)
+          .order('valid_to', ascending: false)
+          .limit(100);
+      return [for (final r in rows) PriceOffer.fromJson(r)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   static const _runsKey = 'price_runs_cache';
 
   /// Stav stahování letáků po řetězcích (poslední úspěch, poslední chyba).

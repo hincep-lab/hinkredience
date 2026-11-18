@@ -240,3 +240,13 @@ Deno.test("ranní obnovení akcí: jen s klíčem plánované úlohy, zboží z 
   }), { ...env, cronKey: "" }, dbKey);
   eq(wrong.status, 401);
 });
+
+Deno.test("leták bez textu se nečte, když není co hledat (vše prohledalo kupi.cz)", async () => {
+  const { pickPages } = await import("./index.ts");
+  const flyer = {
+    chain: "tesco", id: "t", title: "Tesco", url: "https://itesco.cz/x", validFrom: null, validTo: "2026-11-24",
+    pages: [1, 2, 3].map((n) => ({ n, image: `https://itesco.cz/${n}.jpg`, link: "https://itesco.cz/x" })),
+  };
+  eq(pickPages(flyer, [], 42), []);
+  eq(pickPages(flyer, ["máslo"], 42).length, 3);
+});

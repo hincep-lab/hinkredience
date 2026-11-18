@@ -695,3 +695,42 @@ DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 
 String _dayKey(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+/// Jak dobrá je akce proti dřívějším ověřeným akcím na stejné zboží
+/// (porovnává se cena za kg / l / kus, jinak cena balení). Null, když
+/// aplikace dřívější akci nezná.
+({String text, bool best})? priceHistoryNote(
+  PriceOffer current,
+  List<PriceOffer> history,
+) {
+  double unit(PriceOffer o) => o.unitPrice?.price ?? o.price;
+  final cu = current.unitPrice;
+  final same = [
+    for (final o in history)
+      if (o.id != current.id &&
+          o.verified &&
+          !o.isRegular &&
+          (o.unitPrice?.unit ?? '') == (cu?.unit ?? ''))
+        o,
+  ];
+  if (same.isEmpty) return null;
+  same.sort((a, b) => unit(a).compareTo(unit(b)));
+  final low = same.first;
+  String money(double v) => '${v.toStringAsFixed(2).replaceAll('.', ',')} Kč';
+  final per = cu == null ? '' : ' za ${cu.unit}';
+  final where =
+      '${chainById(low.chain)?.name ?? low.chain}, '
+      'do ${low.validTo.day}. ${low.validTo.month}.';
+  if (unit(current) <= unit(low) + 0.005) {
+    return (
+      text:
+          'Nejlevnější cena, jakou aplikace u tohoto zboží zná '
+          '(dřív nejlevněji ${money(unit(low))}$per – $where).',
+      best: true,
+    );
+  }
+  return (
+    text: 'Bývá i levněji: ${money(unit(low))}$per ($where).',
+    best: false,
+  );
+}

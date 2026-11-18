@@ -689,6 +689,7 @@ Future<void> showOfferDetail(
                 Icons.travel_explore_outlined,
                 'Nalezl: ${_providerLabel(offer.provider)}',
               ),
+              _PriceHistory(offer),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () => launchUrl(
@@ -720,6 +721,30 @@ Future<void> showOfferDetail(
     );
   },
 );
+
+/// „Bývá i levněji“ / „nejlevnější známá cena“ podle dřívějších akcí.
+class _PriceHistory extends ConsumerWidget {
+  const _PriceHistory(this.offer);
+
+  final PriceOffer offer;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final service = ref.watch(priceServiceProvider);
+    if (service == null) return const SizedBox.shrink();
+    return FutureBuilder<List<PriceOffer>>(
+      future: service.history(offer.product),
+      builder: (context, snap) {
+        final note = priceHistoryNote(offer, snap.data ?? const []);
+        if (note == null) return const SizedBox.shrink();
+        return _DetailRow(
+          note.best ? Icons.trending_down_rounded : Icons.history_rounded,
+          note.text,
+        );
+      },
+    );
+  }
+}
 
 class _DetailRow extends StatelessWidget {
   const _DetailRow(this.icon, this.text);
@@ -1164,6 +1189,31 @@ class PriceDiagnostics extends StatelessWidget {
     return m == null
         ? iso
         : '${int.parse(m.group(3)!)}. ${int.parse(m.group(2)!)}.';
+  }
+}
+
+/// Řada malých fotek zboží v akci (jen ty, které fotku mají).
+class OfferPhotos extends StatelessWidget {
+  const OfferPhotos(this.offers, {super.key, this.size = 44});
+
+  final Iterable<PriceOffer> offers;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = <String>{
+      for (final o in offers)
+        if (o.imageUrl.isNotEmpty) o.imageUrl,
+    }.take(6).toList();
+    if (urls.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 4),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [for (final u in urls) OfferImage(u, size: size)],
+      ),
+    );
   }
 }
 

@@ -9,7 +9,7 @@ import '../../core/sale_dishes.dart';
 import '../../core/week_menu.dart';
 import '../../core/widgets.dart';
 import '../../data/kitchen_docs.dart';
-import 'best_buy_panel.dart' show kc;
+import 'best_buy_panel.dart' show OfferPhotos, kc;
 import 'sale_dish_screen.dart';
 import 'sale_plan.dart';
 import 'sale_recipes_screen.dart' show offerLine;
@@ -372,6 +372,13 @@ class _CookCard extends StatelessWidget {
             ].join(' · '),
             style: muted,
           ),
+          OfferPhotos([
+            for (final line in saleCost(
+              item,
+              servings: portions.toDouble(),
+            ).lines)
+              line.offer,
+          ]),
           for (final line in saleCost(
             item,
             servings: portions.toDouble(),

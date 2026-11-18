@@ -1226,6 +1226,14 @@ export const KUPI_SHOPS: Record<string, { chain: string; only?: RegExp }> = {
 
 export const KUPI_HOSTS = ["kupi.cz"];
 
+/**
+ * Řetězce, jejichž sušický leták kupi.cz celý přepisuje (Tesco, Penny, Lidl,
+ * Albert, JIP Sušice). COOP Sušice (ZKD) na kupi.cz není – ten čte Gemini dál.
+ */
+export const KUPI_SHOPS_FOR: Record<string, boolean> = {
+  tesco: true, penny: true, lidl: true, albert: true, jip: true,
+};
+
 export interface KupiOffer extends RawOffer {
   chain: string;
   /** Obchod na kupi.cz (penny-market, coop …). */
@@ -1506,6 +1514,7 @@ export function pageMentions(text: string, item: string): boolean {
  */
 export function pickPages(flyer: Flyer, items: string[], max: number): { page: FlyerPage; items: string[] }[] {
   const withText = flyer.pages.some((p) => (p.text ?? "").length > 30);
+  if (items.length === 0) return [];
   if (!withText) return flyer.pages.slice(0, max).map((page) => ({ page, items }));
   const hits = flyer.pages
     .map((page) => ({ page, items: items.filter((it) => page.text && pageMentions(page.text, it)) }))
@@ -2408,6 +2417,8 @@ export async function handle(
           // uložené z jiného zdroje (jiný název, stejná cena a platnost), se
           // neuloží znovu – jen se ověří a doplní se k němu fotka.
           const viaKupi = new Set<string>();
+          /** Položky, které kupi.cz pro tento řetězec spolehlivě prohledalo (stránka se stáhla). */
+          const kupiChecked = new Set<string>();
           const allNames = [...keys.values()];
           if (env.kupi !== false && allNames.length) {
             const runs = await Promise.all(allNames.map((n) => kupiFor(n).then((r) => ({ item: n, ...r }))));
@@ -2415,6 +2426,7 @@ export async function handle(
             let failed = 0;
             for (const r of runs) {
               if (r.log.status !== 200) failed++;
+              else if (KUPI_SHOPS_FOR[chain]) kupiChecked.add(r.item);
               if (chain === chainIds[0]) d.pages.push({ url: r.log.url, status: r.log.status, chars: r.log.chars, matched: [], note: r.log.note });
               for (const rj of r.rejected) if (rj.product.endsWith(`(${CHAINS[chain].name})`)) d.rejected.push(rj);
               for (const o of r.offers) {
@@ -2488,11 +2500,14 @@ export async function handle(
           }
 
           const flyerNames = names.filter((n) => !viaKupi.has(n));
+          // Leták bez textu (Tesco): Gemini by četlo všechny strany. Když kupi.cz
+          // řetězec pokrývá a položku prohledalo, akci by našlo – nečíst znovu.
+          const blindNames = flyerNames.filter((n) => !kupiChecked.has(n));
 
           // 4) Letáky: Gemini čte obrázky stran; cena se ověří textem strany nebo druhým čtením.
           for (const flyer of src.flyers) {
             const blind = !flyer.pages.some((p) => (p.text ?? "").length > 30);
-            const picked = pickPages(flyer, flyerNames, blind ? MAX_PAGES_BLIND : MAX_PAGES_TEXT);
+            const picked = pickPages(flyer, blind ? blindNames : flyerNames, blind ? MAX_PAGES_BLIND : MAX_PAGES_TEXT);
             d.sources.push({
               kind: "leták", title: flyer.title, url: flyer.url, valid_from: flyer.validFrom, valid_to: flyer.validTo,
               size: flyer.pages.length, text: !blind, picked: picked.map((p) => p.page.n),
