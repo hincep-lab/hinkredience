@@ -38,8 +38,10 @@ export interface Env {
   budgetMs?: number;
   /** Brát akce i z přehledu kupi.cz (výchozí ano; vypne PRICES_KUPI=0). */
   kupi?: boolean;
-  /** Tajný klíč plánované úlohy (ranní obnovení akcí); prázdný = vypnuto. */
+  /** Tajný klíč plánované úlohy (ranní obnovení akcí); prázdný = klíč z databáze. */
   cronKey?: string;
+  /** Hledat klíč i v databázi (výchozí ano; jen pro testy). */
+  cronFromDb?: boolean;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -1898,6 +1900,12 @@ class Db {
     return t ? JSON.parse(t) : null;
   }
 
+  /** Tajný klíč ranního obnovení z databáze (tabulka bez přístupu pro uživatele). */
+  async cronKey(): Promise<string> {
+    const rows = await this.rest("price_cron_key?select=key&id=eq.1").catch(() => []);
+    return Array.isArray(rows) && typeof rows[0]?.key === "string" ? rows[0].key : "";
+  }
+
   /** Zboží ze všech nákupních seznamů (nejnovější první, bez opakování) pro ranní obnovení akcí. */
   async watchedProducts(): Promise<string[]> {
     const rows = await this.rest("shopping_items?select=name&order=updated_at.desc&limit=400").catch(() => []);
@@ -2185,7 +2193,9 @@ export async function handle(
   // Ranní obnovení akcí (plánovaná úloha na GitHubu): místo přihlášení nese
   // tajný klíč PRICES_CRON_KEY. Bez nastaveného klíče se nedá spustit.
   const cronHeader = req.headers.get("x-cron-key") ?? "";
-  const cron = cronHeader !== "" && sameSecret(cronHeader, env.cronKey ?? "");
+  // Klíč je v Secrets funkce (PRICES_CRON_KEY), jinak v databázi (price_cron_key).
+  const cron = cronHeader !== "" &&
+    sameSecret(cronHeader, env.cronKey || (env.cronFromDb === false ? "" : await db.cronKey()));
   let userId: string | null = null;
   if (!cron) {
     const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();

@@ -89,7 +89,7 @@ before(async () => {
 test('všechny tabulky ze zadání existují a mají zapnuté RLS', async () => {
   const expected = [
     'ai_conversations', 'ai_messages', 'ai_usage', 'cooking_notes', 'cooking_sessions',
-    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes', 'price_ai_usage', 'price_offers', 'price_receipts', 'price_runs', 'price_scans',
+    'household_members', 'households', 'kitchen_equipment', 'meal_plans', 'meal_wishes', 'price_ai_usage', 'price_cron_key', 'price_offers', 'price_receipts', 'price_runs', 'price_scans',
     'profiles', 'push_server_keys', 'push_subscriptions', 'recipe_ingredients', 'recipe_steps', 'recipe_tombstones', 'recipe_versions',
     'recipes', 'shopping_items', 'shopping_lists', 'user_preferences',
   ];
@@ -780,6 +780,10 @@ test('ceny: akce čte každý, zapisuje jen server; účtenky jen rodina', async
     values ('lidl', 'Máslo Milkpol', 'maslo milkp', 29.9, '2026-11-22', 'https://www.kupi.cz/letak/lidl-letak-153', 'kupi', true, 'kupi')`);
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider)
     values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'nekdo')`));
+  // Klíč ranního obnovení akcí: vznikne jednou, uživatel ho nevidí ani nezmění.
+  assert.equal((await db.query(`select length(key) as n from public.price_cron_key`)).rows[0].n, 64);
+  await denied(as(PAVEL, `select key from public.price_cron_key`));
+  await denied(as(CIZI, `update public.price_cron_key set key = repeat('x', 40)`));
   // Fotka zboží jen přes https.
   await assert.rejects(db.query(`insert into public.price_offers (chain, product, price, valid_to, source_url, provider, image_url)
     values ('lidl', 'X', 10, '2026-11-22', 'https://www.kupi.cz/', 'kupi', 'http://x.cz/a.jpg')`));

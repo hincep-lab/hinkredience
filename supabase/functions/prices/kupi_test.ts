@@ -226,6 +226,17 @@ Deno.test("ranní obnovení akcí: jen s klíčem plánované úlohy, zboží z 
   // Bez nastaveného klíče na serveru se plánovaná úloha spustit nedá.
   const off = await handle(new Request("https://fn.test/prices", {
     method: "POST", headers: { "x-cron-key": KEY }, body: JSON.stringify({ action: "scheduled" }),
-  }), { ...env, cronKey: "" }, fetchImpl);
+  }), { ...env, cronKey: "", cronFromDb: false }, fetchImpl);
   eq(off.status, 401);
+  // Klíč z databáze (tabulka price_cron_key), když není v Secrets funkce.
+  const dbKey = async (url: string, init: RequestInit = {}) =>
+    url.includes("price_cron_key") ? Response.json([{ key: KEY }]) : fetchImpl(url, init);
+  const fromDb = await handle(new Request("https://fn.test/prices", {
+    method: "POST", headers: { "x-cron-key": KEY }, body: JSON.stringify({ action: "scheduled", chains: ["penny"] }),
+  }), { ...env, cronKey: "" }, dbKey, new Date("2026-11-18T05:00:00Z"));
+  eq(fromDb.status, 200);
+  const wrong = await handle(new Request("https://fn.test/prices", {
+    method: "POST", headers: { "x-cron-key": "x".repeat(40) }, body: JSON.stringify({ action: "scheduled" }),
+  }), { ...env, cronKey: "" }, dbKey);
+  eq(wrong.status, 401);
 });
