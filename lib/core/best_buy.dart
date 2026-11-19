@@ -360,6 +360,19 @@ class BestBuy {
 
   /// Úspora proti nákupu za nejvyšší známé ceny (jen položky, které mají
   /// známou cenu aspoň ve dvou prodejnách – jinak není s čím srovnávat).
+  /// Akce, kterou ukázat u položky seznamu podle zvoleného režimu:
+  /// jen z vybraného obchodu (jeden obchod), nebo z kombinace. Cena
+  /// z účtenky ani položka bez ceny v tom obchodě štítek nemají.
+  PriceOffer? tagOffer(String itemId, {required bool multiStore}) {
+    final prices = multiStore
+        ? combination
+        : singleStore?.prices ?? const <ItemPrice>[];
+    for (final p in prices) {
+      if (p.item.id == itemId) return p.offer;
+    }
+    return null;
+  }
+
   final double savingsSingle;
   final double savingsCombination;
 
