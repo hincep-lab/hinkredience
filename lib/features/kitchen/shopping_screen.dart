@@ -142,14 +142,18 @@ class ShoppingScreen extends ConsumerWidget {
         best.combination.isNotEmpty;
 
     Widget tile(ShoppingItem item) {
+      // Štítek odpovídá zvolenému režimu: „Jeden obchod“ jen vybraný
+      // obchod, „Více obchodů“ kombinace. Dokud plán není, nejlevnější akce.
       final tag = !prefs.enabled || item.checked
           ? null
+          : best != null
+          ? best.tagOffer(item.id, multiStore: prefs.multiStore)
           : bestOfferFor(
               buyItemOf(item),
               offers,
               today,
               loyaltyChains: prefs.cards,
-            );
+            )?.offer;
       return _ItemTile(
         item: item,
         onToggle: () => _toggle(ref, item),
@@ -158,10 +162,10 @@ class ShoppingScreen extends ConsumerWidget {
         tag: tag == null
             ? null
             : OfferTag(
-                offer: tag.offer,
+                offer: tag,
                 onTap: () => showOfferDetail(
                   context,
-                  tag.offer,
+                  tag,
                   unverified: unverifiedOffersFor(
                     buyItemOf(item),
                     offers,

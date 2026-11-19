@@ -78,6 +78,27 @@ void main() {
     expect(r.combinationMissing.map((i) => i.name), ['Šafrán']);
   });
 
+  test('štítek u položky podle režimu: jeden obchod jen vybraný obchod', () {
+    final r = computeBestBuy(
+      items: items.take(2).toList(),
+      offers: [
+        offer('penny', 'Máslo 250 g', 39.9, pack: 250, unit: 'g'),
+        offer('penny', 'Mléko 1 l', 19.9, pack: 1, unit: 'l'),
+        offer('lidl', 'Mléko 1 l', 14.9, pack: 1, unit: 'l'),
+      ],
+      receipts: const [],
+      today: today,
+    );
+    expect(r.singleStore!.store.chain, 'penny');
+    // Jeden obchod: mléko z Penny, i když Lidl je levnější.
+    expect(r.tagOffer('2', multiStore: false)!.chain, 'penny');
+    expect(r.tagOffer('1', multiStore: false)!.chain, 'penny');
+    // Více obchodů: mléko z Lidlu.
+    expect(r.tagOffer('2', multiStore: true)!.chain, 'lidl');
+    // Položka mimo plán štítek nemá.
+    expect(r.tagOffer('3', multiStore: false), isNull);
+  });
+
   test('kombinace prodejen a seskupení', () {
     final r = computeBestBuy(
       items: items.take(2).toList(),
