@@ -167,6 +167,16 @@ Deno.test("automatický výběr: zdarma, v limitu; placený jen povolený", () =
 
 // ------------------------------------------------------------ shoda názvů
 
+Deno.test("položka × produkt: jiný výrobek se surovinou v názvu se nepočítá", () => {
+  ok(!productMatches("Brambory", "Brambory marcipánové Schluckwerder"), "marcipán");
+  ok(!productMatches("Cibule", "Vývar Cibule Bistro"), "vývar");
+  ok(!productMatches("Špagety", "Koření Špagety Vitana"), "koření");
+  ok(!productMatches("Kuřecí prsa", "Šunka kuřecí prsní"), "šunka");
+  ok(productMatches("Kuřecí vývar", "Vývar kuřecí Bistro"), "vývar, když ho chce i recept");
+  ok(productMatches("Brambory", "Brambory konzumní žluté 2 kg"));
+  ok(productMatches("Kořenová zelenina", "Kořenová zelenina 500 g"));
+});
+
 Deno.test("položka × produkt: máslo není máslový, bez kosti není s kostí", () => {
   ok(productMatches("Máslo – 250 g", "Madeta Jihočeské máslo 250 g"));
   ok(productMatches("Máslo", "MÁSLO BONI 250 g"));

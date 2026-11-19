@@ -588,6 +588,7 @@ bool productMatches(String itemName, String product) {
       if (!_soft.contains(w.stem)) w,
   ];
   if (need.isEmpty) return false;
+  if (_otherProduct(itemName, product)) return false;
   final have = _matchWords(product);
   return need.every(
     (n) => have.any((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)),
@@ -596,6 +597,68 @@ bool productMatches(String itemName, String product) {
 
 /// Slova, která položka nemusí mít v názvu produktu („bez kosti“).
 const _soft = {'bez', 'kost'};
+
+/// Začátky slov, které z produktu dělají jiné zboží než samotnou surovinu:
+/// „Brambory marcipánové“ nejsou brambory, „Vývar Cibule“ není cibule,
+/// „Šunka kuřecí prsní“ nejsou kuřecí prsa. Platí jen tehdy, když takové
+/// slovo nemá i položka („Kuřecí vývar“ ~ „Vývar kuřecí“).
+const productTypeWords = [
+  'marcipan',
+  'vyvar',
+  'bujon',
+  'koreni',
+  'korenic',
+  'sunk',
+  'salam',
+  'park',
+  'klobas',
+  'pastik',
+  'pomazan',
+  'polevk',
+  'omack',
+  'dresink',
+  'kecup',
+  'sirup',
+  'bonbon',
+  'cokolad',
+  'susenk',
+  'chips',
+  'lupin',
+  'krekr',
+  'tycink',
+  'napoj',
+  'limonad',
+  'nektar',
+  'dzus',
+  'fix',
+  'knedlik',
+  'hranol',
+  'kroket',
+  'dort',
+  'zmrzlin',
+  'pudink',
+  'chlebic',
+  'sendvic',
+  'pizz',
+  'bageta',
+  'croissant',
+  'muesli',
+  'musli',
+  'cerealie',
+  'vlocky',
+  'krmivo',
+  'granule',
+  'kapsick',
+];
+
+bool _otherProduct(String itemName, String product) {
+  bool has(String text, String t) =>
+      RegExp(r'[a-z]+')
+          .allMatches(foldText(text))
+          .any((m) => m.group(0)!.startsWith(t));
+  return productTypeWords.any((t) => has(product, t) && !has(itemName, t));
+}
+
 final _adjOv = RegExp(r'ov(?:y|a|e|ou|ych|ymi|ym|eho|emu)$');
 
 /// Slova pro shodu: kmen + zda jde o přídavné jméno na -ový („máslový“).

@@ -170,6 +170,14 @@ void main() {
     );
     expect(productMatches('Máslo – 250 g', 'Máslo 250 g'), isTrue);
     expect(productMatches('Maso', 'Máslo'), isFalse);
+    // Jiný výrobek, který má surovinu jen v názvu.
+    expect(productMatches('Brambory', 'Brambory marcipánové'), isFalse);
+    expect(productMatches('Cibule', 'Vývar Cibule Bistro'), isFalse);
+    expect(productMatches('Špagety', 'Koření Špagety Vitana'), isFalse);
+    expect(productMatches('Kuřecí prsa', 'Šunka kuřecí prsní'), isFalse);
+    expect(productMatches('Kuřecí vývar', 'Vývar kuřecí Bistro'), isTrue);
+    expect(productMatches('Brambory', 'Brambory konzumní 2 kg'), isTrue);
+    expect(productMatches('Kořenová zelenina', 'Kořenová zelenina'), isTrue);
     expect(czStem('rizky'), czStem('rizek'));
     expect(productKey('Máslo Tatra 250 g'), productKey('tatra MÁSLO'));
     expect(chainById('lidl')!.isOfficial('https://www.lidl.cz/c/akce'), isTrue);

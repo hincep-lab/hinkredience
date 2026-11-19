@@ -184,6 +184,18 @@ const ADJ_OV = /ov(?:y|a|e|ou|ych|ymi|ym|eho|emu)$/;
 /** Slova, která položka nemusí mít v názvu produktu („bez kosti“). */
 const SOFT = new Set(["bez", "kost"]);
 
+/**
+ * Začátky slov, které z produktu dělají jiné zboží než samotnou surovinu
+ * („Brambory marcipánové“, „Vývar Cibule“, „Šunka kuřecí prsní“). Platí jen,
+ * když takové slovo nemá i položka. Stejný seznam jako v aplikaci.
+ */
+export const PRODUCT_TYPE_WORDS = ["marcipan", "vyvar", "bujon", "koreni", "korenic", "sunk", "salam", "park", "klobas", "pastik", "pomazan", "polevk", "omack", "dresink", "kecup", "sirup", "bonbon", "cokolad", "susenk", "chips", "lupin", "krekr", "tycink", "napoj", "limonad", "nektar", "dzus", "fix", "knedlik", "hranol", "kroket", "dort", "zmrzlin", "pudink", "chlebic", "sendvic", "pizz", "bageta", "croissant", "muesli", "musli", "cerealie", "vlocky", "krmivo", "granule", "kapsick"];
+
+function otherProduct(item: string, product: string): boolean {
+  const has = (text: string, t: string) => (fold(text).match(/[a-z]+/g) ?? []).some((w) => w.startsWith(t));
+  return PRODUCT_TYPE_WORDS.some((t) => has(product, t) && !has(item, t));
+}
+
 interface Word {
   stem: string;
   adj: boolean;
@@ -210,6 +222,7 @@ export function productMatches(item: string, product: string): boolean {
   if (/\bs\s+kost/.test(fi) && /\bbez\s+kost/.test(fp)) return false;
   const need = matchWords(item).filter((w) => !SOFT.has(w.stem) && !/^\d/.test(w.stem));
   if (need.length === 0) return false;
+  if (otherProduct(item, product)) return false;
   const have = matchWords(product);
   return need.every((n) => have.some((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)));
 }
