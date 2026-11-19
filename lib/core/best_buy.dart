@@ -579,20 +579,51 @@ int packsNeeded(BuyItem item, double? packQty, String packUnit) {
 /// slova položky musí být v produktu („maso“ ale není „máslo“, „máslo“ není
 /// „máslový“ chléb a „bez kosti“ není „s kostí“). Stejně jako na serveru.
 bool productMatches(String itemName, String product) {
-  final fi = foldText(itemName), fp = foldText(product);
-  final without = RegExp(r'\bbez\s+kost'), withBone = RegExp(r'\bs\s+kost');
-  if (without.hasMatch(fi) && withBone.hasMatch(fp)) return false;
-  if (withBone.hasMatch(fi) && without.hasMatch(fp)) return false;
+  final item = _parsed(itemName), prod = _parsed(product);
+  if (item.withoutBone && prod.withBone) return false;
+  if (item.withBone && prod.withoutBone) return false;
   final need = [
-    for (final w in _matchWords(itemName))
+    for (final w in item.words)
       if (!_soft.contains(w.stem)) w,
   ];
   if (need.isEmpty) return false;
-  if (_otherProduct(itemName, product)) return false;
-  final have = _matchWords(product);
+  for (final t in prod.types) {
+    if (!item.types.contains(t)) return false;
+  }
+  final have = prod.words;
   return need.every(
     (n) => have.any((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)),
   );
+}
+
+/// Rozebraný název (slova, typ výrobku, kost). Porovnává se tisíckrát
+/// (recepty × akce), proto se každý název rozebírá jen jednou.
+class _Parsed {
+  _Parsed(String text) {
+    final f = foldText(text);
+    withoutBone = RegExp(r'\bbez\s+kost').hasMatch(f);
+    withBone = RegExp(r'\bs\s+kost').hasMatch(f);
+    words = _matchWords(text);
+    final raw = [for (final m in RegExp(r'[a-z]+').allMatches(f)) m.group(0)!];
+    types = {
+      for (final t in productTypeWords)
+        if (raw.any((w) => w.startsWith(t))) t,
+    };
+  }
+
+  late final bool withoutBone;
+  late final bool withBone;
+  late final List<({String stem, bool adj})> words;
+  late final Set<String> types;
+}
+
+final _parsedCache = <String, _Parsed>{};
+
+_Parsed _parsed(String text) {
+  final hit = _parsedCache[text];
+  if (hit != null) return hit;
+  if (_parsedCache.length > 20000) _parsedCache.clear();
+  return _parsedCache[text] = _Parsed(text);
 }
 
 /// Slova, která položka nemusí mít v názvu produktu („bez kosti“).
@@ -650,14 +681,6 @@ const productTypeWords = [
   'granule',
   'kapsick',
 ];
-
-bool _otherProduct(String itemName, String product) {
-  bool has(String text, String t) =>
-      RegExp(r'[a-z]+')
-          .allMatches(foldText(text))
-          .any((m) => m.group(0)!.startsWith(t));
-  return productTypeWords.any((t) => has(product, t) && !has(itemName, t));
-}
 
 final _adjOv = RegExp(r'ov(?:y|a|e|ou|ych|ymi|ym|eho|emu)$');
 
