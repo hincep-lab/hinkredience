@@ -56,6 +56,11 @@ void main() {
     expect(groupOf('Madeta Madeland sýr 45 % plátky'), 'syr');
     expect(groupOf('Sýr Mozzarella Galbani'), 'syr');
     expect(groupOf('Sýr Romadur Madeta'), isNull);
+    // Smetana jen 30 %+, zakysaná zvlášť.
+    expect(groupOf('Smetana ke šlehání Mlékárna Kunín 31%'), 'smetana');
+    expect(groupOf('Smetana ke šlehání 33% Karlova Koruna'), 'smetana');
+    expect(groupOf('Smetana na vaření Mlékárna Kunín 12%'), isNull);
+    expect(groupOf('Smetana zakysaná Jihočeská Madeta 11%'), 'zakysana');
     expect(groupOf('Sýr Hermelín Král sýrů'), isNull);
     expect(groupOf('Vepřová plec'), 'veprove');
     expect(groupOf('Vepřová šunka nejvyšší jakosti'), 'sunka');
@@ -146,7 +151,10 @@ void main() {
   test('hledá se nejvýš 20 slov a všechna jídla mají známé skupiny', () {
     final terms = saleSearchTerms();
     expect(terms.length, lessThanOrEqualTo(20));
-    expect(terms, containsAll(['vepřové', 'smetana', 'brambory', 'kuřecí']));
+    expect(
+      terms,
+      containsAll(['vepřové', 'smetana ke šlehání', 'brambory', 'kuřecí']),
+    );
     expect(allSaleDishes.length, greaterThanOrEqualTo(55));
     expect(allSaleDishes.map((d) => d.id).toSet().length, allSaleDishes.length);
     expect(
