@@ -94,6 +94,10 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
   final _total = TextEditingController();
   String _yieldUnit = YieldUnit.servings;
 
+  /// Druhá varianta výnosu pro stejné suroviny („55 ks“, „1 l“…).
+  final _altYield = TextEditingController();
+  String? _altYieldUnit;
+
   /// Recept je sdílený s rodinou (vidí a upravují ho všichni členové).
   bool _shared = false;
   final _notes = TextEditingController();
@@ -146,6 +150,12 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
         _cook.text = recipe.cookMinutes > 0 ? '${recipe.cookMinutes}' : '';
         _rest.text = recipe.restMinutes > 0 ? '${recipe.restMinutes}' : '';
         _yieldUnit = YieldUnit.normalize(recipe.yieldUnit);
+        _altYieldUnit = recipe.hasAltYield
+            ? YieldUnit.normalizeVariant(recipe.altYieldUnit)
+            : null;
+        _altYield.text = recipe.hasAltYield
+            ? formatQuantity(recipe.altYield!)
+            : '';
         _shared = recipe.visibility == RecipeVisibility.household;
         _total.text = recipe.totalMinutes > 0 ? '${recipe.totalMinutes}' : '';
         _notes.text = recipe.notes;
@@ -197,6 +207,7 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
       _title,
       _description,
       _servings,
+      _altYield,
       _prep,
       _cook,
       _rest,
@@ -340,6 +351,11 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
           ? RecipeVisibility.household
           : RecipeVisibility.private,
       yieldUnit: _yieldUnit,
+      altYield: _altYieldUnit == null ? null : parseQuantity(_altYield.text),
+      altYieldUnit:
+          _altYieldUnit == null || (parseQuantity(_altYield.text) ?? 0) <= 0
+          ? null
+          : _altYieldUnit,
       prepMinutes: int.tryParse(_prep.text.trim()) ?? 0,
       cookMinutes: int.tryParse(_cook.text.trim()) ?? 0,
       restMinutes: int.tryParse(_rest.text.trim()) ?? 0,
@@ -542,11 +558,71 @@ class _RecipeEditScreenState extends ConsumerState<RecipeEditScreen> {
                       selected: {_yieldUnit},
                       onSelectionChanged: (selection) => setState(() {
                         _yieldUnit = selection.first;
+                        if (_altYieldUnit == _yieldUnit) _altYieldUnit = null;
                         _dirty = true;
                       }),
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _altYield,
+                      enabled: _altYieldUnit != null,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Nebo také (nepovinné)',
+                        hintText: 'např. 55',
+                      ),
+                      validator: (value) {
+                        if (_altYieldUnit == null) return null;
+                        final parsed = parseQuantity(value ?? '');
+                        return parsed == null || parsed <= 0
+                            ? 'Zadejte číslo.'
+                            : null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: DropdownButton<String?>(
+                      value: _altYieldUnit,
+                      hint: const Text('jednotka'),
+                      items: [
+                        const DropdownMenuItem(
+                          value: null,
+                          child: Text('bez varianty'),
+                        ),
+                        for (final unit in YieldUnit.variants)
+                          if (unit != _yieldUnit)
+                            DropdownMenuItem(value: unit, child: Text(unit)),
+                      ],
+                      onChanged: (value) => setState(() {
+                        _altYieldUnit = value;
+                        _dirty = true;
+                      }),
+                    ),
+                  ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 6, left: 4),
+                child: Text(
+                  'Stejné množství surovin jinak: třeba 10 porcí = 55 ks, '
+                  'nebo 4 porce = 1 l omáčky. V receptu si pak přepnete.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               Row(

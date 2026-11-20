@@ -65,6 +65,9 @@ enum _Tab { recipe, steps, notes }
 class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
   _Tab _tab = _Tab.recipe;
   double? _servings;
+
+  /// Zobrazit výnos ve druhé variantě (kusy, litry…) místo hlavní.
+  bool _altYield = false;
   final _checked = <String>{};
 
   /// Odškrtnuté (hotové) kroky postupu – příprava na režim vaření.
@@ -560,6 +563,8 @@ class _RecipeDetailScreenState extends ConsumerState<RecipeDetailScreen> {
                       _Tab.recipe => _IngredientsTab(
                         recipe: shown,
                         servings: servings,
+                        useAlt: _altYield && shown.hasAltYield,
+                        onVariant: (alt) => setState(() => _altYield = alt),
                         checked: _checked,
                         onServings: (value) =>
                             setState(() => _servings = value),
@@ -902,6 +907,8 @@ class _IngredientsTab extends StatelessWidget {
   const _IngredientsTab({
     required this.recipe,
     required this.servings,
+    required this.useAlt,
+    required this.onVariant,
     required this.checked,
     required this.onServings,
     required this.onToggle,
@@ -910,7 +917,13 @@ class _IngredientsTab extends StatelessWidget {
   });
 
   final Recipe recipe;
+
+  /// Počet v hlavní jednotce receptu (porce/kusy); přepočet surovin.
   final double servings;
+
+  /// Zobrazit a měnit výnos ve druhé variantě (kusy, litry…).
+  final bool useAlt;
+  final ValueChanged<bool> onVariant;
   final Set<String> checked;
   final ValueChanged<double> onServings;
   final ValueChanged<String> onToggle;
@@ -922,17 +935,52 @@ class _IngredientsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pieces = YieldUnit.normalize(recipe.yieldUnit) == YieldUnit.pieces;
     final scaled = (servings - recipe.servings).abs() > 1e-9;
+    // Zobrazená varianta: hlavní (porce/kusy), nebo druhá (kusy, litry…).
+    final unit = useAlt
+        ? YieldUnit.normalizeVariant(recipe.altYieldUnit)!
+        : YieldUnit.normalize(recipe.yieldUnit);
+    final ratio = useAlt ? recipe.altYield! / recipe.servings : 1.0;
+    final shown = servings * ratio;
+    final baseShown = recipe.servings * ratio;
+    final step = YieldUnit.step(unit);
+    void setShown(double value) => onServings(value / ratio);
+    final noun = YieldUnit.noun(unit);
     final time = recipe.timeBreakdown;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (recipe.hasAltYield)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text(yieldLabel(recipe.servings, recipe.yieldUnit)),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text(
+                    yieldLabel(recipe.altYield!, recipe.altYieldUnit!),
+                  ),
+                ),
+              ],
+              selected: {useAlt},
+              onSelectionChanged: (selection) => onVariant(selection.first),
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: AppColors.copper,
+                selectedForegroundColor: const Color(0xFF1B1108),
+                side: const BorderSide(color: AppColors.outline),
+              ),
+            ),
+          ),
         Row(
           children: [
             Expanded(
               child: Text(
-                'Suroviny (${yieldLabel(servings, recipe.yieldUnit)})',
+                'Suroviny (${yieldLabel(roundForDisplay(shown), unit)})',
                 style: theme.textTheme.titleMedium,
               ),
             ),
@@ -945,17 +993,17 @@ class _IngredientsTab extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
-                    tooltip: pieces ? 'Méně kusů' : 'Méně porcí',
+                    tooltip: 'Méně $noun',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.remove_rounded),
-                    onPressed: servings > 1
-                        ? () => onServings(servings - 1)
+                    onPressed: shown > step + 1e-9
+                        ? () => setShown(_stepDown(shown, step))
                         : null,
                   ),
                   ConstrainedBox(
                     constraints: const BoxConstraints(minWidth: 26),
                     child: Text(
-                      formatQuantity(servings),
+                      formatQuantity(roundForDisplay(shown)),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
@@ -964,11 +1012,11 @@ class _IngredientsTab extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: pieces ? 'Více kusů' : 'Více porcí',
+                    tooltip: 'Více $noun',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.add_rounded),
-                    onPressed: servings < 999
-                        ? () => onServings(servings + 1)
+                    onPressed: shown < 999 * step
+                        ? () => setShown(_stepUp(shown, step))
                         : null,
                   ),
                 ],
@@ -980,7 +1028,7 @@ class _IngredientsTab extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
-              'Přepočítáno z ${yieldLabel(recipe.servings, recipe.yieldUnit)}. '
+              'Přepočítáno z ${yieldLabel(roundForDisplay(baseShown), unit)}. '
               'Množství jsou zaokrouhlená, aby šla odměřit.',
               style: const TextStyle(
                 color: AppColors.copperGold,
@@ -1693,3 +1741,18 @@ class _ImproveDialogState extends State<_ImproveDialog> {
     );
   }
 }
+
+/// Další hodnota po krocích (z 55 ks → 56, z 0,6 l → 0,75 l).
+double _stepUp(double value, double step) {
+  final next = (value / step).floor() * step + step;
+  return next - value < 1e-9 ? next + step : next;
+}
+
+/// Předchozí hodnota po krocích (z 56 ks → 55, z 0,6 l → 0,5 l).
+double _stepDown(double value, double step) {
+  final prev = (value / step).ceil() * step - step;
+  return value - prev < 1e-9 ? prev - step : prev;
+}
+
+/// Zaokrouhlení výnosu pro zobrazení (55,000001 → 55).
+double roundForDisplay(double value) => (value * 100).round() / 100;

@@ -136,6 +136,19 @@ export function cleanRecipe(raw: any, base: any = {}): Record<string, unknown> {
   // má stávající recept) – jinak je databáze ponechá beze změny.
   const yieldUnit = raw?.yield_unit === undefined ? base?.yield_unit : raw.yield_unit;
   if (yieldUnit !== undefined) result.yield_unit = normalizeYieldUnit(yieldUnit);
+  // Druhá varianta výnosu („10 porcí“ = „55 ks“, „4 porce“ = „1 l“).
+  // Bez uvedení zůstane stávající; null ji odebere.
+  if (raw?.alt_yield !== undefined || raw?.alt_yield_unit !== undefined) {
+    const amount = typeof raw?.alt_yield === "number" && raw.alt_yield > 0 && raw.alt_yield < 100000
+      ? raw.alt_yield
+      : null;
+    const unit = normalizeAltYieldUnit(raw?.alt_yield_unit);
+    result.alt_yield = amount !== null && unit ? amount : null;
+    result.alt_yield_unit = amount !== null && unit ? unit : null;
+  } else if (base?.alt_yield !== undefined && base?.alt_yield !== null) {
+    result.alt_yield = Number(base.alt_yield);
+    result.alt_yield_unit = base.alt_yield_unit ?? null;
+  }
   const rest = raw?.rest_minutes === undefined ? base?.rest_minutes : raw.rest_minutes;
   if (typeof rest === "number" && Number.isFinite(rest) && rest >= 0) {
     result.rest_minutes = Math.round(rest);
@@ -227,6 +240,19 @@ export function normalizeYieldUnit(value: unknown): string {
   return folded === "ks" || folded.startsWith("kus") ? "ks" : "porce";
 }
 
+/** Jednotka druhé varianty výnosu; neznámá → null. */
+export function normalizeAltYieldUnit(value: unknown): string | null {
+  const f = typeof value === "string" ? fold(value.trim()).replace(/\./g, "") : "";
+  if (!f) return null;
+  if (f === "ks" || f.startsWith("kus")) return "ks";
+  if (f.startsWith("porc")) return "porce";
+  if (f === "l" || f.startsWith("litr")) return "l";
+  if (f === "ml" || f.startsWith("mililitr")) return "ml";
+  if (f === "g" || f.startsWith("gram")) return "g";
+  if (f === "kg" || f.startsWith("kilo")) return "kg";
+  return null;
+}
+
 /** Recept z databáze ve tvaru pro klienta (bez interních polí). */
 export function presentRecipe(row: any, full: boolean): Record<string, unknown> {
   const sorted = (list: unknown) =>
@@ -240,6 +266,8 @@ export function presentRecipe(row: any, full: boolean): Record<string, unknown> 
     category: row.category ?? "",
     servings: row.servings,
     yield_unit: normalizeYieldUnit(row.yield_unit),
+    alt_yield: row.alt_yield === null || row.alt_yield === undefined ? null : Number(row.alt_yield),
+    alt_yield_unit: row.alt_yield_unit ?? null,
     prep_minutes: row.prep_minutes ?? 0,
     cook_minutes: row.cook_minutes ?? 0,
     rest_minutes: row.rest_minutes ?? 0,
@@ -1441,6 +1469,17 @@ const recipeFields = {
     type: "string",
     enum: ["porce", "ks"],
     description: "V čem je výtěžnost: „porce“ (výchozí), nebo „ks“ u knedlíků, housek, sušenek apod.",
+  },
+  alt_yield: {
+    type: ["number", "null"],
+    description:
+      "Nepovinná druhá varianta výnosu pro STEJNÉ množství surovin, např. 10 porcí = 55 (ks) taštiček, " +
+      "4 porce = 1 (l) omáčky. Uživatel si v aplikaci mezi variantami přepíná. null = odebrat.",
+  },
+  alt_yield_unit: {
+    type: ["string", "null"],
+    enum: ["porce", "ks", "l", "ml", "g", "kg", null],
+    description: "Jednotka druhé varianty (jiná než yield_unit).",
   },
   prep_minutes: { type: "integer", description: "Aktivní příprava v minutách (práce u linky)." },
   cook_minutes: { type: "integer", description: "Vaření, pečení, smažení v minutách." },

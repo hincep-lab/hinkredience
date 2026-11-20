@@ -521,6 +521,32 @@ void main() {
     expect(find.text('3 h'), findsOneWidget);
   });
 
+  testWidgets('detail přepíná varianty výnosu: 4 porce ↔ 1 l', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipe('recipe-1'),
+      recipes: [sampleRecipe().copyWith(altYield: 1.0, altYieldUnit: 'l')],
+    );
+    expect(find.text('Suroviny (4 porce)'), findsOneWidget);
+    expect(find.text('1 l'), findsOneWidget);
+
+    await tester.tap(find.text('1 l'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (1 l)'), findsOneWidget);
+    expect(find.text('2 kg'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Více litrů'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (1,25 l)'), findsOneWidget);
+    expect(find.text('2,5 kg'), findsOneWidget);
+    expect(find.text('250 ml'), findsOneWidget);
+
+    // Zpět na porce: stejné množství = 5 porcí.
+    await tester.tap(find.text('4 porce'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (5 porcí)'), findsOneWidget);
+  });
+
   testWidgets('detail ukáže skutečný celkový čas včetně kynutí', (
     tester,
   ) async {

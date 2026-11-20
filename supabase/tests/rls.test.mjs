@@ -437,6 +437,45 @@ test('výtěžnost v kusech, čekání a druh kroků: nové sloupce nic nerozbij
   assert.deepEqual(left.rows[0], { steps: 0, versions: 0 });
 });
 
+test('druhá varianta výnosu (10 porcí = 55 ks): uloží se, starší klient ji nesmaže', async () => {
+  const draft = {
+    title: 'Pierogi', servings: 10, yield_unit: 'porce', alt_yield: 55, alt_yield_unit: 'kusů',
+    ingredients: [{ name: 'Mouka', quantity: 500, unit: 'g' }], steps: [],
+  };
+  const created = await as(PAVEL, `select public.api_save_recipe($1::jsonb) as r`, [JSON.stringify(draft)]);
+  const id = created.rows[0].r.id;
+  const row = await as(PAVEL, `select alt_yield::float, alt_yield_unit from public.recipes where id = $1`, [id]);
+  assert.deepEqual(row.rows[0], { alt_yield: 55, alt_yield_unit: 'ks' });
+  const snap = await as(PAVEL, `select snapshot from public.recipe_versions where recipe_id = $1`, [id]);
+  assert.equal(snap.rows[0].snapshot.alt_yield_unit, 'ks');
+
+  // Starší klient (bez nových polí) variantu nesmaže – ani přes API, ani přímým zápisem.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ title: 'Pierogi', servings: 10, ingredients: [], steps: [] }), id,
+  ]);
+  await as(PAVEL, `update public.recipes set servings = 12, yield_unit = 'porce' where id = $1`, [id]);
+  const kept = await as(PAVEL, `select alt_yield::float, alt_yield_unit from public.recipes where id = $1`, [id]);
+  assert.deepEqual(kept.rows[0], { alt_yield: 55, alt_yield_unit: 'ks' });
+
+  // Litry: 4 porce = 1 l omáčky; null variantu odebere.
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ title: 'Omáčka', servings: 4, alt_yield: 1, alt_yield_unit: 'l', ingredients: [], steps: [] }), id,
+  ]);
+  const liters = await as(PAVEL, `select alt_yield::float, alt_yield_unit from public.recipes where id = $1`, [id]);
+  assert.deepEqual(liters.rows[0], { alt_yield: 1, alt_yield_unit: 'l' });
+  await as(PAVEL, `select public.api_save_recipe($1::jsonb, $2::uuid)`, [
+    JSON.stringify({ title: 'Omáčka', servings: 4, alt_yield: null, ingredients: [], steps: [] }), id,
+  ]);
+  const cleared = await as(PAVEL, `select alt_yield, alt_yield_unit from public.recipes where id = $1`, [id]);
+  assert.deepEqual(cleared.rows[0], { alt_yield: null, alt_yield_unit: null });
+
+  await assert.rejects(
+    as(PAVEL, `update public.recipes set alt_yield = 3, alt_yield_unit = 'hrnky' where id = $1`, [id]),
+    /recipes_alt_yield_check/,
+  );
+  await as(PAVEL, `delete from public.recipes where id = $1`, [id]);
+});
+
 test('vysypaný koš: náhrobek vidí vlastník i domácnost, recept nejde oživit', async () => {
   const hh = await as(PAVEL, `insert into public.households (name) values ('Hinkovi 08') returning id`);
   const hid = hh.rows[0].id;
