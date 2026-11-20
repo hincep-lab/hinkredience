@@ -26,6 +26,33 @@ void main() {
 
   test('položky z letáku se zařadí do správných skupin', () {
     expect(groupOf('Vepřová krkovice bez kosti'), 'veprove');
+    // Jiné výrobky a hotová jídla se surovinou v názvu.
+    for (final p in [
+      'Brambory marcipánové Schluckwerder',
+      'Americké brambory mražené Marquise',
+      'Vývar Cibule Bistro',
+      'Rýže Protein Müller Riso',
+      'Koření Špagety Vitana',
+      'Boloňské špagety Penny To Go',
+      'Těstoviny plněné mražené Pelmeni Povar',
+      'Hovězí burger Bio',
+      'Hovězí carpaccio',
+      'Hovězí trhané maso bourbon Sous vide',
+      'Kuřecí maso ve sklenici Pikok',
+      'Vepřové maso ve vlastní šťávě Hamé',
+      'Vejce v aspiku Delika',
+      'Mléko kefírové Pilos',
+      'Sýr tavený Veselá kráva',
+      'Sýr Žervé Karlova Koruna',
+    ]) {
+      expect(groupOf(p), isNull, reason: p);
+    }
+    expect(groupOf('Brambory konzumní pozdní'), 'brambory');
+    expect(groupOf('Cibule kuchyňská žlutá'), 'cibule');
+    expect(groupOf('Rýže basmati Lagris'), 'ryze');
+    expect(groupOf('Těstoviny Tesco'), 'testoviny');
+    expect(groupOf('Hovězí kližka bez kosti'), 'hovezi');
+    expect(groupOf('Sýr Eidam 30% Pilos'), 'syr');
     expect(groupOf('Vepřová plec'), 'veprove');
     expect(groupOf('Vepřová šunka nejvyšší jakosti'), 'sunka');
     expect(groupOf('Mleté vepřové maso'), 'mlete');
