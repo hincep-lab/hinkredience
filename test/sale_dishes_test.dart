@@ -70,7 +70,7 @@ void main() {
     expect(groupOf('Kuřecí paštika'), isNull);
     expect(groupOf('Hovězí zadní bez kosti'), 'hovezi');
     expect(groupOf('Smetana ke šlehání 31 %'), 'smetana');
-    expect(groupOf('Zakysaná smetana'), 'smetana');
+    expect(groupOf('Zakysaná smetana'), 'zakysana');
     expect(groupOf('Eidam 30 %'), 'syr');
     expect(groupOf('Brambory konzumní 2 kg'), 'brambory');
     expect(groupOf('Bramborové chips'), isNull);
