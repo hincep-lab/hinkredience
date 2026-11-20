@@ -39,6 +39,23 @@ class SaleGroup {
 
 /// Co nikdy není surovina na vaření (krmiva, hotovky, pomazánky…).
 const _never = [
+  // Jiné výrobky se surovinou v názvu a hotová jídla.
+  'marcipan',
+  'vyvar',
+  'koreni',
+  'korenic',
+  ' riso ',
+  'muller',
+  'sous vide',
+  ' to go',
+  'aspik',
+  'sklenic',
+  'vlastni st',
+  'burger',
+  'carpacc',
+  'trhan',
+  'plnen',
+  'pelmen',
   'krmiv',
   'pro psy',
   'pro kocky',
@@ -125,7 +142,17 @@ const saleGroups = <SaleGroup>[
     'syr',
     'Sýr',
     ['syr', 'eidam', 'gouda', 'emental', 'mozzarel', 'parmez', 'gran pad'],
-    exclude: ['tvaroh', 'cottage', 'tyncin', 'krem', 'pivo'],
+    exclude: [
+      'tvaroh',
+      'cottage',
+      'tyncin',
+      'krem',
+      'pivo',
+      'taven',
+      'gervais',
+      'zerve',
+      'cerstvy syr',
+    ],
     search: ['sýr', 'eidam'],
   ),
   SaleGroup(
@@ -140,6 +167,7 @@ const saleGroups = <SaleGroup>[
     'Mléko',
     ['mleko'],
     exclude: [
+      'kefir',
       'kondenz',
       'kokos',
       'mandl',
@@ -162,6 +190,7 @@ const saleGroups = <SaleGroup>[
     'Brambory',
     ['brambor'],
     exclude: [
+      'mrazen',
       'chips',
       'hranolk',
       'kase',
