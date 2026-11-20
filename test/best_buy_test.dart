@@ -170,6 +170,17 @@ void main() {
     );
     expect(productMatches('Máslo – 250 g', 'Máslo 250 g'), isTrue);
     expect(productMatches('Maso', 'Máslo'), isFalse);
+    // Smetana jen 30 %+, i když recept píše „na vaření“.
+    expect(
+      productMatches('Smetana na vaření', 'Smetana ke šlehání 31%'),
+      isTrue,
+    );
+    expect(
+      productMatches('Smetana na vaření', 'Smetana na vaření 12%'),
+      isFalse,
+    );
+    expect(productMatches('Smetana', 'Smetana zakysaná 11%'), isFalse);
+    expect(productMatches('Zakysaná smetana', 'Smetana zakysaná 11%'), isTrue);
     // Jiný výrobek, který má surovinu jen v názvu.
     expect(productMatches('Brambory', 'Brambory marcipánové'), isFalse);
     expect(productMatches('Cibule', 'Vývar Cibule Bistro'), isFalse);

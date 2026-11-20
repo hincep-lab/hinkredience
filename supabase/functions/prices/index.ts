@@ -218,6 +218,8 @@ function matchWords(text: string): Word[] {
  */
 export function productMatches(item: string, product: string): boolean {
   const fi = fold(item), fp = fold(product);
+  // Smetana (ne zakysaná): jen 30 %+, ať recept píše „na vaření“ nebo jinak.
+  if (isCream(fi)) return isCream(fp) && cream30(fp);
   if (/\bbez\s+kost/.test(fi) && /\bs\s+kost/.test(fp)) return false;
   if (/\bs\s+kost/.test(fi) && /\bbez\s+kost/.test(fp)) return false;
   const need = matchWords(item).filter((w) => !SOFT.has(w.stem) && !/^\d/.test(w.stem));
@@ -225,6 +227,16 @@ export function productMatches(item: string, product: string): boolean {
   if (otherProduct(item, product)) return false;
   const have = matchWords(product);
   return need.every((n) => have.some((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)));
+}
+
+function isCream(folded: string): boolean {
+  return folded.includes("smetan") && !folded.includes("zakys") && !folded.includes("kysel");
+}
+
+/** Smetana s aspoň 30 % tuku (bez uvedeného tuku jen „ke šlehání“). */
+export function cream30(folded: string): boolean {
+  const fat = /(\d{1,2})(?:[.,]\d+)?\s*%/.exec(folded);
+  return fat ? Number(fat[1]) >= 30 : folded.includes("slehan");
 }
 
 /**

@@ -167,6 +167,15 @@ Deno.test("automatický výběr: zdarma, v limitu; placený jen povolený", () =
 
 // ------------------------------------------------------------ shoda názvů
 
+Deno.test("smetana jen 30 %+, i když recept píše „na vaření“", () => {
+  ok(productMatches("Smetana na vaření", "Smetana ke šlehání Mlékárna Kunín 31%"));
+  ok(productMatches("Smetana", "Smetana ke šlehání 33% Karlova Koruna"));
+  ok(!productMatches("Smetana na vaření", "Smetana na vaření Mlékárna Kunín 12%"));
+  ok(!productMatches("Smetana", "Smetana zakysaná Jihočeská Madeta 11%"));
+  ok(!productMatches("Smetana", "Sýr tavený Smetanito Želetava"));
+  ok(productMatches("Zakysaná smetana", "Smetana zakysaná Jihočeská Madeta 11%"));
+});
+
 Deno.test("položka × produkt: jiný výrobek se surovinou v názvu se nepočítá", () => {
   ok(!productMatches("Brambory", "Brambory marcipánové Schluckwerder"), "marcipán");
   ok(!productMatches("Cibule", "Vývar Cibule Bistro"), "vývar");
