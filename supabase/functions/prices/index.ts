@@ -219,7 +219,11 @@ function matchWords(text: string): Word[] {
 export function productMatches(item: string, product: string): boolean {
   const fi = fold(item), fp = fold(product);
   // Smetana (ne zakysaná): jen 30 %+, ať recept píše „na vaření“ nebo jinak.
-  if (isCream(fi)) return isCream(fp) && cream30(fp);
+  if (isCream(fi)) {
+    if (!isCream(fp) || creamThin(fp)) return false;
+    const noun = matchWords("smetana")[0].stem;
+    return matchWords(product).some((h) => h.stem === noun && !h.adj);
+  }
   if (/\bbez\s+kost/.test(fi) && /\bs\s+kost/.test(fp)) return false;
   if (/\bs\s+kost/.test(fi) && /\bbez\s+kost/.test(fp)) return false;
   const need = matchWords(item).filter((w) => !SOFT.has(w.stem) && !/^\d/.test(w.stem));
@@ -229,14 +233,16 @@ export function productMatches(item: string, product: string): boolean {
   return need.every((n) => have.some((h) => stemsMatch(n.stem, h.stem) && (n.adj || !h.adj)));
 }
 
+const NOT_CREAM = ["zakys", "kysel", "syr", "taven", "jogurt", "zmrzlin", "kava", "dezert", "pudink"];
+
 function isCream(folded: string): boolean {
-  return folded.includes("smetan") && !folded.includes("zakys") && !folded.includes("kysel");
+  return folded.includes("smetan") && !NOT_CREAM.some((w) => folded.includes(w));
 }
 
-/** Smetana s aspoň 30 % tuku (bez uvedeného tuku jen „ke šlehání“). */
-export function cream30(folded: string): boolean {
+/** Smetana pod 30 % tuku (uvedené procento, nebo „na vaření“). */
+export function creamThin(folded: string): boolean {
   const fat = /(\d{1,2})(?:[.,]\d+)?\s*%/.exec(folded);
-  return fat ? Number(fat[1]) >= 30 : folded.includes("slehan");
+  return fat ? Number(fat[1]) < 30 : folded.includes("vareni");
 }
 
 /**

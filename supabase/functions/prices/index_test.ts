@@ -174,6 +174,7 @@ Deno.test("smetana jen 30 %+, i když recept píše „na vaření“", () => {
   ok(!productMatches("Smetana", "Smetana zakysaná Jihočeská Madeta 11%"));
   ok(!productMatches("Smetana", "Sýr tavený Smetanito Želetava"));
   ok(productMatches("Zakysaná smetana", "Smetana zakysaná Jihočeská Madeta 11%"));
+  ok(productMatches("Smetana na vaření", "Mlékárna Kunín smetana ke šlehání 31 %"));
 });
 
 Deno.test("položka × produkt: jiný výrobek se surovinou v názvu se nepočítá", () => {
