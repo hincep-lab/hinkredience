@@ -778,3 +778,18 @@ Deno.test("štítky: update_recipe_tags přidá, odebere, nahradí a hromadně",
   assert((await call(w, "update_recipe_tags", { recipe_id: ID1, set: [], add: ["Gril"] })).isError);
   assert((await call(w, "update_recipe_tags", { recipe_id: "spatne", add: ["Gril"] })).isError);
 });
+
+Deno.test("druhá varianta výnosu: 10 porcí = 55 ks, null ji odebere, bez uvedení zůstane", () => {
+  const r = cleanRecipe({ title: "Pierogi", servings: 10, alt_yield: 55, alt_yield_unit: "kusů" });
+  assertEquals(r.alt_yield, 55);
+  assertEquals(r.alt_yield_unit, "ks");
+  const l = cleanRecipe({ title: "Omáčka", alt_yield: 1, alt_yield_unit: "litr" });
+  assertEquals(l.alt_yield_unit, "l");
+  const cleared = cleanRecipe({ title: "Omáčka", alt_yield: null });
+  assertEquals(cleared.alt_yield, null);
+  assertEquals(cleared.alt_yield_unit, null);
+  const kept = cleanRecipe({ title: "Pierogi" }, { alt_yield: "55", alt_yield_unit: "ks" });
+  assertEquals(kept.alt_yield, 55);
+  const none = cleanRecipe({ title: "Guláš" });
+  assertEquals("alt_yield" in none, false);
+});

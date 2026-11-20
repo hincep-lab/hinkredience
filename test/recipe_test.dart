@@ -127,6 +127,30 @@ void main() {
     expect(restored.toShareText(), contains('Výtěžnost: 12 ks'));
   });
 
+  test(
+    'druhá varianta výnosu se uloží a načte; stejná jednotka se ignoruje',
+    () {
+      final pierogi = Recipe(
+        id: 'p',
+        title: 'Pierogi',
+        servings: 10,
+        altYield: 55,
+        altYieldUnit: 'kusů',
+        createdAt: DateTime.utc(2026, 11, 20),
+        updatedAt: DateTime.utc(2026, 11, 20),
+      );
+      final restored = Recipe.fromJson(pierogi.toJson());
+      expect(restored.hasAltYield, isTrue);
+      expect(restored.altYield, 55);
+      expect(restored.altYieldUnit, 'ks');
+      expect(restored.copyWith(altYield: null).hasAltYield, isFalse);
+      expect(
+        pierogi.copyWith(yieldUnit: 'ks', altYieldUnit: 'ks').hasAltYield,
+        isFalse,
+      );
+    },
+  );
+
   test('starší recept bez nových polí se načte s výchozími hodnotami', () {
     final json = sampleRecipe().toJson()
       ..remove('yield_unit')

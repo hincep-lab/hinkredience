@@ -215,6 +215,8 @@ class Recipe {
     this.category = '',
     this.servings = 4,
     this.yieldUnit = YieldUnit.servings,
+    this.altYield,
+    this.altYieldUnit,
     this.prepMinutes = 0,
     this.cookMinutes = 0,
     this.restMinutes = 0,
@@ -247,6 +249,20 @@ class Recipe {
 
   /// [YieldUnit.servings] nebo [YieldUnit.pieces].
   final String yieldUnit;
+
+  /// Druhá varianta výnosu pro stejné množství surovin („55 ks“, „1 l“,
+  /// „600 g“). V detailu se mezi variantami přepíná; nepovinná.
+  final double? altYield;
+  final String? altYieldUnit;
+
+  /// Má recept platnou druhou variantu výnosu (jinou jednotku než hlavní)?
+  bool get hasAltYield {
+    final unit = YieldUnit.normalizeVariant(altYieldUnit);
+    return altYield != null &&
+        altYield! > 0 &&
+        unit != null &&
+        unit != YieldUnit.normalize(yieldUnit);
+  }
 
   /// Aktivní příprava v minutách.
   final int prepMinutes;
@@ -315,6 +331,8 @@ class Recipe {
     String? category,
     double? servings,
     String? yieldUnit,
+    Object? altYield = _keep,
+    Object? altYieldUnit = _keep,
     int? prepMinutes,
     int? cookMinutes,
     int? restMinutes,
@@ -346,6 +364,10 @@ class Recipe {
     category: category ?? this.category,
     servings: servings ?? this.servings,
     yieldUnit: yieldUnit ?? this.yieldUnit,
+    altYield: identical(altYield, _keep) ? this.altYield : altYield as double?,
+    altYieldUnit: identical(altYieldUnit, _keep)
+        ? this.altYieldUnit
+        : altYieldUnit as String?,
     prepMinutes: prepMinutes ?? this.prepMinutes,
     cookMinutes: cookMinutes ?? this.cookMinutes,
     restMinutes: restMinutes ?? this.restMinutes,
@@ -384,6 +406,8 @@ class Recipe {
     'category': category,
     'servings': servings,
     'yield_unit': yieldUnit,
+    'alt_yield': altYield,
+    'alt_yield_unit': altYieldUnit,
     'prep_minutes': prepMinutes,
     'cook_minutes': cookMinutes,
     'rest_minutes': restMinutes,
@@ -415,6 +439,8 @@ class Recipe {
     category: (json['category'] as String?) ?? '',
     servings: (json['servings'] as num?)?.toDouble() ?? 4,
     yieldUnit: YieldUnit.normalize(json['yield_unit'] as String?),
+    altYield: (json['alt_yield'] as num?)?.toDouble(),
+    altYieldUnit: YieldUnit.normalizeVariant(json['alt_yield_unit'] as String?),
     prepMinutes: (json['prep_minutes'] as num?)?.toInt() ?? 0,
     cookMinutes: (json['cook_minutes'] as num?)?.toInt() ?? 0,
     restMinutes: (json['rest_minutes'] as num?)?.toInt() ?? 0,

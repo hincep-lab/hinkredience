@@ -208,4 +208,19 @@ void main() {
     expect(YieldUnit.normalize(null), 'porce');
     expect(YieldUnit.normalize('cokoli'), 'porce');
   });
+
+  test('varianty výnosu: jednotky a popisky', () {
+    expect(yieldLabel(1, 'l'), '1 l');
+    expect(yieldLabel(0.5, 'l'), '0,5 l');
+    expect(yieldLabel(600, 'g'), '600 g');
+    expect(yieldLabel(55, 'ks'), '55 ks');
+    expect(yieldLabel(10, 'porce'), '10 porcí');
+    expect(YieldUnit.normalizeVariant('kusů'), 'ks');
+    expect(YieldUnit.normalizeVariant('Litry'), 'l');
+    expect(YieldUnit.normalizeVariant('hrnky'), isNull);
+    expect(YieldUnit.step('l'), 0.25);
+    expect(YieldUnit.step('ks'), 1);
+    // Hlavní výnos zůstává jen porce/kusy (starší verze aplikace).
+    expect(YieldUnit.normalize('l'), 'porce');
+  });
 }

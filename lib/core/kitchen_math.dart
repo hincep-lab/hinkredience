@@ -474,6 +474,51 @@ String scaleRangesInText(
 abstract final class YieldUnit {
   static const servings = 'porce';
   static const pieces = 'ks';
+  static const liters = 'l';
+  static const milliliters = 'ml';
+  static const grams = 'g';
+  static const kilograms = 'kg';
+
+  /// Jednotky druhé varianty výnosu („10 porcí“ ↔ „55 ks“, „4 porce“ ↔
+  /// „1 l omáčky“).
+  static const variants = [
+    servings,
+    pieces,
+    liters,
+    milliliters,
+    grams,
+    kilograms,
+  ];
+
+  /// Sjednotí jednotku druhé varianty; neznámá → null.
+  static String? normalizeVariant(String? value) {
+    final folded = foldText((value ?? '').trim()).replaceAll('.', '');
+    if (folded.isEmpty) return null;
+    if (folded == 'ks' || folded.startsWith('kus')) return pieces;
+    if (folded.startsWith('porc')) return servings;
+    if (folded == 'l' || folded.startsWith('litr')) return liters;
+    if (folded == 'ml' || folded.startsWith('mililitr')) return milliliters;
+    if (folded == 'g' || folded.startsWith('gram')) return grams;
+    if (folded == 'kg' || folded.startsWith('kilo')) return kilograms;
+    return null;
+  }
+
+  /// Krok tlačítek +/− pro danou jednotku.
+  static double step(String unit) => switch (unit) {
+    liters || kilograms => 0.25,
+    milliliters || grams => 50,
+    _ => 1,
+  };
+
+  /// Popis do přepínače a tlačítek („kusů“, „litrů“…).
+  static String noun(String unit) => switch (unit) {
+    pieces => 'kusů',
+    liters => 'litrů',
+    milliliters => 'mililitrů',
+    grams => 'gramů',
+    kilograms => 'kilogramů',
+    _ => 'porcí',
+  };
 
   /// Sjednotí uloženou hodnotu; prázdná nebo neznámá znamená porce.
   static String normalize(String? value) {
@@ -486,6 +531,12 @@ abstract final class YieldUnit {
 /// Výtěžnost receptu slovy: „4 porce“, „5 porcí“, „1 porce“, „12 ks“.
 String yieldLabel(double amount, String unit) {
   final number = formatNumber(amount);
+  final variant = YieldUnit.normalizeVariant(unit);
+  if (variant != null &&
+      variant != YieldUnit.servings &&
+      variant != YieldUnit.pieces) {
+    return '$number $variant';
+  }
   if (YieldUnit.normalize(unit) == YieldUnit.pieces) return '$number ks';
   if (amount == 1) return '$number porce';
   if (amount > 1 && amount < 5 && amount == amount.roundToDouble()) {

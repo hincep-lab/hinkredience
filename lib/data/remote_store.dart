@@ -108,6 +108,10 @@ class SupabaseRemoteStore implements RemoteStore {
       'category': recipe.category,
       'servings': recipe.servings,
       'yield_unit': YieldUnit.normalize(recipe.yieldUnit),
+      'alt_yield': recipe.hasAltYield ? recipe.altYield : null,
+      'alt_yield_unit': recipe.hasAltYield
+          ? YieldUnit.normalizeVariant(recipe.altYieldUnit)
+          : null,
       'prep_minutes': recipe.prepMinutes,
       'cook_minutes': recipe.cookMinutes,
       'rest_minutes': recipe.restMinutes,
@@ -146,6 +150,8 @@ class SupabaseRemoteStore implements RemoteStore {
     if (legacy) {
       row
         ..remove('yield_unit')
+        ..remove('alt_yield')
+        ..remove('alt_yield_unit')
         ..remove('rest_minutes')
         ..remove('tags');
     }
@@ -157,6 +163,8 @@ class SupabaseRemoteStore implements RemoteStore {
       legacy = _legacySchema = true;
       row
         ..remove('yield_unit')
+        ..remove('alt_yield')
+        ..remove('alt_yield_unit')
         ..remove('rest_minutes')
         ..remove('tags');
       await writeRow();
