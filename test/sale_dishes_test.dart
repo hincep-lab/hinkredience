@@ -53,6 +53,10 @@ void main() {
     expect(groupOf('Těstoviny Tesco'), 'testoviny');
     expect(groupOf('Hovězí kližka bez kosti'), 'hovezi');
     expect(groupOf('Sýr Eidam 30% Pilos'), 'syr');
+    expect(groupOf('Madeta Madeland sýr 45 % plátky'), 'syr');
+    expect(groupOf('Sýr Mozzarella Galbani'), 'syr');
+    expect(groupOf('Sýr Romadur Madeta'), isNull);
+    expect(groupOf('Sýr Hermelín Král sýrů'), isNull);
     expect(groupOf('Vepřová plec'), 'veprove');
     expect(groupOf('Vepřová šunka nejvyšší jakosti'), 'sunka');
     expect(groupOf('Mleté vepřové maso'), 'mlete');
