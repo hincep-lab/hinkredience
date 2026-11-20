@@ -580,6 +580,14 @@ int packsNeeded(BuyItem item, double? packQty, String packUnit) {
 /// „máslový“ chléb a „bez kosti“ není „s kostí“). Stejně jako na serveru.
 bool productMatches(String itemName, String product) {
   final item = _parsed(itemName), prod = _parsed(product);
+  // Smetana (ne zakysaná): Pája používá jen 30 %+, ať recept píše
+  // „na vaření“ nebo cokoli jiného.
+  if (item.cream) {
+    if (!prod.cream || prod.creamThin) return false;
+    // „Smetana na vaření“ z receptu ~ „Smetana ke šlehání 31 %“.
+    final noun = _matchWords('smetana').first.stem;
+    return prod.words.any((h) => h.stem == noun && !h.adj);
+  }
   if (item.withoutBone && prod.withBone) return false;
   if (item.withBone && prod.withoutBone) return false;
   final need = [
@@ -604,6 +612,23 @@ class _Parsed {
     withoutBone = RegExp(r'\bbez\s+kost').hasMatch(f);
     withBone = RegExp(r'\bs\s+kost').hasMatch(f);
     words = _matchWords(text);
+    cream =
+        f.contains('smetan') &&
+        !const [
+          'zakys',
+          'kysel',
+          'syr',
+          'taven',
+          'jogurt',
+          'zmrzlin',
+          'kava',
+          'dezert',
+          'pudink',
+        ].any(f.contains);
+    final fat = RegExp(r'(\d{1,2})(?:[.,]\d+)?\s*%').firstMatch(f);
+    creamThin = fat != null
+        ? int.parse(fat.group(1)!) < 30
+        : f.contains('vareni');
     final raw = [for (final m in RegExp(r'[a-z]+').allMatches(f)) m.group(0)!];
     types = {
       for (final t in productTypeWords)
@@ -615,6 +640,11 @@ class _Parsed {
   late final bool withBone;
   late final List<({String stem, bool adj})> words;
   late final Set<String> types;
+
+  /// Smetana (ne zakysaná) a zda má víme, že má méně než 30 % tuku
+  /// (uvedené procento nebo „na vaření“).
+  late final bool cream;
+  late final bool creamThin;
 }
 
 final _parsedCache = <String, _Parsed>{};

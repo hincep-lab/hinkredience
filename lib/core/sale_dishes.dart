@@ -133,10 +133,19 @@ const saleGroups = <SaleGroup>[
   SaleGroup('sunka', 'Šunka', ['sunk'], search: ['šunka']),
   SaleGroup(
     'smetana',
-    'Smetana',
+    'Smetana 30 %+',
     ['smetan'],
-    exclude: ['zmrzlin', 'jogurt', 'kava', 'syr', 'tavene'],
-    search: ['smetana'],
+    exclude: [
+      'zmrzlin',
+      'jogurt',
+      'kava',
+      'syr',
+      'tavene',
+      'zakys',
+      'kysel',
+      'na vareni',
+    ],
+    search: ['smetana ke šlehání'],
   ),
   SaleGroup(
     'syr',
@@ -276,6 +285,13 @@ const saleGroups = <SaleGroup>[
     exclude: ['stav', 'dzus', 'salat'],
     search: ['mrkev'],
   ),
+  SaleGroup(
+    'zakysana',
+    'Zakysaná smetana',
+    ['zakysan'],
+    exclude: ['jogurt', 'dresink', 'pomazan'],
+    search: ['zakysaná smetana'],
+  ),
 ];
 
 SaleGroup? saleGroupById(String id) {
@@ -296,9 +312,18 @@ String? groupOf(String product) {
   for (final g in saleGroups) {
     if (!g.keys.any(name.contains)) continue;
     if (g.exclude.any(name.contains)) continue;
+    if (g.id == 'smetana' && !_cream30(name)) continue;
     return g.id;
   }
   return null;
+}
+
+/// Smetana jen s 30 % tuku a víc (12% na vaření se nepoužívá). Bez
+/// uvedeného tuku stačí „ke šlehání“.
+bool _cream30(String folded) {
+  final fat = RegExp(r'(\d{1,2})(?:[.,]\d+)?\s*%').firstMatch(folded);
+  if (fat != null) return int.parse(fat.group(1)!) >= 30;
+  return folded.contains('slehan');
 }
 
 /// Nejlevnější platné ověřené akce podle skupin (nejlevnější první).
@@ -573,7 +598,7 @@ const saleDishes = <Dish>[
     ingredients: [
       DishIngredient('Vepřová plec nebo krkovice', 700, 'g', 'veprove'),
       DishIngredient('Brambory', 1, 'kg', 'brambory'),
-      DishIngredient('Smetana ke šlehání', 250, 'ml', 'smetana'),
+      DishIngredient('Smetana ke šlehání 30 %+', 250, 'ml', 'smetana'),
       DishIngredient('Sýr eidam strouhaný', 150, 'g', 'syr'),
       DishIngredient('Cibule', 2, 'ks', 'cibule'),
       DishIngredient('Česnek', 3, 'stroužky'),
@@ -600,7 +625,7 @@ const saleDishes = <Dish>[
     ingredients: [
       DishIngredient('Kuřecí prsa', 600, 'g', 'kure'),
       DishIngredient('Žampiony', 300, 'g', 'zampiony'),
-      DishIngredient('Smetana na vaření nebo ke šlehání', 250, 'ml', 'smetana'),
+      DishIngredient('Smetana ke šlehání 30 %+', 250, 'ml', 'smetana'),
       DishIngredient('Rýže', 300, 'g', 'ryze'),
       DishIngredient('Cibule', 1, 'ks', 'cibule'),
       DishIngredient('Máslo', 20, 'g', 'maslo'),
@@ -626,7 +651,7 @@ const saleDishes = <Dish>[
     ingredients: [
       DishIngredient('Kuřecí stehna nebo prsa', 800, 'g', 'kure'),
       DishIngredient('Cibule', 2, 'ks', 'cibule'),
-      DishIngredient('Smetana ke šlehání', 200, 'ml', 'smetana'),
+      DishIngredient('Smetana ke šlehání 30 %+', 200, 'ml', 'smetana'),
       DishIngredient('Těstoviny nebo noky', 400, 'g', 'testoviny'),
       DishIngredient('Sladká mletá paprika', 2, 'lžíce'),
       DishIngredient('Hladká mouka', 1, 'lžíce'),
@@ -728,7 +753,7 @@ const saleDishes = <Dish>[
       DishIngredient('Vepřová kýta nebo plec', 600, 'g', 'veprove'),
       DishIngredient('Žampiony', 300, 'g', 'zampiony'),
       DishIngredient('Cibule', 1, 'ks', 'cibule'),
-      DishIngredient('Smetana ke šlehání', 200, 'ml', 'smetana'),
+      DishIngredient('Smetana ke šlehání 30 %+', 200, 'ml', 'smetana'),
       DishIngredient('Rýže', 300, 'g', 'ryze'),
       DishIngredient('Hladká mouka', 1, 'lžíce'),
       DishIngredient('Olej', 2, 'lžíce'),
@@ -830,7 +855,7 @@ const saleDishes = <Dish>[
       DishIngredient('Slanina nebo šunka', 250, 'g', 'slanina'),
       DishIngredient('Vejce', 6, 'ks', 'vejce'),
       DishIngredient('Cibule', 1, 'ks', 'cibule'),
-      DishIngredient('Zakysaná smetana', 200, 'ml', 'smetana'),
+      DishIngredient('Zakysaná smetana', 200, 'ml', 'zakysana'),
       DishIngredient('Sýr eidam', 100, 'g', 'syr'),
       DishIngredient('Máslo na vymazání', 20, 'g', 'maslo'),
       DishIngredient('Sůl, pepř', null, ''),
@@ -925,7 +950,7 @@ const saleDishes = <Dish>[
       DishIngredient('Šunka', 250, 'g', 'sunka'),
       DishIngredient('Vejce', 3, 'ks', 'vejce'),
       DishIngredient('Mléko', 200, 'ml', 'mleko'),
-      DishIngredient('Smetana', 100, 'ml', 'smetana'),
+      DishIngredient('Smetana ke šlehání 30 %+', 100, 'ml', 'smetana'),
       DishIngredient('Sýr eidam', 100, 'g', 'syr'),
       DishIngredient('Máslo', 20, 'g', 'maslo'),
       DishIngredient('Sůl, pepř, muškátový oříšek', null, ''),
