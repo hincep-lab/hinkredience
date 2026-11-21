@@ -212,6 +212,12 @@ RecipeGroup groupOf(Recipe recipe) {
     [for (final i in recipe.ingredients) i.name].join(' | '),
   );
 
+  // Uložené konkrétní masové kategorie mají přednost před heuristikou
+  // názvu (např. slaný Shepherd's pie je "koláč", nikoli dezert).
+  if (_any(category, ['hovez', 'telec'])) return recipeGroupById('hovezi');
+  if (_any(category, ['vepr', 'mlete maso'])) {
+    return recipeGroupById('veprove');
+  }
   if (_any(category, ['polev'])) return recipeGroupById('polevky');
   if (_any(category, ['omack'])) return recipeGroupById('omacky');
   if (_any(category, ['ryb'])) return recipeGroupById('ryby');
