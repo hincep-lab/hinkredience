@@ -118,6 +118,23 @@ void main() {
     expect(g(r('Pizza Margherita', category: 'Pizza')), 'pecivo');
   });
 
+  test('explicitní masové kategorie nepadají mezi sladká jídla', () {
+    final shepherd = r(
+      "Shepherd's pie – anglický zapečený mletý masový koláč s bramborovou kaší",
+      category: 'Vepřové a mleté maso',
+      ingredients: ['Mleté maso', 'Brambory'],
+    );
+    expect(groupOf(shepherd).id, 'veprove');
+    expect(const RecipeFilters(groups: {'sladka'}).matches(shepherd), isFalse);
+    expect(const RecipeFilters(groups: {'veprove'}).matches(shepherd), isTrue);
+
+    final beef = r('Hovězí koláč', category: 'Hovězí maso');
+    expect(groupOf(beef).id, 'hovezi');
+
+    final cake = r('Litá tvarohová buchta', category: 'Sladká jídla a dezerty');
+    expect(groupOf(cake).id, 'sladka');
+  });
+
   test('způsob přípravy se pozná z textu, „opečte“ není trouba', () {
     final pan = r('Plátky', steps: ['Maso opečte na pánvi.']);
     expect(prepMethodsOf(pan), {PrepMethod.pan});
