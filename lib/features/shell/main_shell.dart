@@ -102,8 +102,7 @@ const _navItems = [
 ];
 
 /// Spodní lišta podle předlohy: šest položek, aktivní oranžová.
-/// Popisky se na úzkých telefonech zmenší, dotyková plocha zůstává
-/// na celou šířku položky a aspoň 56 bodů na výšku.
+/// Popisky mohou mít dva řádky a lišta se zvětší podle nastavení písma.
 class HkBottomNav extends StatelessWidget {
   const HkBottomNav({
     super.key,
@@ -114,9 +113,14 @@ class HkBottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onSelected;
 
+  static const _labelSize = 11.5;
+  static const _labelHeight = 1.05;
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
+    final labelSize = MediaQuery.textScalerOf(context).scale(_labelSize);
+    final extraHeight = (labelSize - _labelSize).clamp(0.0, double.infinity);
     return DecoratedBox(
       decoration: const BoxDecoration(
         color: Color(0xFF151516),
@@ -125,7 +129,7 @@ class HkBottomNav extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.only(bottom: bottom),
         child: SizedBox(
-          height: 66,
+          height: 66 + 2 * extraHeight * _labelHeight,
           child: Row(
             children: [
               for (final (index, item) in _navItems.indexed)
@@ -183,8 +187,8 @@ class _NavButton extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: selected ? AppColors.copper : const Color(0xFFD0D0D3),
-                  fontSize: 11.5,
-                  height: 1.05,
+                  fontSize: HkBottomNav._labelSize,
+                  height: HkBottomNav._labelHeight,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 ),
               ),

@@ -104,24 +104,20 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
   @override
   void didUpdateWidget(RecipesScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Hledání spuštěné z hlavní obrazovky.
-    if (widget.initialQuery != oldWidget.initialQuery &&
-        widget.initialQuery.isNotEmpty) {
-      _search.text = widget.initialQuery;
+    if (widget.initialQuery == oldWidget.initialQuery &&
+        widget.initialCategory == oldWidget.initialCategory &&
+        widget.initialGroup == oldWidget.initialGroup &&
+        widget.initialTag == oldWidget.initialTag) {
+      return;
     }
-    if (widget.initialCategory != oldWidget.initialCategory &&
-        widget.initialCategory != null) {
-      _category = widget.initialCategory;
-    }
-    if (widget.initialGroup != oldWidget.initialGroup &&
-        widget.initialGroup != null) {
-      _group = widget.initialGroup;
-      _filter = RecipeFilter.categories;
-    }
-    if (widget.initialTag != oldWidget.initialTag &&
-        widget.initialTag != null) {
-      _tag = widget.initialTag;
-    }
+    // Odkaz z Domů nebo Štítků určuje celý výběr v aktivní záložce.
+    _search.text = widget.initialQuery;
+    _category = widget.initialCategory;
+    _group = widget.initialGroup;
+    _tag = widget.initialTag;
+    _filter = widget.favoritesOnly
+        ? RecipeFilter.favorites
+        : RecipeFilter.categories;
   }
 
   @override
@@ -291,11 +287,25 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
                 if (visible.isEmpty) return _empty(all.isEmpty);
                 return ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-                  itemCount: visible.length,
+                  itemCount: visible.length + 1,
                   separatorBuilder: (context, index) =>
                       const SizedBox(height: 10),
-                  itemBuilder: (context, index) =>
-                      RecipeListTile(recipe: visible[index]),
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          receptyCount(visible.length),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                      );
+                    }
+                    final recipe = visible[index - 1];
+                    return RecipeListTile(
+                      key: ValueKey(recipe.id),
+                      recipe: recipe,
+                    );
+                  },
                 );
               },
             ),
@@ -320,12 +330,17 @@ class _RecipesScreenState extends ConsumerState<RecipesScreen> {
         message: 'Recept přidáte mezi oblíbené srdíčkem v jeho detailu.',
       );
     }
+    if (!cookbookEmpty) {
+      return const EmptyState(
+        icon: Icons.filter_alt_off_outlined,
+        title: 'Filtr nemá žádné výsledky',
+        message: 'Zkuste upravit výběr nad seznamem.',
+      );
+    }
     return EmptyState(
       icon: Icons.menu_book_rounded,
-      title: _category == null ? 'Kuchařka je prázdná' : 'Tady zatím nic není',
-      message: _category == null
-          ? 'Přidejte svůj první recept.'
-          : 'V kategorii $_category zatím není žádný recept.',
+      title: 'Kuchařka je prázdná',
+      message: 'Přidejte svůj první recept.',
       actionLabel: 'Nový recept',
       onAction: () => context.push(Routes.newRecipeIn(_category)),
     );
@@ -343,8 +358,8 @@ class RecipeListTile extends ConsumerWidget {
     return HkCard(
       padding: EdgeInsets.zero,
       onTap: () => context.push(Routes.recipe(recipe.id)),
-      child: SizedBox(
-        height: 92,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 92),
         child: Row(
           children: [
             ClipRRect(
@@ -373,11 +388,11 @@ class RecipeListTile extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       recipe.title,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),

@@ -65,8 +65,10 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
             if (config.fromBuild)
               const HkCard(
                 child: Text(
-                  'Připojení je pevně nastavené při sestavení aplikace '
-                  'a tady ho nelze změnit.',
+                  AppConfig.isPreview
+                      ? 'Testovací aplikace ukládá data jen v tomto telefonu.'
+                      : 'Připojení je pevně nastavené při sestavení aplikace '
+                            'a tady ho nelze změnit.',
                 ),
               )
             else ...[

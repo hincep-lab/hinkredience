@@ -11,6 +11,8 @@ val keyProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+val isPreview = providers.environmentVariable("HINKREDIENCE_PREVIEW").orNull == "true"
+
 android {
     namespace = "cz.hink.hinkredience"
     compileSdk = flutter.compileSdkVersion
@@ -25,6 +27,9 @@ android {
 
     defaultConfig {
         applicationId = "cz.hink.hinkredience"
+        manifestPlaceholders["appLabel"] =
+            if (isPreview) "HINKredience° Test" else "HINKredience°"
+        if (isPreview) applicationIdSuffix = ".preview"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -53,7 +58,7 @@ android {
         release {
             // Stálý podpisový klíč z android/key.properties (v CI z GitHub Secrets,
             // v repozitáři není); bez něj ladicí klíč.
-            signingConfig = if (keyProperties.containsKey("storeFile")) {
+            signingConfig = if (!isPreview && keyProperties.containsKey("storeFile")) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")

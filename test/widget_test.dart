@@ -65,6 +65,7 @@ Future<GoRouter> pumpApp(
   Map<String, Object> preferences = const {},
   List<ShoppingList> shoppingLists = const [],
   List<ShoppingItem> shoppingItems = const [],
+  Future<RecipeRepository> Function()? openRecipeRepository,
 }) async {
   tester.view.physicalSize = const Size(1080, 2340);
   tester.view.devicePixelRatio = 3;
@@ -84,7 +85,9 @@ Future<GoRouter> pumpApp(
         photoStoreProvider.overrideWithValue(PhotoStore(Directory.systemTemp)),
         // Databáze se v těchto testech nepoužívá – čeká se na ni „věčně“.
         recipeRepositoryProvider.overrideWith(
-          (ref) => Completer<RecipeRepository>().future,
+          (ref) =>
+              openRecipeRepository?.call() ??
+              Completer<RecipeRepository>().future,
         ),
         docsRepositoryProvider.overrideWith(
           (ref) => Completer<DocsRepository>().future,
@@ -124,12 +127,29 @@ Future<GoRouter> pumpApp(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (location != Routes.splash) await tester.pumpAndSettle();
   return router;
 }
 
 void main() {
   setUp(() => screenWake = FakeScreenWake());
+
+  testWidgets('úvodní obrazovka pokračuje hned i při chybě databáze', (
+    tester,
+  ) async {
+    final repository = Completer<RecipeRepository>();
+    final router = await pumpApp(
+      tester,
+      location: Routes.splash,
+      openRecipeRepository: () => repository.future,
+    );
+    expect(router.routeInformationProvider.value.uri.path, Routes.splash);
+
+    repository.completeError(StateError('Dočasná chyba místní databáze'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(router.routeInformationProvider.value.uri.path, Routes.home);
+  });
 
   testWidgets('hlavní obrazovka zdraví a nabízí první recept', (tester) async {
     await pumpApp(tester, location: Routes.home);
@@ -481,6 +501,64 @@ void main() {
     expect(find.text('Svíčková na smetaně'), findsNothing);
   });
 
+  testWidgets('odkaz na jinou skupinu nahradí předchozí hledání', (
+    tester,
+  ) async {
+    final router = await pumpApp(
+      tester,
+      location: Routes.recipesWith(query: 'žebra', group: 'veprove'),
+      recipes: [
+        sampleRecipe(),
+        sampleRecipe(
+          id: 'r2',
+          title: 'Svíčková na smetaně',
+          category: 'Omáčky',
+        ),
+      ],
+    );
+    expect(find.text('Žebra BBQ'), findsOneWidget);
+    expect(find.text('1 recept'), findsOneWidget);
+
+    router.go(Routes.recipesWith(group: 'omacky'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '',
+    );
+    expect(find.text('Svíčková na smetaně'), findsOneWidget);
+    expect(find.text('Žebra BBQ'), findsNothing);
+  });
+
+  testWidgets('prázdná skupina v naplněné kuchařce ukazuje stav filtru', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipesWith(group: 'ryby'),
+      recipes: [sampleRecipe()],
+    );
+    expect(find.text('Filtr nemá žádné výsledky'), findsOneWidget);
+    expect(find.text('Kuchařka je prázdná'), findsNothing);
+  });
+
+  testWidgets('dlouhý název receptu má místo i při velkém písmu', (
+    tester,
+  ) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    const title = 'Pomalu pečená krkovice s bramborami a zeleninou';
+    await pumpApp(
+      tester,
+      location: Routes.recipesWith(query: 'krkovice'),
+      recipes: [sampleRecipe(title: title)],
+    );
+
+    final result = find.text(title);
+    expect(result, findsOneWidget);
+    expect(tester.widget<Text>(result).maxLines, 2);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('záložka Oblíbené ukazuje jen oblíbené', (tester) async {
     await pumpApp(
       tester,
@@ -512,6 +590,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Suroviny (6 porcí)'), findsOneWidget);
     expect(find.text('3 kg'), findsOneWidget);
+    expect(find.text('300 ml'), findsOneWidget);
+
+    await tester.tap(find.text('Postup'));
+    await tester.pumpAndSettle();
+    expect(find.text('Přikryjte alobalem a pečte.'), findsOneWidget);
+    expect(find.text('150 °C'), findsOneWidget);
+    expect(find.text('3 h'), findsOneWidget);
+  });
+
+  testWidgets('detail přepíná varianty výnosu: 4 porce ↔ 1 l', (tester) async {
+    await pumpApp(
+      tester,
+      location: Routes.recipe('recipe-1'),
+      recipes: [sampleRecipe().copyWith(altYield: 1.0, altYieldUnit: 'l')],
+    );
+    expect(find.text('Suroviny (4 porce)'), findsOneWidget);
+    expect(find.text('1 l'), findsOneWidget);
+
+    await tester.tap(find.text('1 l'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (1 l)'), findsOneWidget);
+    expect(find.text('2 kg'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Více litrů'));
+    await tester.pumpAndSettle();
+    expect(find.text('Suroviny (1,25 l)'), findsOneWidget);
+    expect(find.text('2,5 kg'), findsOneWidget);
+    expect(find.text('250 ml'), findsOneWidget);
+
+    // Zpět na porce: stejné množství = 5 porcí.
+    await tester.tap(find.text('4 porce'));
+    await ('3 kg'), findsOneWidget);
     expect(find.text('300 ml'), findsOneWidget);
 
     await tester.tap(find.text('Postup'));
@@ -862,50 +972,7 @@ void main() {
       createdAt: now,
       updatedAt: now,
     );
-    final tyden = ShoppingList(
-      id: 'l2',
-      name: 'Týden',
-      householdId: 'rodina',
-      createdAt: now,
-      updatedAt: now,
-    );
-    ShoppingItem item(
-      String id,
-      String name, {
-      double? quantity,
-      String unit = '',
-      bool checked = false,
-      String note = '',
-      String listId = 'l1',
-    }) => ShoppingItem(
-      id: id,
-      listId: listId,
-      name: name,
-      quantity: quantity,
-      unit: unit,
-      checked: checked,
-      note: note,
-      createdAt: now,
-      updatedAt: now,
-    );
-    final items = [
-      item('1', 'Kuřecí stehna s kostí', quantity: 1500, unit: 'g'),
-      item('2', 'Cibule', quantity: 300, unit: 'g'),
-      item('3', 'Máslo', quantity: 60, unit: 'g', checked: true),
-      item('4', 'Sůl', note: 'podle chuti'),
-      item('5', 'Mléko', quantity: 1, unit: 'l', listId: 'l2'),
-    ];
-
-    testWidgets('záložka Nákupy ukazuje seznamy a kolik zbývá', (tester) async {
-      await pumpApp(
-        tester,
-        location: Routes.shopping,
-        shoppingLists: [kure, tyden],
-        shoppingItems: items,
-      );
-      expect(find.text('Nákupy'), findsWidgets);
-      expect(find.text('Kuře na paprice'), findsOneWidget);
-      expect(find.text('Zbývá koupit 3 z 4'), findsOneWidget);
+    final tyden =    expect(find.text('Zbývá koupit 3 z 4'), findsOneWidget);
       expect(find.text('Zbývá koupit 1 z 1'), findsOneWidget);
       expect(find.byIcon(Icons.group_outlined), findsOneWidget);
       expect(find.text('Nový seznam'), findsOneWidget);
@@ -993,6 +1060,43 @@ void main() {
       );
       expect(chip.selected, isTrue);
       expect(find.text('Přidat a další'), findsOneWidget);
+    });
+  });
+
+  testWidgets('recept s chilli jde zobrazit a uložit bez chilli', (
+    tester,
+  ) async {
+    final hot = sampleRecipe().copyWith(
+      ingredients: const [
+        Ingredient(id: 'i1', name: 'Vepřová žebra', quantity: 2, unit: 'kg'),
+        Ingredient(id: 'i2', name: 'Chilli paprička', quantity: 2, unit: 'ks'),
+      ],
+    );
+    await pumpApp(tester, location: Routes.recipe('recipe-1'), recipes: [hot]);
+    final toggle = find.widgetWithText(SwitchListTile, 'Bez chilli');
+    await tester.scrollUntilVisible(
+      toggle,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(CustomScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(find.textContaining('Pálivé: Chilli paprička'), findsOneWidget);
+    expect(find.textContaining('Chilli paprička'), findsWidgets);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(find.text('Uložit jako recept bez chilli'), findsOneWidget);
+    expect(
+      find.textContaining('Zobrazeno bez: Chilli paprička'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('2 ks'), findsNothing);
+  });
+
+  testWidgets('Nabídka 
     });
   });
 

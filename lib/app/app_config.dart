@@ -21,12 +21,21 @@ class AppConfig {
 
   bool get hasSupabase => supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty;
 
+  static const isPreview = bool.fromEnvironment('HINKREDIENCE_PREVIEW');
+
   static const _envUrl = String.fromEnvironment('SUPABASE_URL');
   static const _envKey = String.fromEnvironment('SUPABASE_ANON_KEY');
   static const _prefUrl = 'supabase_url';
   static const _prefKey = 'supabase_anon_key';
 
   static AppConfig load(SharedPreferences prefs) {
+    if (isPreview) {
+      return const AppConfig(
+        supabaseUrl: '',
+        supabaseAnonKey: '',
+        fromBuild: true,
+      );
+    }
     if (_envUrl.isNotEmpty && _envKey.isNotEmpty) {
       return const AppConfig(
         supabaseUrl: _envUrl,

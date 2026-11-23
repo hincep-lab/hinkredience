@@ -18,7 +18,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <application
-        android:label="HINKredience°"
+        android:label="${appLabel}"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:name="${applicationName}"

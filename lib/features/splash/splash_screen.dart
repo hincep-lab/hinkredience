@@ -23,7 +23,6 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   }
 
   Future<void> _start() async {
-    final minimum = Future<void>.delayed(const Duration(milliseconds: 1400));
     try {
       await ref
           .read(recipeRepositoryProvider.future)
@@ -31,7 +30,6 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     } catch (_) {
       // Případnou chybu databáze ukáže až seznam receptů.
     }
-    await minimum;
     if (!mounted) return;
 
     final hasBackend = ref.read(supabaseClientProvider) != null;

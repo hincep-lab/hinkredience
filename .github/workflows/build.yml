@@ -60,7 +60,7 @@ jobs:
     name: Nasazení serverových funkcí (mcp, prices, sale-ideas)
     # Jen na vyžádání a až po úspěšných testech databáze a serverových funkcí.
     # Klíč SUPABASE_ACCESS_TOKEN je jen v GitHub Secrets, nikdy v aplikaci.
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_mcp
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_mcp
     needs: [database, functions]
     runs-on: ubuntu-latest
     steps:
@@ -83,6 +83,7 @@ jobs:
 
   android:
     name: Aplikace – analýza, testy, APK
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -173,20 +174,6 @@ jobs:
           files: |
             hinkredience.apk
             hinkredience-32bit.apk
-      - name: Testovací vydání z jiné větve (ruční spuštění)
-        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: test-${{ github.run_number }}
-          target_commitish: ${{ github.sha }}
-          name: HINKredience° – testovací sestavení ${{ github.run_number }} (${{ github.ref_name }})
-          prerelease: true
-          body: |
-            Testovací sestavení z větve `${{ github.ref_name }}` (commit ${{ github.sha }}), ještě není v `main`.
-            Stáhněte `hinkredience.apk` do telefonu s Androidem a otevřete ho.
-          files: |
-            hinkredience.apk
-            hinkredience-32bit.apk
 
   web:
     name: Web – verze do prohlížeče (Android i iPhone)
@@ -242,7 +229,7 @@ jobs:
           name: hinkredience-web
           path: build/web
       - name: Uložení sestavení do větve web-build
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
         working-directory: build/web
         run: |
           git init -q -b web-build

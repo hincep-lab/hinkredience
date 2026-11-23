@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -13,30 +11,13 @@ import 'providers.dart';
 import 'sale_alerts_runner.dart';
 
 /// Proud, který se obnoví při každé změně deníku, plánu nebo nákupu.
-Stream<T> _watch<T>(Ref ref, Future<T> Function(DocsRepository docs) read) {
-  final controller = StreamController<T>();
-  StreamSubscription<void>? subscription;
-  ref.onDispose(() {
-    subscription?.cancel();
-    controller.close();
-  });
-  final future = ref.watch(docsRepositoryProvider.future);
-  () async {
-    try {
-      final docs = await future;
-      Future<void> emit() async {
-        final value = await read(docs);
-        if (!controller.isClosed) controller.add(value);
-      }
-
-      subscription = docs.changes.listen((_) => emit());
-      await emit();
-    } catch (error, stack) {
-      if (!controller.isClosed) controller.addError(error, stack);
-    }
-  }();
-  return controller.stream;
-}
+Stream<T> _watch<T>(Ref ref, Future<T> Function(DocsRepository docs) read) =>
+    watchRepositoryData(
+      ref,
+      ref.watch(docsRepositoryProvider.future),
+      (repository) => repository.changes,
+      read,
+    );
 
 /// Kuchařský deník – dokončená vaření, nejnovější první.
 final diaryProvider = StreamProvider<List<CookingSession>>(
