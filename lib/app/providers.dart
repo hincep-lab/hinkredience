@@ -516,7 +516,44 @@ const syncRetryDelays = [
 /// v testech (tam systémové rozhraní neexistuje).
 final connectivityChangesProvider = Provider<Stream<bool>>(
   (ref) => Connectivity().onConnectivityChanged.map(
-    (results) => !results.contains(Corá čeká na odeslání → odeslat za 2 s.
+    (results) => !results.contains(ConnectivityResult.none),
+  ),
+);
+
+/// Je synchronizace vůbec možná (účet a připojení k Supabase)?
+final syncEnabledProvider = Provider<bool>(
+  (ref) =>
+      ref.watch(supabaseClientProvider) != null &&
+      ref.watch(sessionProvider).isSignedIn,
+);
+
+/// Automatická synchronizace. Spouští se sama:
+/// - po otevření aplikace a po přihlášení,
+/// - po každé místní změně (recept, fotka, oblíbené, koš) – za 2 s,
+/// - po návratu aplikace z pozadí,
+/// - po obnovení připojení k internetu,
+/// - když Supabase Realtime ohlásí změnu z jiného zařízení nebo z ChatGPT,
+/// - po chybě opakovaně s rostoucí prodlevou (5 s až 5 min).
+class SyncController extends Notifier<SyncState> {
+  Timer? _debounce;
+  Timer? _retry;
+  int _failures = 0;
+  bool _running = false;
+  bool _again = false;
+
+  @override
+  SyncState build() {
+    final userId = ref.watch(sessionProvider.select((s) => s.userId));
+    final repository = ref.watch(recipeRepositoryProvider).value;
+    final client = ref.watch(supabaseClientProvider);
+    ref.onDispose(() {
+      _debounce?.cancel();
+      _retry?.cancel();
+    });
+    _failures = 0;
+
+    if (repository != null) {
+      // Místní změna, která čeká na odeslání → odeslat za 2 s.
       final subscription = repository.changes.listen((_) async {
         final pending = await _refreshCounts();
         if (pending > 0) schedule(const Duration(seconds: 2));
@@ -605,41 +642,6 @@ final connectivityChangesProvider = Provider<Stream<bool>>(
           .channel('hinkredience-wishes')
           .onPostgresChanges(
             event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'meal_wishes',
-            callback: (_) => schedule(const Duration(seconds: 1)),
-          )
-          .subscribe();
-      ref.onDispose(() => client.removeChannel(wishes));
-      // Ceny z účtenek (migrace 14) – vlastní kanál ze stejného důvodu.
-      final receipts = client
-          .channel('hinkredience-receipts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'price_receipts',
-            callback: (_) => schedule(const Duration(seconds: 1)),
-          )
-          .subscribe();
-      ref.onDispose(() => client.removeChannel(receipts));
-    } catch (error) {
-      debugPrint('Realtime se nepodařilo zapnout: $error');
-    }
-  }
-
-  /// Naplánuje synchronizaci (opakovaná volání se sloučí).
-  void schedule(Duration delay) {
-    if (!ref.mounted) return;
-    _debounce?.cancel();
-    _debounce = Timer(delay, syncNow);
-  }
-
-  Future<int> _refreshCounts() async {
-    final repository = ref.read(recipeRepositoryProvider).value;
-    if (repository == null) return 0;
-    final docs = ref.read(docsRepositoryProvider).value;
-    final pending =
-        await nt.all,
             schema: 'public',
             table: 'meal_wishes',
             callback: (_) => schedule(const Duration(seconds: 1)),
@@ -766,7 +768,48 @@ final connectivityChangesProvider = Provider<Stream<bool>>(
       final delay =
           syncRetryDelays[_failures.clamp(0, syncRetryDelays.length - 1)];
       _failures++;
-      nextRetry = DateTime.nna rozhodnutí u daného receptu.
+      nextRetry = DateTime.now().add(delay);
+      _retry = Timer(delay, syncNow);
+    }
+    state = SyncState(
+      running: false,
+      lastSuccess: result.ok ? DateTime.now() : state.lastSuccess,
+      errors: result.errors,
+      offline: result.offline,
+      pending: pending,
+      conflicts: result.conflicts,
+      nextRetry: nextRetry,
+    );
+    if (_again) {
+      _again = false;
+      schedule(const Duration(seconds: 1));
+    }
+    return result;
+  }
+}
+
+/// Oznámení „někdo z rodiny něco chce“ (v testech se nahrazuje).
+final familyAlertsProvider = Provider<FamilyAlerts>(
+  (ref) => LocalFamilyAlerts(),
+);
+
+const familyNotificationsKey = 'family_notifications';
+
+/// Oznámení do zavřené aplikace (web push); bez Supabase null.
+final pushServiceProvider = Provider<PushService?>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  return client == null ? null : PushService(client);
+});
+
+/// Oznámení od rodiny jsou zapnutá (výchozí stav: ano).
+bool familyNotificationsEnabled(Ref ref) =>
+    ref.read(sharedPreferencesProvider).getBool(familyNotificationsKey) ?? true;
+
+final syncProvider = NotifierProvider<SyncController, SyncState>(
+  SyncController.new,
+);
+
+/// Souběžná úprava čekající na rozhodnutí u daného receptu.
 final recipeConflictProvider = FutureProvider.family<RecipeConflict?, String>((
   ref,
   recipeId,
