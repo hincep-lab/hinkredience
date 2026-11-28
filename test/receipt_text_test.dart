@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hinkredience/core/receipt_text.dart';
 
@@ -43,5 +45,34 @@ DPH 12%                  10,99
 
   test('bez cen nic', () {
     expect(parseReceiptText('Děkujeme za nákup').lines, isEmpty);
+  });
+
+  test('elektronická účtenka Albert (PDF): slevy, vážené zboží, prodejna', () {
+    for (final file in [
+      'test/fixtures/albert_eucetenka_pdfium.txt',
+      'test/fixtures/albert_eucetenka_raw.txt',
+    ]) {
+      final r = parseReceiptText(File(file).readAsStringSync());
+      expect(r.storeId, 'albert-hradecka', reason: file);
+      expect(r.date, DateTime(2026, 11, 14), reason: file);
+      final byName = {for (final l in r.lines) l.product: l};
+      expect(byName.length, 8, reason: file);
+      // Sleva 730 Kč z 1199 Kč.
+      expect(byName['Fabini rendlík lucca']!.price, 469, reason: file);
+      expect(byName['Rohlík43gr']!.price, 3.5);
+      expect(byName['Rohlík43gr']!.packQty, 43);
+      expect(byName['Rohlík43gr']!.packUnit, 'g');
+      // Vážené: cena za 1 kg, ne za 0,797 kg.
+      final chicken = byName['Kuřecí prsní řízky']!;
+      expect(chicken.price, 229);
+      expect(chicken.packQty, 1);
+      expect(chicken.packUnit, 'kg');
+      expect(byName['Pepsi zero 2,25l']!.packUnit, 'l');
+      // Zaokrouhlení ani kredity nejsou položky.
+      expect(
+        byName.keys.any((k) => k.toLowerCase().contains('zaokrouhl')),
+        isFalse,
+      );
+    }
   });
 }

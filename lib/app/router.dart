@@ -28,6 +28,7 @@ import '../features/kitchen/diary_entry_screen.dart';
 import '../features/kitchen/diary_screen.dart';
 import '../features/kitchen/plan_screen.dart';
 import '../features/kitchen/wishes.dart' show WishesScreen;
+import '../features/kitchen/best_buy_panel.dart' show ReceiptSheet;
 import '../features/kitchen/shopping_lists_screen.dart';
 import '../features/kitchen/shopping_screen.dart';
 import '../features/more/family_screen.dart';
@@ -66,6 +67,10 @@ abstract final class Routes {
   static const saleRecipes = '/more/sales';
   static const offers = '/more/offers';
   static const wishes = '/more/wishes';
+
+  /// Účtenka v PDF sdílená z jiné aplikace.
+  static String receiptPdf(String path) =>
+      Uri(path: '/receipt', queryParameters: {'pdf': path}).toString();
 
   static String diaryFor(String recipeId) =>
       Uri(path: diary, queryParameters: {'recipe': recipeId}).toString();
@@ -228,6 +233,19 @@ GoRouter createRouter({String initialLocation = Routes.splash}) {
         path: '${Routes.shopping}/:id',
         pageBuilder: (context, state) =>
             page(state, ShoppingScreen(listId: state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/receipt',
+        parentNavigatorKey: rootKey,
+        pageBuilder: (context, state) => page(
+          state,
+          Scaffold(
+            appBar: AppBar(title: const Text('Účtenka')),
+            body: SafeArea(
+              child: ReceiptSheet(pdfPath: state.uri.queryParameters['pdf']),
+            ),
+          ),
+        ),
       ),
       GoRoute(
         path: Routes.more,

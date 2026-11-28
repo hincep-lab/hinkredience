@@ -8,6 +8,8 @@ import '../../core/app_colors.dart';
 import '../../core/best_buy.dart';
 import '../../core/material.dart';
 import '../../core/ocr.dart';
+import '../../core/receipt_pdf.dart';
+import '../../core/receipt_share.dart';
 import '../../core/receipt_text.dart';
 import '../../core/stores.dart';
 import '../../core/widgets.dart';
@@ -770,28 +772,84 @@ class _DetailRow extends StatelessWidget {
 
 // ------------------------------------------------------------ účtenka
 
-/// Ceny z účtenky: vyfotit (čtení textu bez AI) nebo zapsat ručně.
-Future<void> showReceiptSheet(BuildContext context, WidgetRef ref) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => const _ReceiptSheet(),
-    );
+/// Ceny z účtenky: vyfotit (čtení textu bez AI), načíst PDF elektronické
+/// účtenky, nebo zapsat ručně. [pdfPath] = PDF sdílené z jiné aplikace.
+Future<void> showReceiptSheet(
+  BuildContext context,
+  WidgetRef ref, {
+  String? pdfPath,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (context) => ReceiptSheet(pdfPath: pdfPath),
+);
 
-class _ReceiptSheet extends ConsumerStatefulWidget {
-  const _ReceiptSheet();
+class ReceiptSheet extends ConsumerStatefulWidget {
+  const ReceiptSheet({super.key, this.pdfPath});
+
+  final String? pdfPath;
 
   @override
-  ConsumerState<_ReceiptSheet> createState() => _ReceiptSheetState();
+  ConsumerState<ReceiptSheet> createState() => _ReceiptSheetState();
 }
 
-class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
+class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
   String? _store;
   DateTime _date = DateTime.now();
   final _lines = <ReceiptLine>[];
   var _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final path = widget.pdfPath;
+    if (path != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPdf(path));
+    }
+  }
+
+  Future<void> _pickPdf() async {
+    String? path;
+    try {
+      path = await ReceiptShare.pick();
+    } catch (_) {
+      setState(() => _error = 'Soubor se nepodařilo otevřít.');
+      return;
+    }
+    if (path != null) await _loadPdf(path);
+  }
+
+  /// Elektronická účtenka v PDF (Můj Albert → Exportovat účtenku).
+  Future<void> _loadPdf(String path) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final parsed = parseReceiptText(await readPdfText(path));
+      if (!mounted) return;
+      setState(() {
+        _lines
+          ..clear()
+          ..addAll(parsed.lines);
+        _store = parsed.storeId ?? _store;
+        if (parsed.date != null) _date = parsed.date!;
+        if (parsed.lines.isEmpty) {
+          _error =
+              'V PDF jsem nenašel položky s cenou. Zkuste účtenku '
+              'vyfotit nebo položky zapsat ručně.';
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'PDF se nepodařilo přečíst.');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _photo() async {
     final picked = await ImagePicker().pickImage(
@@ -926,6 +984,26 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                 ),
               ],
             ),
+            if (pdfReceiptsAvailable) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _pickPdf,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Načíst PDF účtenku'),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Tip: v aplikaci Můj Albert otevřete účtenku → Exportovat '
+                  'účtenku → HINKredience. Ceny se načtou přesně, bez focení.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
             if (_busy)
               const Padding(
                 padding: EdgeInsets.all(16),
